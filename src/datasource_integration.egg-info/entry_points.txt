@@ -1,0 +1,3 @@
+[console_scripts]
+datasource-test = datasource.cli:test_command
+
