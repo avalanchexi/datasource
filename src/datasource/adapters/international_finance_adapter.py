@@ -7,6 +7,7 @@
 
 import asyncio
 import pandas as pd
+import tushare as ts
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Union
 from loguru import logger
@@ -203,6 +204,35 @@ class InternationalFinanceAdapter(BaseDataSource):
                     error=f"国债代码 {symbol} 未在配置中找到",
                     timestamp=datetime.now()
                 )
+
+            # 优先尝试 TuShare us_tycr 获取美国国债收益率（官方数据）
+            if symbol == "US10Y":
+                try:
+                    pro = ts.pro_api()
+                    start = start_date.replace("-", "")
+                    end = end_date.replace("-", "")
+                    # y10 字段为10年期国债收益率（%）
+                    df = pro.us_tycr(start_date=start, end_date=end, fields="date,y10")
+                    if df is not None and not df.empty:
+                        df = df.rename(columns={"y10": "close"})
+                        df["date"] = pd.to_datetime(df["date"])
+                        df = df.sort_values("date")
+                        formatted_data = self._format_bond_yield_data(df, symbol, bond_config)
+                        self.cache.set(cache_key, formatted_data)
+                        return DataResponse(
+                            data=formatted_data,
+                            source=self.name,
+                            timestamp=datetime.now(),
+                            metadata={
+                                "source_type": "tushare_us_tycr",
+                                "symbol": symbol,
+                                "data_source": "TuShare us_tycr"
+                            }
+                        )
+                    else:
+                        logger.warning("TuShare us_tycr 返回空数据，回退到其他数据源")
+                except Exception as ts_err:
+                    logger.error(f"TuShare us_tycr 获取 {symbol} 失败: {ts_err}")
 
             # 对于美国国债，尝试从Yahoo Finance获取
             if symbol == "US10Y":

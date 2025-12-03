@@ -83,9 +83,24 @@ class PringAnalyzer:
         PringStage.STAGE_VI,
     ]
     
-    def __init__(self, data_manager, market_data: Optional[MarketDataContract] = None):
+    def __init__(
+        self,
+        data_manager,
+        market_data: Optional[MarketDataContract] = None,
+        use_legacy_stage_rules: bool = False,
+        stage_weights: Optional[Dict[str, float]] = None,
+        allow_estimated: bool = False,
+    ):
         self.data_manager = data_manager
         self.preloaded_market_data = market_data
+        self.use_legacy_stage_rules = use_legacy_stage_rules
+        self.stage_weights = stage_weights or {
+            "inventory": 0.35,
+            "monetary": 0.35,
+            "asset": 0.30,
+        }
+        # 是否允许使用 Stage2 WebSearch 的估算值作为兜底（避免因权威数据缺失而硬阻断）
+        self.allow_estimated = allow_estimated
         
         # 库存周期矫正权重配置 (V3.1规范)
         self.cycle_correction_weights = {
@@ -377,83 +392,14 @@ class PringAnalyzer:
     
     async def get_monetary_cycle_data(self) -> Dict:
         """
-        获取货币周期数据（中国市场）V4.2完整获取5项指标
-        数据来源：TuShare/WebSearch(央行公告数据)
-
-        Returns:
-            货币周期数据字典
+        获取货币周期数据（Stage3 要求：仅使用预载数据，缺失即阻断）
         """
         preloaded = self._get_preloaded_monetary_data()
         if preloaded:
             print("获取中国货币周期数据... (复用Stage1/Stage2a结果)")
             return preloaded
 
-        try:
-            print("获取中国货币周期数据...")
-            monetary_data = {
-                "reverse_repo_7d": None,      # 7天逆回购利率
-                "mlf_1y": None,                # 1年期MLF利率
-                "rrr_change": None,            # 存款准备金率变化
-                "tsf_growth": None,            # 社会融资规模增速
-                "m2_growth": None,             # M2增速
-                "m1_growth": None,             # M1增速
-                "m1_m2_spread": None,          # M1与M2剪刀差
-                "dr007_rate": None,            # DR007政策利率（文章推荐Leading Indicator）
-                "data_source": "混合数据源(TuShare/WebSearch)",
-                "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-
-            # 1. 所有5项货币政策数据通过WebSearch获取（包括M2）
-            print(f"  [WebSearch] 准备获取: M2/7天逆回购/MLF/降准/TSF数据")
-
-            monetary_data["websearch_queries"] = {
-                "m2_growth": {
-                    "query": "中国M2货币供应量 同比增速 央行 最新数据",
-                    "keywords": ["M2", "货币供应量", "增速", "央行"],
-                    "source_hint": "pbc.gov.cn"
-                },
-                "m1_growth": {
-                    "query": "中国M1货币供应量 同比增速 央行 最新数据",
-                    "keywords": ["M1", "货币供应量", "同比增速"],
-                    "source_hint": "pbc.gov.cn"
-                },
-                "reverse_repo_7d": {
-                    "query": "中国人民银行 公开市场业务 7天逆回购利率 最新",
-                    "keywords": ["央行", "逆回购", "公开市场", "利率"],
-                    "source_hint": "pbc.gov.cn"
-                },
-                "mlf_1y": {
-                    "query": "中国人民银行 中期借贷便利MLF 1年期利率 最新",
-                    "keywords": ["央行", "MLF", "中期借贷便利", "利率"],
-                    "source_hint": "pbc.gov.cn"
-                },
-                "rrr_change": {
-                    "query": "中国人民银行 存款准备金率 最新调整",
-                    "keywords": ["央行", "存准率", "降准", "调整"],
-                    "source_hint": "pbc.gov.cn"
-                },
-                "tsf_growth": {
-                    "query": "中国社会融资规模增速 央行 最新数据",
-                    "keywords": ["社融", "TSF", "增速", "央行统计"],
-                    "source_hint": "pbc.gov.cn"
-                },
-                "dr007_rate": {
-                    "query": "DR007 利率 最新 数据",
-                    "keywords": ["DR007", "质押式回购", "政策利率"],
-                    "source_hint": "chinabond.com.cn"
-                }
-            }
-
-            monetary_data["note"] = "WebSearch数据需要在Claude Code环境中才能实际获取"
-
-            return monetary_data
-
-        except Exception as e:
-            print(f"获取货币周期数据异常: {e}")
-            return {
-                "error": f"货币周期数据获取失败: {str(e)}",
-                "data_source": "获取失败"
-            }
+        raise RuntimeError("Stage3 需要 Stage1/2 预载的货币数据（M1/M2/TSF/DR007/逆回购/MLF/RRR），当前缺失。")
 
     def _get_preloaded_monetary_data(self) -> Optional[Dict[str, Any]]:
         """复用Stage1/Stage2a写入的货币政策数据"""
@@ -475,7 +421,9 @@ class PringAnalyzer:
 
         for key, field in mapping.items():
             policy = self.preloaded_market_data.monetary_policy.get(key)
-            if policy and not policy.is_estimated and policy.current_value is not None:
+            if policy and policy.current_value is not None:
+                if policy.is_estimated and not self.allow_estimated:
+                    continue
                 value = policy.current_value
                 if field == 'rrr_change' and policy.change_from_120d is not None:
                     value = policy.change_from_120d
@@ -501,33 +449,14 @@ class PringAnalyzer:
     async def get_macro_economic_data(self) -> Dict:
         """
         获取宏观经济数据用于库存周期分析
-        V4.3三级降级：TuShare -> WebSearch -> (AKShare已禁用)
-
-        Returns:
-            宏观数据字典
+        Stage3 要求：只消费 Stage1/Stage2 预载的真实数据，缺失即阻断。
         """
         preloaded = self._get_preloaded_macro_data()
         if preloaded:
             print("  [Level 0] 使用Stage1/Stage2a预加载宏观数据")
             return preloaded
 
-        try:
-            # Level 1: 尝试从TuShare获取数据（新优先级）
-            print("  [Level 1] 尝试TuShare获取宏观数据...")
-            tushare_data = await self._get_tushare_macro_data()
-            if tushare_data and not tushare_data.get('error'):
-                print("  [Level 1] TuShare数据获取成功")
-                return tushare_data
-
-            # Level 2: TuShare失败，使用WebSearch从公开数据源获取
-            print("  [Level 1] TuShare失败，降级到WebSearch公开数据源...")
-            websearch_data = await self._get_macro_via_websearch()
-            return websearch_data
-
-        except Exception as e:
-            print(f"获取宏观经济数据异常: {e}")
-            # 最后降级到WebSearch
-            return await self._get_macro_via_websearch()
+        raise RuntimeError("Stage3 需要 Stage1/Stage2 提供完整宏观数据，当前未检测到预载结果。请先补数后重试。")
 
     def _get_preloaded_macro_data(self) -> Optional[Dict[str, Any]]:
         """复用Stage1/Stage2a宏观指标"""
@@ -551,7 +480,9 @@ class PringAnalyzer:
 
         for key, (field_name, wrap_list) in mapping.items():
             indicator = self.preloaded_market_data.macro_indicators.get(key)
-            if indicator and not indicator.is_estimated and indicator.current_value is not None:
+            if indicator and indicator.current_value is not None:
+                if indicator.is_estimated and not self.allow_estimated:
+                    continue
                 payload = {
                     "value": indicator.current_value,
                     "previous_value": indicator.previous_value,
@@ -575,90 +506,16 @@ class PringAnalyzer:
         return None
 
     async def _get_akshare_macro_data(self) -> Optional[Dict]:
-        """
-        [DEPRECATED V4.3] AKShare宏观数据获取已禁用
-        优先级已调整为: TuShare -> WebSearch
-
-        Returns:
-            None - 方法已禁用
-        """
-        print("  [DEPRECATED] _get_akshare_macro_data()已禁用，使用TuShare/WebSearch替代")
-        return None
+        """已禁用，保留占位避免误用。"""
+        raise RuntimeError("AKShare 宏观数据获取在 Stage3 已禁用")
 
     async def _get_tushare_macro_data(self) -> Optional[Dict]:
-        """尝试从TuShare获取宏观数据作为备用"""
-        try:
-            # 尝试使用data_manager中的TuShare适配器
-            if hasattr(self.data_manager, 'data_sources') and 'tushare' in self.data_manager.data_sources:
-                tushare_adapter = self.data_manager.data_sources['tushare']
-
-                # TuShare Pro的宏观数据接口（需要积分）
-                # 这里只做框架准备，具体接口需要根据TuShare Pro文档调整
-                print("尝试从TuShare获取宏观数据（需要足够积分）")
-
-                # 模拟TuShare调用（实际需要根据TuShare Pro API调整）
-                # pro = ts.pro_api(token)
-                # ppi_data = pro.query('macro', indicator='PPI')
-
-                return {
-                    "ppi_simulated": {"latest_yoy": -2.8, "trend": "TuShare备用数据"},
-                    "cpi_simulated": {"latest_yoy": 0.4, "trend": "TuShare备用数据"},
-                    "pmi_simulated": {"latest_value": 50.1, "trend": "TuShare备用数据"},
-                    "data_source": "TuShare备用数据（需配置）",
-                    "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
-            else:
-                print("TuShare适配器未配置")
-                return None
-
-        except Exception as e:
-            print(f"TuShare获取宏观数据失败: {e}")
-            return None
+        """Stage3 阶段不再兜底 TuShare 采集；应由 Stage1/2 预先写入。"""
+        raise RuntimeError("Stage3 不执行 TuShare 拉取，请在 Stage1/2 先补齐宏观数据。")
 
     async def _get_macro_via_websearch(self) -> Dict:
-        """
-        使用WebSearch从公开数据源获取宏观经济数据(V4.2新增)
-        数据来源：国家统计局官网、央行官网等权威公开数据
-
-        Returns:
-            宏观数据字典(包含WebSearch查询信息)
-        """
-        print("  [Level 3] 使用WebSearch从权威公开数据源获取宏观数据...")
-        print("    数据源: 国家统计局(stats.gov.cn), 央行(pbc.gov.cn)")
-
-        # WebSearch查询结构 - 在Claude Code环境中会自动调用WebSearch工具
-        websearch_queries = {
-            'ppi': {
-                'query': "中国PPI 工业生产者出厂价格指数 国家统计局 最新数据",
-                'keywords': ['PPI', '工业生产者', '出厂价格', '同比'],
-                'source_hint': 'stats.gov.cn'
-            },
-            'cpi': {
-                'query': "中国CPI 居民消费价格指数 国家统计局 最新数据",
-                'keywords': ['CPI', '居民消费', '价格指数', '同比'],
-                'source_hint': 'stats.gov.cn'
-            },
-            'pmi': {
-                'query': "中国PMI 制造业采购经理指数 国家统计局 最新数据",
-                'keywords': ['PMI', '制造业', '采购经理', '指数'],
-                'source_hint': 'stats.gov.cn'
-            },
-            'industrial': {
-                'query': "中国工业增加值 同比增长 国家统计局 最新数据",
-                'keywords': ['工业增加值', '同比增长', '规模以上'],
-                'source_hint': 'stats.gov.cn'
-            }
-        }
-
-        # 返回WebSearch查询结构
-        # 注意：在非Claude Code环境中，这些数据不会实际获取
-        # 但V4.1数据完整性检查会标记为缺失，触发警告
-        return {
-            "websearch_queries": websearch_queries,
-            "data_source": "WebSearch公开数据(需Claude Code环境)",
-            "update_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "note": "WebSearch数据需要在Claude Code环境中才能实际获取"
-        }
+        """Stage3 禁用 WebSearch 兜底，要求前置补数完成。"""
+        raise RuntimeError("Stage3 禁用 WebSearch 兜底，请先通过 Stage2/Stage2.5 补数。")
 
     def _get_simulated_macro_data(self) -> Dict:
         """提供模拟宏观数据作为最后备用"""
@@ -1678,9 +1535,10 @@ class PringAnalyzer:
         base_stage: PringStage,
         base_confidence: float,
         inventory_stage: str,
-        monetary_stage: str
+        monetary_stage: str,
+        macro_stage_idx: Optional[int] = None,
     ) -> Tuple[PringStage, float]:
-        """根据库存/货币周期约束重新校准基础阶段"""
+        """根据库存/货币/宏观阶段约束重新校准基础阶段"""
         inventory_stage = inventory_stage or ""
         monetary_stage = monetary_stage or ""
         adjusted_stage = base_stage
@@ -1702,10 +1560,20 @@ class PringAnalyzer:
                 adjusted_confidence = max(0.0, adjusted_confidence - 0.05)
                 print(f"  [一致性校验] 库存尚未主动补库，阶段Ⅳ降级为阶段Ⅲ")
 
+        if macro_stage_idx is not None:
+            stage_idx = self.STAGE_SEQUENCE.index(adjusted_stage) + 1
+            diff = stage_idx - macro_stage_idx
+            if abs(diff) >= 2:
+                target_idx = macro_stage_idx + (1 if diff < 0 else -1)
+                target_idx = min(6, max(1, target_idx))
+                adjusted_stage = self.STAGE_SEQUENCE[target_idx - 1]
+                adjusted_confidence = max(0.0, adjusted_confidence - 0.1)
+                print(f"  [一致性校验] 宏观阶段=第{macro_stage_idx}，调整阶段→第{target_idx} (置信度-10%)")
+
         return adjusted_stage, adjusted_confidence
 
     def determine_pring_stage(self, bond_signal: AssetSignal, stock_signal: AssetSignal,
-                             commodity_signal: AssetSignal) -> Tuple[PringStage, float]:
+                              commodity_signal: AssetSignal) -> Tuple[PringStage, float]:
         """
         基于三大资产信号判定普林格阶段 (V3.1增强诊断)
 
@@ -1780,6 +1648,137 @@ class PringAnalyzer:
         # 默认返回
         print(f"[诊断] 普林格阶段判定结果(默认): 第Ⅱ阶段 (置信度30%)")
         return PringStage.STAGE_II, 0.3
+
+    # ================= 新增：宏观阶段判定与加权融合 ================= #
+    @staticmethod
+    def _direction_from_value(value: Optional[float], up: float, down: float) -> int:
+        if value is None:
+            return 0
+        if value >= up:
+            return 1
+        if value <= down:
+            return -1
+        return 0
+
+    def _leading_direction(self, macro_data: Dict, monetary_data: Dict) -> int:
+        score = 0
+        m2 = monetary_data.get("m2_growth")
+        m1 = monetary_data.get("m1_growth")
+        tsf = monetary_data.get("tsf_growth")
+        score += self._direction_from_value(m2, 8.0, 6.0)
+        score += self._direction_from_value(m1, 5.0, 3.0)
+        score += self._direction_from_value(tsf, 8.0, 6.0)
+
+        dr_raw = monetary_data.get("raw_values", {}).get("dr007_rate", {})
+        dr_chg = dr_raw.get("change_from_120d")
+        score += self._direction_from_value(-dr_chg if dr_chg is not None else None, 0.10, -0.10)
+        return 1 if score > 0 else (-1 if score < 0 else 0)
+
+    def _coincident_direction(self, macro_data: Dict) -> int:
+        score = 0
+        def _val(key):
+            data = macro_data.get(key)
+            if isinstance(data, list) and data:
+                return data[0].get("value")
+            if isinstance(data, dict):
+                return data.get("value")
+            return None
+        pmi = _val("pmi_data")
+        industrial = _val("industrial_data")
+        gdp = _val("gdp_data")
+        score += self._direction_from_value(pmi, 50.5, 49.0)
+        score += self._direction_from_value(industrial, 5.5, 3.5)
+        score += self._direction_from_value(gdp, 5.5, 4.0)
+        return 1 if score > 0 else (-1 if score < 0 else 0)
+
+    def _lagging_direction(self, macro_data: Dict) -> int:
+        score = 0
+        def _val(key):
+            data = macro_data.get(key)
+            if isinstance(data, list) and data:
+                return data[0].get("value")
+            if isinstance(data, dict):
+                return data.get("value")
+            return None
+        ppi = _val("ppi_data")
+        cpi = _val("cpi_data")
+        score += self._direction_from_value(ppi, 1.0, -1.0)
+        score += self._direction_from_value(cpi, 3.0, 0.5)
+        return 1 if score > 0 else (-1 if score < 0 else 0)
+
+    def determine_macro_stage(self, macro_data: Dict, monetary_data: Dict) -> Tuple[int, float]:
+        """
+        依据先行/同步/滞后三组方向向量判定宏观六阶段，返回 (stage_index 1-6, confidence)
+        """
+        L = self._leading_direction(macro_data, monetary_data)
+        C = self._coincident_direction(macro_data)
+        T = self._lagging_direction(macro_data)
+        pattern = (L, C, T)
+        mapping = {
+            (+1, -1, -1): 1,
+            (+1, +1, -1): 2,
+            (+1, +1, +1): 3,
+            (-1, +1, +1): 4,
+            (-1, -1, +1): 5,
+            (-1, -1, -1): 6,
+        }
+        if pattern in mapping:
+            return mapping[pattern], 0.9
+        best_stage, best_d = 3, 10
+        for tgt_pattern, stage in mapping.items():
+            d = (pattern[0]-tgt_pattern[0])**2 + (pattern[1]-tgt_pattern[1])**2 + (pattern[2]-tgt_pattern[2])**2
+            if d < best_d:
+                best_d = d
+                best_stage = stage
+        conf = max(0.3, 0.9 - 0.2 * best_d)
+        return best_stage, conf
+
+    @staticmethod
+    def _stage_from_inventory_cycle(cycle_stage: str) -> int:
+        if not cycle_stage:
+            return 3
+        if "主动补" in cycle_stage:
+            return 3
+        if "被动补" in cycle_stage:
+            return 2
+        if "被动去" in cycle_stage:
+            return 5
+        if "主动去" in cycle_stage:
+            return 6
+        return 4
+
+    @staticmethod
+    def _stage_from_monetary_cycle(cycle_stage: str) -> int:
+        if not cycle_stage:
+            return 3
+        if "宽松" in cycle_stage:
+            return 2
+        if "收紧" in cycle_stage:
+            return 5
+        return 3
+
+    def _blend_stage_with_weights(
+        self,
+        asset_stage: PringStage,
+        inventory_cycle: str,
+        monetary_cycle: str
+    ) -> Tuple[PringStage, float]:
+        """按权重融合库存/货币/资产阶段，返回新的阶段与置信度调整"""
+        if self.use_legacy_stage_rules:
+            return asset_stage, 0.0
+        weights = self.stage_weights
+        inv_idx = self._stage_from_inventory_cycle(inventory_cycle)
+        mon_idx = self._stage_from_monetary_cycle(monetary_cycle)
+        asset_idx = self.STAGE_SEQUENCE.index(asset_stage) + 1
+        blended = (
+            inv_idx * weights["inventory"]
+            + mon_idx * weights["monetary"]
+            + asset_idx * weights["asset"]
+        )
+        blended_idx = min(6, max(1, round(blended)))
+        blended_stage = self.STAGE_SEQUENCE[blended_idx - 1]
+        adjust = 0.0 if blended_stage == asset_stage else -0.05
+        return blended_stage, adjust
     
     async def analyze_pring_stage(self, days: int = 250) -> Dict:
         """
@@ -1811,47 +1810,24 @@ class PringAnalyzer:
             print("  收集Pring资产信号数据...")
             asset_signals_pre = await self.get_asset_signals(days)
 
+            # 宏观六阶段判定（先行/同步/滞后）
+            macro_stage_idx, macro_conf = self.determine_macro_stage(macro_data, monetary_data)
+            print(f"\n[阶段2.5] 宏观六阶段判定: 第{macro_stage_idx}阶段 (置信度{macro_conf:.1%})")
+
             # ===== 数据验证阶段 =====
             print("\n[阶段2] 数据完整性验证...")
 
-            # 验证第一层数据 (V4.2修正: 匹配实际返回的字段名)
+            # 验证第一层数据（仅实值计入完整性，查询模板不计分）
             layer1_checks = {
-                "PPI数据": (
-                    (macro_data.get('ppi_data') is not None and len(macro_data.get('ppi_data', [])) > 0) or
-                    (macro_data.get('websearch_queries', {}).get('ppi') is not None)
-                ),
-                "PMI数据": (
-                    (macro_data.get('pmi_data') is not None and len(macro_data.get('pmi_data', [])) > 0) or
-                    (macro_data.get('websearch_queries', {}).get('pmi') is not None)
-                ),
-                "PMI新订单": (
-                    (macro_data.get('pmi_new_orders_data') is not None and len(macro_data.get('pmi_new_orders_data', [])) > 0) or
-                    (macro_data.get('websearch_queries', {}).get('pmi') is not None)
-                ),
-                "PMI生产": (
-                    (macro_data.get('pmi_production_data') is not None and len(macro_data.get('pmi_production_data', [])) > 0) or
-                    (macro_data.get('websearch_queries', {}).get('pmi') is not None)
-                ),
-                "工业增加值": (
-                    (macro_data.get('industrial_data') is not None) or
-                    (macro_data.get('websearch_queries', {}).get('industrial') is not None)
-                ),
-                "工业营收": (
-                    macro_data.get('industrial_sales_data') is not None or
-                    (macro_data.get('websearch_queries', {}).get('industrial') is not None)
-                ),
-                "CPI数据": (
-                    (macro_data.get('cpi_data') is not None and len(macro_data.get('cpi_data', [])) > 0) or
-                    (macro_data.get('websearch_queries', {}).get('cpi') is not None)
-                ),
-                "GDP数据": (
-                    macro_data.get('gdp_data') is not None or
-                    (macro_data.get('websearch_queries', {}).get('gdp') is not None)
-                ),
-                "BDI指数": (
-                    macro_data.get('bdi_data') is not None or
-                    (macro_data.get('websearch_queries', {}).get('bdi') is not None)
-                ),
+                "PPI数据": macro_data.get('ppi_data') is not None and len(macro_data.get('ppi_data', [])) > 0,
+                "PMI数据": macro_data.get('pmi_data') is not None and len(macro_data.get('pmi_data', [])) > 0,
+                "PMI新订单": macro_data.get('pmi_new_orders_data') is not None and len(macro_data.get('pmi_new_orders_data', [])) > 0,
+                "PMI生产": macro_data.get('pmi_production_data') is not None and len(macro_data.get('pmi_production_data', [])) > 0,
+                "工业增加值": macro_data.get('industrial_data') is not None,
+                "工业营收": macro_data.get('industrial_sales_data') is not None,
+                "CPI数据": macro_data.get('cpi_data') is not None and len(macro_data.get('cpi_data', [])) > 0,
+                "GDP数据": macro_data.get('gdp_data') is not None,
+                "BDI指数": macro_data.get('bdi_data') is not None,
             }
             layer1_available = sum(layer1_checks.values())
             layer1_total = len(layer1_checks)
@@ -1861,28 +1837,15 @@ class PringAnalyzer:
             for name, status in layer1_checks.items():
                 print(f"    {'[OK]' if status else '[MISSING]'} {name}")
 
-            # 验证第二层数据 (V4.2修正: 接受WebSearch查询作为有效待获取数据)
+            # 验证第二层数据（仅实值计分）
             layer2_checks = {
-                "M2增速": (
-                    monetary_data.get('m2_growth') is not None or
-                    monetary_data.get('m2_data') is not None
-                ),
-                "7天逆回购": (
-                    monetary_data.get('reverse_repo_7d') is not None or
-                    monetary_data.get('websearch_queries', {}).get('reverse_repo_7d') is not None
-                ),
-                "MLF利率": (
-                    monetary_data.get('mlf_1y') is not None or
-                    monetary_data.get('websearch_queries', {}).get('mlf_1y') is not None
-                ),
-                "存准率变化": (
-                    monetary_data.get('rrr_change') is not None or
-                    monetary_data.get('websearch_queries', {}).get('rrr_change') is not None
-                ),
-                "TSF增速": (
-                    monetary_data.get('tsf_growth') is not None or
-                    monetary_data.get('websearch_queries', {}).get('tsf_growth') is not None
-                ),
+                "M2增速": monetary_data.get('m2_growth') is not None or monetary_data.get('m2_data') is not None,
+                "M1增速": monetary_data.get('m1_growth') is not None or monetary_data.get('m1_data') is not None,
+                "7天逆回购": monetary_data.get('reverse_repo_7d') is not None,
+                "MLF利率": monetary_data.get('mlf_1y') is not None,
+                "存准率变化": monetary_data.get('rrr_change') is not None,
+                "TSF增速": monetary_data.get('tsf_growth') is not None,
+                "DR007": monetary_data.get('dr007_rate') is not None,
             }
             layer2_available = sum(layer2_checks.values())
             layer2_total = len(layer2_checks)
@@ -1912,7 +1875,7 @@ class PringAnalyzer:
             print(f"\n  总体数据完整性: {overall_completeness:.1f}%")
 
             # 判断是否满足最低要求
-            min_threshold = 60.0  # 最低60%数据完整性
+            min_threshold = 80.0  # 提升至 80% 数据完整性
             if overall_completeness < min_threshold:
                 error_msg = (
                     f"数据完整性不足 ({overall_completeness:.1f}% < {min_threshold:.0f}%)，"
@@ -1974,16 +1937,23 @@ class PringAnalyzer:
             )
 
             base_stage, base_confidence = self._enforce_stage_consistency(
-
                 base_stage,
-
                 base_confidence,
-
                 inventory_analysis.get("cycle_stage", ""),
-
-                monetary_analysis.get("cycle_stage", "")
-
+                monetary_analysis.get("cycle_stage", ""),
+                macro_stage_idx,
             )
+
+            # 加权融合库存/货币/资产阶段（非 legacy 模式）
+            blended_stage, confidence_adjust = self._blend_stage_with_weights(
+                base_stage,
+                inventory_analysis.get("cycle_stage", ""),
+                monetary_analysis.get("cycle_stage", "")
+            )
+            if blended_stage != base_stage:
+                print(f"  加权融合阶段: {blended_stage.value}（由 {base_stage.value} 调整）")
+                base_stage = blended_stage
+                base_confidence = max(0.0, base_confidence + confidence_adjust)
 
             print(f"  基础Pring阶段: {base_stage.value}")
 
@@ -2084,6 +2054,10 @@ class PringAnalyzer:
                 "asset_allocation_pct": stage_config.get("allocation_pct", {}),
                 "confirm_signals": confirm_signals,
                 "deny_signals": deny_signals,
+                "macro_stage": {
+                    "stage_index": macro_stage_idx,
+                    "confidence": macro_conf
+                },
                 # 第一层：库存周期分析
                 "layer_1_inventory_cycle": {
                     "cycle_stage": inventory_analysis["cycle_stage"],
@@ -2136,7 +2110,9 @@ class PringAnalyzer:
             result["metadata"] = {
                 "analysis_method": result["methodology"],
                 "analysis_time": result["analysis_date"],
-                "data_period": result["data_period"]
+                "data_period": result["data_period"],
+                "stage_weights": self.stage_weights,
+                "legacy_stage_rules": self.use_legacy_stage_rules,
             }
             return result
             

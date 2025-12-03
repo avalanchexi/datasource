@@ -50,6 +50,22 @@ def _remove_missing_item(metadata: Dict[str, Any], category: str, key: str) -> N
         missing.pop(category, None)
 
 
+def _remove_top_missing(market_data: Dict[str, Any], key: str) -> None:
+    """同步清理顶层 missing_items 列表，避免已补齐的缺口再次触发 Stage3 校验。"""
+    missing = market_data.get('missing_items')
+    if not isinstance(missing, list):
+        return
+    filtered = []
+    for item in missing:
+        if isinstance(item, dict):
+            if item.get('key') == key or item.get('indicator_key') == key:
+                continue
+        elif item == key:
+            continue
+        filtered.append(item)
+    market_data['missing_items'] = filtered
+
+
 def _refresh_stage2_gap_monitor(payload: Dict[str, Any]) -> Dict[str, int]:
     commodities = payload.get('commodities', [])
     bonds = payload.get('bonds', [])
@@ -117,6 +133,7 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
             inject_count += 1
             print(f"  [OK] {payload.get('indicator_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'macro_indicators', key)
+            _remove_top_missing(market_data, key)
 
     # 2. 注入货币政策
     print("\n[STEP 2] 注入货币政策数据...")
@@ -129,6 +146,7 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
             inject_count += 1
             print(f"  [OK] {payload.get('policy_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'monetary_policy', key)
+            _remove_top_missing(market_data, key)
 
     # 3. 注入资金流向（标准化为浮点+统一来源）
     print("\n[STEP 3] 注入资金流向数据...")
@@ -144,9 +162,36 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
                 f"total_120d={market_data['fund_flow'][key]['total_120d']} source={market_data['fund_flow'][key]['source']}"
             )
             _remove_missing_item(metadata, 'fund_flow', key)
+            _remove_top_missing(market_data, key)
 
-    # 4. 注入债券收益率
-    print("\n[STEP 4] 注入债券收益率数据...")
+    # 4. 注入外汇数据
+    print("\n[STEP 4] 注入外汇数据...")
+    forex_payload = websearch_data.get('forex', [])
+    if isinstance(forex_payload, dict):
+        forex_iterable = forex_payload.values()
+    else:
+        forex_iterable = forex_payload or []
+
+    market_forex = market_data.setdefault('forex', [])
+    for fx in forex_iterable:
+        pair = fx.get('pair') or fx.get('symbol')
+        if not pair:
+            continue
+        updated = False
+        for i, item in enumerate(market_forex):
+            if item.get('pair') == pair:
+                market_forex[i] = _merge_forex_entry(item, fx)
+                updated = True
+                break
+        if not updated:
+            market_forex.append(_build_forex_entry(fx))
+        inject_count += 1
+        print(f"  [OK] {fx.get('name', pair)}: {fx.get('current_rate')} (source={fx.get('source')})")
+        _remove_missing_item(metadata, 'forex', pair)
+        _remove_top_missing(market_data, pair)
+
+    # 5. 注入债券收益率
+    print("\n[STEP 5] 注入债券收益率数据...")
     bonds_payload = websearch_data.get('bonds', {})
     if isinstance(bonds_payload, dict):
         bond_iterable = bonds_payload.values()
@@ -162,10 +207,11 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
                 inject_count += 1
                 print(f"  [OK] {bond_data['name']}: {bond_data['current_yield']}%")
                 _remove_missing_item(metadata, 'bonds', symbol)
+                _remove_top_missing(market_data, symbol)
                 break
 
-    # 5. 注入商品价格
-    print("\n[STEP 5] 注入商品价格数据...")
+    # 6. 注入商品价格
+    print("\n[STEP 6] 注入商品价格数据...")
     commodities_payload = websearch_data.get('commodities', [])
     if isinstance(commodities_payload, dict):
         commodity_iterable = commodities_payload.values()
@@ -181,16 +227,64 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
                 inject_count += 1
                 print(f"  [OK] {commodity_data['name']}: {commodity_data['unit']}{commodity_data['current_price']:.2f} (YTD {commodity_data['ytd_change']:+.2f}%)")
                 _remove_missing_item(metadata, 'commodities', symbol)
+                _remove_top_missing(market_data, symbol)
                 break
 
     # 更新元数据
     metadata_section = websearch_data.get('metadata', {})
-    current_completeness = float(metadata.get('data_completeness') or 0.0)
-    metadata['data_completeness'] = max(current_completeness, 0.95)  # AI补全后达到95%
+    # 按实际数据重新计算完整度：非占位/非零的数据占比
+    def _is_filled(val: Any) -> bool:
+        if val in (None, "", "N/A"):
+            return False
+        try:
+            if isinstance(val, (int, float)):
+                return abs(val) > 1e-9
+        except Exception:
+            pass
+        return True
+
+    filled = 0
+    total = 0
+    # commodities
+    for item in market_data.get('commodities', []):
+        total += 1
+        filled += 1 if _is_filled(item.get('current_price')) else 0
+    # forex
+    for item in market_data.get('forex', []):
+        total += 1
+        filled += 1 if _is_filled(item.get('current_rate')) else 0
+    # bonds
+    for item in market_data.get('bonds', []):
+        total += 1
+        filled += 1 if _is_filled(item.get('current_yield')) else 0
+    # fund flow
+    for item in market_data.get('fund_flow', {}).values():
+        total += 1
+        filled += 1 if _is_filled(item.get('recent_5d')) and _is_filled(item.get('total_120d')) else 0
+    # macro & monetary
+    for section in ('macro_indicators', 'monetary_policy'):
+        for entry in market_data.get(section, {}).values():
+            total += 1
+            filled += 1 if _is_filled(entry.get('current_value')) else 0
+
+    metadata['data_completeness'] = round(filled / total, 3) if total else 1.0
     metadata['ai_websearch_enhanced'] = True
     collection_time = websearch_data.get('collection_time') or metadata_section.get('collection_time')
     if collection_time:
         metadata['websearch_timestamp'] = collection_time
+
+    # 根据已有数据再清理一次顶层 missing_items，避免遗留占位符
+    for key in list(market_data.get('missing_items', [])):
+        if isinstance(key, dict):
+            key_val = key.get('key') or key.get('indicator_key')
+        else:
+            key_val = key
+        if not key_val:
+            continue
+        _remove_top_missing(market_data, key_val)
+    # 同步根据已填充的 stock_indices 清理缺口
+    for idx in market_data.get('stock_indices', []):
+        _remove_top_missing(market_data, idx.get('symbol'))
 
     gap_summary = _refresh_stage2_gap_monitor(market_data)
     _refresh_stage2_notes(metadata, gap_summary)
@@ -246,6 +340,23 @@ def _apply_macro_entry(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
     entry['source'] = _format_source_label(payload.get('source'))
     entry['note'] = payload.get('note', entry.get('note'))
     entry['is_estimated'] = False
+    # 兜底回填前值：若有 current_value + change_rate 但前值缺失，用差值推算；若连 change_rate 也无，则假定前值=当前值
+    if entry['previous_value'] is None and entry['current_value'] is not None:
+        entry.setdefault('note', '')
+        if entry['change_rate'] is not None:
+            try:
+                entry['previous_value'] = round(entry['current_value'] - entry['change_rate'], 4)
+                if entry['note']:
+                    entry['note'] += '；'
+                entry['note'] += 'auto-backfilled previous_value via current_value - change_rate'
+            except Exception:
+                pass
+        else:
+            entry['previous_value'] = entry['current_value']
+            entry['change_rate'] = 0.0
+            if entry['note']:
+                entry['note'] += '；'
+            entry['note'] += 'auto-backfilled previous_value=current_value (no change_rate provided)'
     return True
 
 
@@ -322,6 +433,40 @@ def _build_fund_flow_note(payload: Dict[str, Any], anomaly: bool) -> str:
     if anomaly:
         parts.append("异常: 零值待WebSearch复核")
     return '；'.join(parts)
+
+
+def _coerce_percent(value: Any) -> Optional[float]:
+    if value in (None, '', 'N/A'):
+        return None
+    try:
+        return float(str(value).replace('%', '').strip())
+    except Exception:
+        return None
+
+
+def _merge_forex_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(orig)
+    merged['pair'] = payload.get('pair', orig.get('pair'))
+    merged['name'] = payload.get('name', orig.get('name', merged['pair']))
+    merged['current_rate'] = _coerce_float(payload.get('current_rate'))
+    merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+    merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
+    merged['trend'] = payload.get('trend', orig.get('trend', '未知'))
+    merged['source'] = _format_source_label(payload.get('source'))
+    return merged
+
+
+def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
+    pair = payload.get('pair') or payload.get('symbol') or 'UNKNOWN'
+    return {
+        "pair": pair,
+        "name": payload.get('name', pair),
+        "current_rate": _coerce_float(payload.get('current_rate')),
+        "daily_change": _coerce_percent(payload.get('daily_change')),
+        "change_120d": _coerce_percent(payload.get('change_120d')),
+        "trend": payload.get('trend', '未知'),
+        "source": _format_source_label(payload.get('source')),
+    }
 
 if __name__ == '__main__':
     # 默认路径

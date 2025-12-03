@@ -157,10 +157,16 @@ class UnifiedBackgroundScanner:
         cmd = [
             sys.executable,
             "scripts/stage3_pring_analyzer.py",
-            "--input",
+            "--market-data",
             str(input_path),
             "--output",
             str(self.pring_result_path),
+            "--gap-monitor",
+            "reports/gap_monitor.json",
+            "--min-completeness",
+            "0.8",
+            "--days",
+            "120",
         ]
         result = subprocess.run(cmd, text=True)
         if result.returncode != 0:

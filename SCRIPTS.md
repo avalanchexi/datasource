@@ -9,6 +9,41 @@
 
 ## 推荐脚本 (Production Ready)
 
+### 0. stage2_unified_enhancer.py ✅ UPDATED 2025-12
+
+**位置**: `scripts/stage2_unified_enhancer.py`
+**用途**: Stage 2 WebSearch 增强（资金流/汇率/商品/债券/宏观）
+**状态**: ✅ 更新（Tavily+DeepSeek，去 MCP，支持队列）
+
+**关键默认**:
+- fund_flow_backend=`tavily`；DeepSeek 模型=`deepseek-reasoner`；timeout=10s
+- 实时类：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
+- 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
+- 可选队列：`--use-queue --queue-concurrency 3 --queue-retry-limit 1`
+
+**使用**:
+```bash
+PYTHONPATH=./src \
+TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
+python3 scripts/stage2_unified_enhancer.py \
+  --market-data data/YYYYMMDD_market_data.json \
+  --output data/YYYYMMDD_market_data_stage2.json \
+  --execute-search \
+  --fund-flow-backend tavily \
+  --log-output logs/stage2_unified_log_YYYYMMDD.json \
+  --gap-monitor reports/gap_monitor_YYYYMMDD.json \
+  --websearch-results reports/websearch_results_YYYYMMDD.json
+```
+可选队列：追加 `--use-queue --queue-concurrency 3 --queue-retry-limit 1`
+
+**输出**:
+- 增强后的 market_data JSON
+- websearch_results JSON（含抽取结果）
+- log summary（含 score_filtered_drop / timeout / retry / extract_calls 等）
+- gap_monitor（仅真实失败/人工项）
+
+
+
 ### 1. stage1_data_collector.py ✅ ACTIVE
 
 **位置**: `scripts/stage1_data_collector.py`
@@ -355,3 +390,29 @@ powershell -Command "(Get-Item 'reports\${DATE}背景扫描120.md').Length"
 ---
 
 **文档结束**
+
+
+### Stage2：统一增强（默认）
+`python scripts/stage2_unified_enhancer.py --market-data data/market_data.json --output data/market_data_stage2.json --execute-search --fund-flow-backend hybrid --cache-backend sqlite --cache-path reports/tavily_cache.sqlite --websearch-results reports/websearch_results_auto.json --log-output logs/stage2_unified_log.json --gap-monitor reports/gap_monitor.json`
+
+### Stage2：高命中率（直连 + 低并发 + 易失败串行）
+```bash
+PYTHONPATH=. source .venv/bin/activate && source .env && \
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+python scripts/stage2_unified_enhancer.py \
+  --market-data data/market_data.json \
+  --output data/market_data_stage2.json \
+  --execute-search \
+  --fund-flow-backend hybrid \
+  --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
+  --websearch-results reports/websearch_results_auto.json \
+  --log-output logs/stage2_unified_log.json \
+  --gap-monitor reports/gap_monitor.json \
+  --deepseek-max-concurrency 1 --deepseek-timeout 25 --max-retries 3 \
+  --deepseek-serial-keys BCOM,GSG,USDCNY,USDCNH \
+  --extraction-backend regex
+```
+说明：直连 Tavily，串行 DeepSeek，regex 兜底，资金流向仍由 MCP/人工（hybrid）负责。
+
+### Stage2：只跑指定任务
+`python scripts/stage2_unified_enhancer.py --market-data data/market_data.json --output data/market_data_stage2.json --tasks task1,task2 --execute-search --fund-flow-backend hybrid`

@@ -18,6 +18,26 @@ python scripts/stage2_unified_enhancer.py \
   --websearch-results reports/websearch_results_auto.json
 ```
 
+### LangChain 抽取模式（Tavily + DeepSeek）
+> 适用于需要并发控制与可观测的 DeepSeek 抽取链路，默认仍可回退 regex。
+```bash
+python scripts/stage2_unified_enhancer.py \
+  --market-data data/market_data_stage1.json \
+  --output data/market_data_stage2_lc.json \
+  --execute-search \
+  --extraction-backend langchain \
+  --lc-max-concurrency 3 \
+  --lc-timeout 8.0 \
+  --fund-flow-backend tavily \
+  --websearch-results reports/websearch_results_auto.json \
+  --task-log logs/stage_task_log.jsonl
+```
+日志/产物新增：
+- task_log 增加 `extraction_backend`、`llm_latency_ms`、`llm_error` 字段，便于定位 DeepSeek 超时/失败。
+- websearch_results 增加 `extraction_backend` 标记（langchain/regex/deepseek），保留前三条片段审计。
+- 若 DeepSeek 抛错或超时，会自动回退 regex 占位并标记 `deepseek_error:*`，同时写 `llm_error`。
+- 如果缺少 `DEEPSEEK_API_KEY` 且选择了 deepseek/langchain，会自动降级为 `extraction_backend=regex`，继续执行 Tavily+regex 兜底。
+
 ### fund_flow_backend 选择
 - `tavily`（默认）：直接用 Tavily+DeepSeek 抽取资金流；抽取失败或零值会标记 `manual_required`。
 - `mcp`: 跳过在线搜索，任务记为待人工/MCP；`gap_monitor` 列出 pending，保留占位。
@@ -50,3 +70,17 @@ python scripts/setup_stage2_search_env.py  # 验证 Tavily 连通性
 - 环境变量 `STAGE2_SEARCH_BACKEND` 可设为 `tavily`（默认）或 `mcp`（仅当 Tavily 不可用时）。代码当前以 Tavily 为主，资金流向仍固定 MCP。
 - `--no-cache` 可禁用缓存验证实时性；`--cache-ttl` 控制命中窗口。
 - 搜索失败达到 3 次会记录 `manual_required`（后续补充）；现阶段可通过任务文件手动重跑。
+
+---
+
+## 7. 规划中的优化（Tavily + DeepSeek 异步与降级）
+目标：保持深度抽取但减少超时/阻塞，优先级 MCP → Tavily → DeepSeek → regex 兜底。
+
+设计要点（TODO）：
+- 并发：Tavily 搜索与 DeepSeek 抽取分层异步（示例并发 Tavily=4，DeepSeek=3）。
+- 超时/重试：Tavily 8–10s，重试 1–2 次；DeepSeek 6–8s，重试 1 次，超时立即降级 regex。
+- 开关：新增 CLI `--extraction-backend [deepseek|regex]`，`--deepseek-timeout`，`--deepseek-model`，`--deepseek-base-url`，`--deepseek-max-concurrency`。
+- 降级：DeepSeek 失败→regex；失败任务写 gap_monitor，websearch_results 标记 deepseek_timeout。
+- 日志：task_log 记录 extraction_backend、deepseek_error；websearch_results 保留前 3 条 snippets 与抽取结果。
+- 精准重跑：gap_monitor 缺口用 `--tasks` + 可选 `--extraction-backend regex` 快速补占位。
+- 额外兜底：Stage2 后可运行 `scripts/fill_market_data_from_yahoo.py`，再用 WebSearch 注入，保证 Stage3 输入完整。

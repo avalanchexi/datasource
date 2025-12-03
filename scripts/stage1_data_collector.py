@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import pandas as pd
 import numpy as np
+from functools import lru_cache
 
 # 导入核心模块
 from datasource import get_manager
@@ -442,17 +443,68 @@ class MarketDataCollector:
 
             except Exception as e:
                 print(f"    [ERROR] {name} 处理失败: {e}")
-                self._record_missing(
-                    'stock_indices',
-                    symbol,
-                    name,
-                    f"数据处理异常: {e}",
-                    search_query=f"{name} 收盘价 历史数据",
-                    source_hint='tushare.pro'
-                )
+                fallback = await self._fallback_index_from_tushare(symbol, name, fetch_start, self.end_date)
+                if fallback:
+                    stock_data_list.append(fallback)
+                    print(f"    [OK] {name} 通过 TuShare index_daily 兜底成功")
+                else:
+                    self._record_missing(
+                        'stock_indices',
+                        symbol,
+                        name,
+                        f"TuShare返回空/错误: {e}",
+                        search_query=f"{name} 收盘价 历史数据",
+                        source_hint='tushare.pro',
+                        attempted_tushare=True
+                    )
                 continue
 
         return stock_data_list
+
+    async def _fallback_index_from_tushare(self, symbol: str, name: str, start_date: str, end_date: str) -> Optional[StockIndexData]:
+        """
+        当 DataSourceManager 获取失败时，直接调用 TuShare index_daily 兜底一次，尽量补齐 000016 等指数。
+        """
+        try:
+            import pandas as pd
+            import tushare as ts
+            pro = ts.pro_api()
+            ts_code = f"{symbol}.SH" if symbol.startswith("0") else f"{symbol}.SZ"
+            df = pro.index_daily(ts_code=ts_code, start_date=start_date.replace("-", ""), end_date=end_date.replace("-", ""))
+            if df is None or df.empty:
+                return None
+            df = df.sort_values("trade_date")
+            df["close"] = pd.to_numeric(df["close"], errors="coerce")
+            df = df.dropna(subset=["close"])
+            if df.empty:
+                return None
+            closes = df["close"]
+            current = float(closes.iloc[-1])
+            # 5日、120日涨跌
+            change_5d = (current / closes.iloc[-6] - 1) * 100 if len(closes) > 6 else 0.0
+            change_120d = (current / closes.iloc[-121] - 1) * 100 if len(closes) > 121 else 0.0
+            ma50 = closes.rolling(50).mean().iloc[-1] if len(closes) >= 50 else closes.mean()
+            ma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else ma50
+            above_ma50 = current > (ma50 or current)
+            above_ma200 = current > (ma200 or current)
+            ma50_slope = float(closes.rolling(50).mean().diff().iloc[-1] or 0.0) if len(closes) >= 51 else 0.0
+            vol30 = float(closes.pct_change().rolling(30).std().iloc[-1] * (252 ** 0.5) * 100) if len(closes) > 30 else 0.0
+            return StockIndexData(
+                symbol=symbol,
+                name=name,
+                current_price=current,
+                change_5d=change_5d,
+                change_120d=change_120d,
+                above_ma50=above_ma50,
+                above_ma200=above_ma200,
+                ma50_slope=ma50_slope,
+                volatility_30d=vol30,
+                trend_score=50,
+                trend_label="中性",
+                source="TuShare index_daily(fallback)"
+            )
+        except Exception:
+            return None
 
     async def collect_commodities(self) -> List[CommodityData]:
         """收集商品数据
@@ -505,15 +557,22 @@ class MarketDataCollector:
             {'symbol': 'DXY', 'pair': 'DXY', 'name': 'DXY美元指数'}
         ]
 
-        print("  [INFO] Stage1禁用国际金融(Yahoo)通道，汇率数据需 Stage2/MCP 补充")
+        print("  [INFO] Stage1尝试TuShare fx_daily，若无数据则交由 Stage2/MCP")
         for config in forex_configs:
+            fx_entry = await self._fetch_fx_from_tushare(config['symbol'], config['name'])
+            if fx_entry:
+                forex_list.append(fx_entry)
+                print(f"  [OK] {config['name']} 通过 TuShare fx_daily 获取")
+                continue
             self._record_missing(
                 'forex',
                 config['symbol'],
                 config['name'],
-                'Stage1禁用Yahoo/Investing fallback，需MCP WebSearch获取',
+                'TuShare fx_daily 返回空，需MCP/Tavily补充',
                 search_query=f"{config['name']} 汇率 最新 数据",
-                source_hint='MCP WebSearch'
+                source_hint='MCP WebSearch',
+                preferred_source='tushare',
+                attempted_tushare=True
             )
 
         return forex_list
@@ -521,7 +580,7 @@ class MarketDataCollector:
     async def collect_bonds(self) -> List[BondYieldData]:
         """收集债券收益率数据"""
         print("[4/5] 收集债券收益率数据...")
-        print("  [INFO] Stage1禁用国际金融(Yahoo)通道，国债收益率需 Stage2/MCP 补充")
+        print("  [INFO] Stage1尝试 TuShare/中债接口，失败再交 Stage2/MCP")
 
         bond_list = []
         bond_configs = [
@@ -531,13 +590,20 @@ class MarketDataCollector:
         ]
 
         for config in bond_configs:
+            bond_entry = await self._fetch_bond_yield_from_tushare(config['symbol'], config['name'])
+            if bond_entry:
+                bond_list.append(bond_entry)
+                print(f"  [OK] {config['name']} 通过 TuShare/中债接口获取")
+                continue
             self._record_missing(
                 'bonds',
                 config['symbol'],
                 config['name'],
-                'Stage1禁用Yahoo/Investing fallback，需MCP WebSearch补充',
+                'TuShare/中债接口无数据，需MCP WebSearch补充',
                 search_query=f"{config['name']} 收益率 最新",
-                source_hint='MCP WebSearch'
+                source_hint='MCP WebSearch',
+                preferred_source='tushare',
+                attempted_tushare=True
             )
             bond = BondYieldData(
                 symbol=config['symbol'],
@@ -575,6 +641,31 @@ class MarketDataCollector:
             )
             pending_missing.append(flow)
 
+        # 0) TuShare 沪深港通北向/南向资金（最近开市日）
+        nb_val, sb_val = await self._fetch_hsgt_from_tushare()
+        if nb_val is not None:
+            fund_flow_dict['northbound'] = FundFlowData(
+                type='northbound',
+                recent_5d=nb_val,
+                total_120d=None,
+                trend='流入' if nb_val > 0 else '流出' if nb_val < 0 else '未知',
+                source='TuShare moneyflow_hsgt',
+                note='最新交易日北向资金（十亿元）',
+            )
+            pending_missing = [item for item in pending_missing if item['key'] != 'northbound']
+            print("  [OK] 北向资金已通过 TuShare moneyflow_hsgt 获取")
+        if sb_val is not None:
+            fund_flow_dict['southbound'] = FundFlowData(
+                type='southbound',
+                recent_5d=sb_val,
+                total_120d=None,
+                trend='流入' if sb_val > 0 else '流出' if sb_val < 0 else '未知',
+                source='TuShare moneyflow_hsgt',
+                note='最新交易日南向资金（十亿元）',
+            )
+            pending_missing = [item for item in pending_missing if item['key'] != 'southbound']
+            print("  [OK] 南向资金已通过 TuShare moneyflow_hsgt 获取")
+
         # 1) TuShare 融资融券余额 -> fund_flow.margin
         margin_entry = await self._fetch_margin_flow_from_tushare()
         if margin_entry:
@@ -602,10 +693,122 @@ class MarketDataCollector:
                 flow['name'],
                 'TuShare/公共接口不可用，需MCP WebSearch',
                 search_query=flow['search_query'],
-                source_hint='eastmoney.com'
+                source_hint='eastmoney.com',
+                attempted_tushare=flow['key'] in {'northbound', 'southbound'}
             )
 
         return fund_flow_dict
+
+    async def _fetch_hsgt_from_tushare(self) -> (Optional[float], Optional[float]):
+        """尝试获取最近开市日的北向/南向资金（十亿元）"""
+        try:
+            import tushare as ts  # 局部导入，避免环境缺少时报错
+            pro = ts.pro_api()
+            open_dates = self._get_recent_open_dates(count=5)
+            for trade_date in open_dates[::-1]:  # 从最近往前最多 5 个开市日
+                df = pro.moneyflow_hsgt(trade_date=trade_date)
+                if df is None or df.empty:
+                    continue
+                north = df.iloc[0].get('north_money')
+                south = df.iloc[0].get('south_money')
+                nb_val = float(north) if north is not None else None  # TuShare 单位：亿元
+                sb_val = float(south) if south is not None else None
+                if nb_val is not None or sb_val is not None:
+                    return nb_val, sb_val
+            return None, None
+        except Exception:
+            return None, None
+
+    async def _fetch_fx_from_tushare(self, symbol: str, name: str) -> Optional[ForexData]:
+        """尝试用 TuShare fx_daily 获取在岸/离岸汇率"""
+        if symbol not in {"USDCNY", "USDCNH"}:
+            return None
+        try:
+            import tushare as ts
+            pro = ts.pro_api()
+            open_dates = self._get_recent_open_dates(count=5)
+            for trade_date in open_dates[::-1]:  # 最近 5 个开市日尝试
+                df = pro.fx_daily(ts_code=symbol, start_date=trade_date, end_date=trade_date)
+                if df is None or df.empty:
+                    continue
+                row = df.iloc[-1]
+                rate = row.get("bid_close") or row.get("ask_close") or row.get("bid_open")
+                if rate is None:
+                    continue
+                return ForexData(
+                    pair=symbol,
+                    name=name,
+                    current_rate=float(rate),
+                    daily_change=None,
+                    change_120d=None,
+                    trend='平稳',
+                    source='TuShare fx_daily',
+                    timestamp=trade_date,
+                    note='TuShare fx_daily 最近开市日'
+                )
+            return None
+        except Exception:
+            return None
+
+    @lru_cache(maxsize=1)
+    def _get_recent_open_dates(self, count: int = 5) -> List[str]:
+        """获取最近的开市日列表（默认 5 个），用于 T+1 数据回退。"""
+        try:
+            import tushare as ts
+            pro = ts.pro_api()
+            end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
+            cal = pro.trade_cal(
+                exchange='',
+                start_date=(end_dt - timedelta(days=30)).strftime("%Y%m%d"),
+                end_date=end_dt.strftime("%Y%m%d")
+            )
+            open_dates = [d for d in cal[cal.is_open == 1].cal_date]
+            return open_dates[-count:] if open_dates else []
+        except Exception:
+            return []
+
+    async def _fetch_bond_yield_from_tushare(self, symbol: str, name: str) -> Optional[BondYieldData]:
+        """通过 DataSourceManager→InternationalFinanceAdapter 优先调用 TuShare us_tycr / ETF 代理获取债券收益率"""
+        try:
+            resp = await self.manager.get_bond_yield_data(symbol, self.start_date, self.end_date)
+            data = getattr(resp, "data", None)
+            if data is None or len(data) == 0:
+                return None
+
+            df = data.sort_values("date")
+            yield_series = df["yield_rate"] if "yield_rate" in df.columns else df["close"]
+            current = float(yield_series.iloc[-1])
+
+            def _calc_bp(series, window):
+                if len(series) <= window:
+                    return None
+                return float((series.iloc[-1] - series.iloc[-1 - window]) * 100)
+
+            change_5d_bp = _calc_bp(yield_series, 5)
+            change_120d_bp = _calc_bp(yield_series, 120)
+
+            trend = "平稳"
+            if change_5d_bp is not None:
+                if change_5d_bp > 0:
+                    trend = "上行"
+                elif change_5d_bp < 0:
+                    trend = "下行"
+
+            source_label = resp.metadata.get("data_source") if resp and resp.metadata else resp.source
+
+            return BondYieldData(
+                symbol=symbol,
+                name=name,
+                current_yield=current,
+                change_5d_bp=change_5d_bp,
+                change_120d_bp=change_120d_bp,
+                trend=trend,
+                source=source_label or "TuShare us_tycr",
+                is_estimated=False
+            )
+        except Exception as exc:
+            print(f"  [WARN] 通过TuShare获取{symbol}失败: {exc}")
+            return None
 
     async def collect_macro_indicators(self) -> Dict[str, MacroIndicatorData]:
         """
@@ -1500,6 +1703,7 @@ class MarketDataCollector:
         search_query: Optional[str] = None,
         source_hint: Optional[str] = "tavily",
         preferred_source: str = "tushare",
+        attempted_tushare: bool = False,
     ) -> None:
         """记录缺失数据,供Stage 2回填"""
         self.missing_items[category].append(
@@ -1510,6 +1714,7 @@ class MarketDataCollector:
                 "preferred_source": preferred_source,
                 "search_query": search_query,
                 "source_hint": source_hint,
+                "attempted_tushare": attempted_tushare,
             }
         )
 
@@ -1522,6 +1727,31 @@ async def main():
 
     args = parser.parse_args()
 
+    def _resolve_last_trading_day(target_date: str) -> str:
+        """
+        将传入日期规范到最近的交易日（含当日）。用于避开周末/法定节假日导致的空数据。
+        """
+        try:
+            import tushare as ts
+
+            pro = ts.pro_api()
+            end_dt = datetime.strptime(target_date, "%Y-%m-%d")
+            start_dt = end_dt - timedelta(days=15)  # 向前最多回溯两周
+
+            cal = pro.trade_cal(
+                exchange='',
+                start_date=start_dt.strftime("%Y%m%d"),
+                end_date=end_dt.strftime("%Y%m%d"),
+            )
+            open_dates = [d for d in cal[cal.is_open == 1].cal_date]
+            if not open_dates:
+                return target_date  # 获取失败时保持原值，避免阻断
+            last_open = open_dates[-1]
+            return datetime.strptime(last_open, "%Y%m%d").strftime("%Y-%m-%d")
+        except Exception:
+            # 若 TuShare 不可用或无权限，保持用户输入日期
+            return target_date
+
     # 构建输出路径
     if args.output:
         output_path = Path(args.output)
@@ -1530,9 +1760,16 @@ async def main():
         output_dir.mkdir(exist_ok=True)
         output_path = output_dir / 'market_data.json'
 
+    # 若传入日期为休市日，则回退到最近交易日
+    trading_date = _resolve_last_trading_day(args.date)
+    if trading_date != args.date:
+        print(f"[INFO] 目标日期 {args.date} 为休市日，自动回退至最近交易日 {trading_date}")
+    else:
+        print(f"[INFO] 使用交易日: {trading_date}")
+
     # 创建收集器
     collector = MarketDataCollector(
-        end_date=args.date
+        end_date=trading_date
     )
 
     # 收集数据

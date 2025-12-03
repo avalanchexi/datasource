@@ -103,9 +103,17 @@ class Stage2TaskPlanner:
             "query_template_id": indicator_key,
             "preferred_domains": profile.get("preferred_domains", []),
             "time_range": profile.get("time_range"),
+            "max_age_days": profile.get("max_age_days"),
             "query": profile.get("query"),
             "unit": profile.get("unit"),
             "issuer": profile.get("issuer"),
+            "issuer_aliases": profile.get("issuer_aliases", []),
+            "language": profile.get("language"),
+            "topic": profile.get("topic"),
+            "max_results": profile.get("max_results"),
+            "search_depth": profile.get("search_depth"),
+            "chunks_per_source": profile.get("chunks_per_source"),
+            "auto_parameters": profile.get("auto_parameters"),
             "source_hint": source_hint,
             "retry_count": 0,
             "created_at": int(time.time()),
@@ -113,11 +121,11 @@ class Stage2TaskPlanner:
 
     def build_tasks(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         tasks = self._from_missing_items(payload) + self._scan_placeholders(payload)
-        # 去重（按 indicator_key）
+        # 去重：同一 indicator_key 只保留一条，避免 basic/advanced 双倍调用
         seen = set()
         unique_tasks = []
         for task in tasks:
-            key = (task["indicator_key"], task["stage_phase"])
+            key = task["indicator_key"]
             if key in seen:
                 continue
             seen.add(key)

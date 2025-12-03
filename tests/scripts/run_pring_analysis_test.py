@@ -43,26 +43,22 @@ async def run_pring_analysis(input_file, output_file):
     try:
         result = await analyzer.analyze_pring_stage(120)
 
-        # 创建输出结构
-        pring_result = {
-            "metadata": {
-                "analysis_date": market_data['metadata']['date'],
-                "data_completeness": completeness,
-                "analysis_method": "Pring V4.0 Three-Layer Framework",
-                "confidence_level": result.get('confidence', 0.0)
-            },
-            "layer_1_inventory_cycle": result.get('layer_1_inventory_cycle', {}),
-            "layer_2_monetary_cycle": result.get('layer_2_monetary_cycle', {}),
-            "layer_3_pring_final": result.get('layer_3_pring_final', {}),
-            "final_stage": result.get('stage', '未知'),
-            "confidence": result.get('confidence', 0.0),
-            "recommendation": result.get('recommendation', '数据不足，无法生成建议'),
-            "leading_indicator": result.get('leading_indicator', {}),
-            "focus_assets": result.get('focus_assets', []),
-            "allocation_suggestion": result.get('allocation_suggestion'),
-            "asset_recommendations": result.get('asset_recommendations'),
-            "asset_allocation_pct": result.get('asset_allocation_pct')
-        }
+        # 直接使用完整结果，补充元数据并对齐 Stage3 字段
+        pring_result = result or {}
+        pring_result.setdefault("metadata", {})
+        pring_result["metadata"].update({
+            "analysis_date": market_data['metadata']['date'],
+            "data_completeness": completeness,
+            "analysis_method": pring_result.get("methodology", "Pring V4.0 三层框架"),
+        })
+        pring_result.setdefault("final_stage", pring_result.get("stage", "未知"))
+        pring_result.setdefault("confidence", pring_result.get("confidence", 0.0))
+        pring_result.setdefault("recommendation", pring_result.get("recommendation", "数据不足，无法生成建议"))
+        pring_result.setdefault("asset_signals", result.get("asset_signals", {}))
+        pring_result.setdefault("asset_allocation_pct", result.get("asset_allocation_pct", {}))
+        pring_result.setdefault("leading_indicator", result.get("leading_indicator", {}))
+        pring_result.setdefault("pending_websearch", result.get("pending_websearch", []))
+        pring_result["data_completeness"] = completeness
 
         # 保存结果
         print("[STEP 4] 保存分析结果...")

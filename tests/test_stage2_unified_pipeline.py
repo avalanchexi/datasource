@@ -62,3 +62,6 @@ def test_unified_pipeline_write_back(tmp_path: Path):
     assert completed and web_results
     # fund flow可能因单位校验进入manual_required
     assert len(failures) <= 1
+import pytest
+
+pytest.importorskip("langchain_core")

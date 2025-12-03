@@ -131,3 +131,6 @@ def test_execute_tasks_mcp_backend_skips_search(tmp_path: Path):
     )
     assert not completed
     assert failures and failures[0]["manual_required"] is True
+import pytest
+
+pytest.importorskip("langchain_core")

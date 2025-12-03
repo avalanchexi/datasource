@@ -14,7 +14,7 @@ import json
 import shutil
 from pathlib import Path
 
-from generate_simple_report import generate_report
+from datasource.generators.simple_report import generate_report
 
 
 def parse_args() -> argparse.Namespace:

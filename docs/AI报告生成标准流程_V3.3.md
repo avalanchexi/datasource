@@ -1,8 +1,8 @@
 # AI报告生成标准流程 V3.3+
 
-**文档版本**: V3.3+ (2025-11-14 Verified)
-**验证日期**: 2025-11-14
-**验证状态**: ✅ PASS (95% completeness, 60% confidence)
+**文档版本**: V3.3+ (2025-11-24 Update)
+**验证日期**: 2025-11-24
+**验证状态**: ✅ PASS (100% completeness after MCP/手工补数, 85% confidence)
 
 ---
 
@@ -22,21 +22,21 @@
 
 ## 阶段说明
 
-### Stage 1: API数据收集 (30-40秒)
+### Stage 1: API数据收集 (30-60秒，交易日感知版)
 
 **脚本**: `scripts/stage1_data_collector.py`
 
 **命令**:
 ```bash
 python scripts/stage1_data_collector.py \
-  --date 2025-11-14 \
-  --output data/20251114_market_data.json
+  --date 2025-11-24 \
+  --output data/20251124_market_data.json
 ```
 
 **输出**:
 - 文件: `data/YYYYMMDD_market_data.json`
 - 大小: ~15KB
-- 数据完整性: 25-42%
+- 数据完整性: 25-42%（休市自动回退最近开市日；fx_daily/moneyflow_hsgt 回溯最近5个开市日）
 
 **数据覆盖**:
 - ✅ 股票指数 (4/5): 沪深300, 创业板指, 深证成指, 上证指数
@@ -45,7 +45,7 @@ python scripts/stage1_data_collector.py \
 - ⚠️ 商品 (1/6): 仅GSG
 - ⚠️ 宏观指标 (0/5): 全部占位符
 - ⚠️ 货币政策 (0/5): 全部占位符
-- ⚠️ 资金流向 (0/4): 全部占位符
+- ⚠️ 资金流向 (0/4, 默认tavily): 全部占位符
 
 **验证**:
 ```bash
@@ -102,7 +102,7 @@ python scripts/stage2a_mcp_enhancer.py \
 9. TSF: `中国社会融资规模增速 2025年10月 央行 最新数据`
 10. M2: `中国M2货币供应量 同比增速 2025年10月 央行`
 
-**资金流向 (4个)**:
+**资金流向 (4个, 默认tavily)**:
 11. Northbound: `北向资金 2025年11月14日 净流入 近5日 累计 东方财富`
 12. Southbound: `南向资金 2025年11月14日 净流入 近5日 东方财富 同花顺`
 13. ETF: `A股ETF资金流向 2025年11月 近5日 净流入 东方财富`
@@ -165,7 +165,7 @@ python inject_websearch_data.py \
   [OK] TSF社融增速: 8.5%
   [OK] M2增速: 8.2%
 
-[STEP 3] 注入资金流向数据...
+[STEP 3] 注入资金流向数据（默认 tavily，失败可人工）...
   [OK] northbound: recent_5d=约140亿元, total_120d=约1800亿元
   [OK] southbound: recent_5d=约55亿港元净流出, total_120d=约4800亿港元
   [OK] etf: recent_5d=约18亿元净流入, total_120d=约650亿元
@@ -193,7 +193,7 @@ python -c "import json; data=json.load(open('data/20251114_market_data_complete.
 ```
 
 **标准化说明**:
-- 注入脚本会把资金流向 `recent_5d` / `total_120d` 统一转换为“亿元”浮点，并自动推断 `trend` 与 `source`（`MCP WebSearch实时获取` 或 `异常零值-需核查`），`note` 中保留原始文本。
+- 注入脚本会把资金流向 `recent_5d` / `total_120d` 统一转换为“亿元”浮点，并自动推断 `trend` 与 `source`（`Tavily WebSearch+DeepSeek` 或 `异常零值-需核查`），`note` 中保留原始文本。
 - 宏观与货币字段会去掉 `%`、千分符等字符，同时把 `source` 规范化为 `MCP WebSearch` 前缀，并将 `is_estimated` 置为 `False`。
 
 ---
@@ -215,7 +215,7 @@ python run_pring_analysis.py \
 [INFO] 输出文件: data\20251114_pring_result.json
 
 [STEP 1] 读取市场数据...
-  - 数据完整性: 95.0%
+  - 数据完整性: 100.0%
   - 宏观指标: 5/5
   - 货币政策: 5/5
 
@@ -274,19 +274,19 @@ python run_pring_analysis.py \
 **命令**:
 ```bash
 python generate_simple_report.py \
-  data/20251114_market_data_complete.json \
-  data/20251114_pring_result.json \
-  reports/20251114背景扫描120.md
+  data/20251124_market_data_complete.json \
+  data/20251124_pring_result.json \
+  reports/20251124背景扫描120.md
 ```
 
 **输出**:
 ```
 [SUCCESS] 报告生成完成！
-  - 输出文件: reports\20251114背景扫描120.md
-  - 报告日期: 2025-11-14
-  - 数据完整性: 95.0%
-  - Pring阶段: 第Ⅵ阶段
-  - 置信度: 60.0%
+  - 输出文件: reports\20251124背景扫描120.md
+  - 报告日期: 2025-11-10（示例回退至最近开市日）
+  - 数据完整性: 100.0%
+  - Pring阶段: 第Ⅱ阶段
+  - 置信度: 85.0%
 ```
 
 **报告结构** (9个章节):
@@ -399,12 +399,12 @@ python -c "import json; data=json.load(open('data/YYYYMMDD_market_data_complete.
 
 ---
 
-## 完整执行示例 (2025-11-14)
+## 完整执行示例 (2025-11-24)
 
 ```bash
 # Stage 1
-python scripts/stage1_data_collector.py --date 2025-11-14 --output data/20251114_market_data.json
-# ✅ Output: 15.6KB, 42.9% completeness
+python scripts/stage1_data_collector.py --date 2025-11-24 --output data/20251124_market_data.json
+# ✅ Output: ~18KB, 40% completeness（休市自动回退）
 
 # Stage 2a
 python scripts/stage2a_mcp_enhancer.py --market-data data/20251114_market_data.json --output data/20251114_market_data_enhanced.json
@@ -415,16 +415,16 @@ python scripts/stage2a_mcp_enhancer.py --market-data data/20251114_market_data.j
 # 1. Execute 14 WebSearch queries
 # 2. Create websearch_results_20251114.json
 # 3. Inject data
-python inject_websearch_data.py data/20251114_market_data_enhanced.json data/websearch_results_20251114.json data/20251114_market_data_complete.json
-# ✅ Output: 21 items injected, 95.0% completeness
+python inject_websearch_data.py data/20251124_market_data_enhanced.json data/websearch_results_20251124.json data/20251124_market_data_complete.json
+# ✅ Output: 21 items injected, 100.0% completeness
 
 # Stage 2
-python run_pring_analysis.py data/20251114_market_data_complete.json data/20251114_pring_result.json
-# ✅ Output: Stage=第Ⅵ阶段, Confidence=60%
+python run_pring_analysis.py data/20251124_market_data_complete.json data/20251124_pring_result.json
+# ✅ Output: Stage=第Ⅱ阶段, Confidence=85%
 
 # Stage 3
-python generate_simple_report.py data/20251114_market_data_complete.json data/20251114_pring_result.json reports/20251114背景扫描120.md
-# ✅ Output: 4,849 bytes, 9 sections
+python generate_simple_report.py data/20251124_market_data_complete.json data/20251124_pring_result.json reports/20251124背景扫描120.md
+# ✅ Output: 9 sections, no N/A, completeness 100%
 
 # 验证
 powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"

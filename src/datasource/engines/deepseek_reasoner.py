@@ -26,16 +26,22 @@ except Exception:  # pragma: no cover - 环境缺省时延迟导入
 class DeepSeekExtractionAgent:
     """从 Tavily 搜索结果里提取结构化指标的轻量代理"""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "deepseek-chat"):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        model: str = "deepseek-reasoner",
+        base_url: Optional[str] = None,
+    ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.model = model
+        self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
         self._client: Optional[Any] = None
 
     async def _ensure_client(self) -> Optional[Any]:
         if not self.api_key or AsyncOpenAI is None:
             return None
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=self.api_key)
+            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
         return self._client
 
     @staticmethod
@@ -66,6 +72,7 @@ class DeepSeekExtractionAgent:
         indicator: str,
         unit_hint: Optional[str] = None,
         issuer_hint: Optional[str] = None,
+        request_timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         从 Tavily 结果中提取结构化字段。
@@ -113,7 +120,8 @@ class DeepSeekExtractionAgent:
         ]
 
         try:
-            completion = await client.chat.completions.create(
+            client_opts = client.with_options(timeout=request_timeout) if request_timeout else client
+            completion = await client_opts.chat.completions.create(
                 model=self.model,
                 messages=messages,
                 temperature=0.2,

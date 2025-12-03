@@ -105,6 +105,9 @@ class AsyncTavilyClient:
         time_range: Optional[str] = None,
         max_results: Optional[int] = None,
         cache_ttl: Optional[int] = None,
+        language: Optional[str] = None,
+        chunks_per_source: Optional[int] = None,
+        auto_parameters: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         执行 Tavily 搜索请求。
@@ -130,6 +133,12 @@ class AsyncTavilyClient:
             payload["time_range"] = time_range
         if max_results:
             payload["max_results"] = max_results
+        if language:
+            payload["language"] = language
+        if chunks_per_source:
+            payload["chunks_per_source"] = chunks_per_source
+        if auto_parameters is not None:
+            payload["auto_parameters"] = auto_parameters
 
         cache_key = self._make_cache_key(payload)
         if self.cache:
@@ -147,6 +156,66 @@ class AsyncTavilyClient:
             data["cache_hit"] = False
             data["query"] = query
             data["search_depth"] = payload["search_depth"]
+
+        if self.cache:
+            self.cache.set(cache_key, data, ttl=cache_ttl)
+        return data
+
+    async def extract(
+        self,
+        *,
+        search_result_id: Optional[str] = None,
+        search_results: Optional[List[Dict[str, Any]]] = None,
+        extract_depth: str = "standard",
+        include_raw_content: bool = False,
+        cache_ttl: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        调用 Tavily extract 接口，对 search 结果执行结构化抽取。
+        仅当 search_result_id 或 search_results 之一提供时调用。
+        """
+        if not self.api_key:
+            raise RuntimeError("TAVILY_API_KEY 未设置，无法执行 Tavily extract")
+        if not search_result_id and not search_results:
+            raise ValueError("extract 需要 search_result_id 或 search_results")
+
+        payload: Dict[str, Any] = {
+            "api_key": self.api_key,
+            "extract_depth": extract_depth,
+            "include_raw_content": include_raw_content,
+        }
+        if search_result_id:
+            payload["search_result_id"] = search_result_id
+        if search_results:
+            minimal = []
+            for item in search_results:
+                minimal.append(
+                    {
+                        "url": item.get("url"),
+                        "content": item.get("content") or item.get("snippet") or "",
+                    }
+                )
+            payload["search_results"] = minimal
+
+        cache_key = self._make_cache_key({"extract": payload})
+        if self.cache:
+            cached = self.cache.get(cache_key)
+            if cached:
+                cached["cache_hit"] = True
+                return cached
+
+        async with self.semaphore:
+            client = await self._ensure_client()
+            url = self.base_url.replace("/search", "/extract")
+            logger.debug(f"Tavily extract depth={extract_depth} raw={include_raw_content}")
+            resp = await client.post(url, json=payload)
+            try:
+                resp.raise_for_status()
+                data = resp.json()
+                data["cache_hit"] = False
+            except Exception as exc:
+                logger.debug(f"Tavily extract failed: {exc}")
+                data = {"error": str(exc), "cache_hit": False, "results": []}
 
         if self.cache:
             self.cache.set(cache_key, data, ttl=cache_ttl)

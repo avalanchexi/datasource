@@ -1,0 +1,45 @@
+# TODOs - Stage2 Tavily 效率优化（2025-11-24）
+
+- [x] 更新 `search_profiles`：收紧域名、补 issuer_alias、调整 time_range/max_age_days（商品/汇率/债券/资金流 1-2 天，指数 2 天，宏观 30 天）。
+- [x] TaskPlanner 去重：同一 indicator_key 仅生成一条任务；资金流向默认 backend=mcp，必要时手动触发 Tavily。
+- [x] 预过滤与兜底：对 snippet 做域名过滤 + 发布日期新鲜度；为 stats.gov.cn/pbc/tradingeconomics 等加 regex 提取，避免 LLM 无值。
+- [x] 资金流向交接：Stage1 后先用 `trade_cal` + `moneyflow_hsgt` 补 northbound/southbound；成功则从 missing_items 移除，失败才交 Tavily/MCP；ETF 资金流继续 MCP/人工。
+- [x] TuShare 再探：验证 `fx_daily`(USDCNY/USDCNH) 和国债收益率接口；若可用，从 Stage2 任务排除对应指标。
+- [x] 查询/校验调优：单位容忍（点/points）、方向判定（流入/流出/正负），issuer_alias 覆盖 CME/NYMEX/ICE/SAFE/CFETS/US Treasury/CCDC 等。
+- [x] 长链版默认：将 Stage2 抽取后端切换为 LangChain（保留 DeepSeek 回退），验证成功率与耗时。
+- [x] 失败重试策略：连续 2 次无值写入 gap_monitor 停止重试；缓存 (query+domains+time_range) 1h。
+- [x] 无任务短路：当过滤后任务数为 0，直接写空 websearch_results 并退出，避免无谓调用。  
+- [x] 回归测试：Stage1→Stage2（长链版）对比成功率/调用数/gap_monitor 缺口；记录前后指标命中与 Tavily 调用节省量。（结果：22 任务，成功 8，缺口 14；主要缺口商品/汇率/债券/资金流）
+- [x] 文档与清单：维护“TuShare 可取 vs Tavily 补充”白名单，避免重复调用；更新 README/AGENTS 说明优化流程。  
+- [x] Stage1 配套优化：  
+  - 开启可选的 TuShare 资金流补丁（trade_cal + moneyflow_hsgt 最近开市日）；  
+  - Stage1 结束时写出 missing_items 时区分“TuShare 已尝试为空”与“未尝试”标记，便于 Stage2 精准触发；  
+  - 对 fx_daily/国债收益率进行 Stage1 预探测，成功则直接写入数据，减少 Stage2 任务数。  
+- [x] 数据使用约束落地：  
+  - 在 Stage2/Stage3 阻断占位数据（0/N/A），无真实值即 gap_monitor/报错；  
+  - 手工补数时写入 source/date，并在报告中注明“手工补充/非官方，可能延迟”；  
+  - 行情/资金流/汇率/债券强制时效 ≤ T+1，宏观按月/季 30–90 天，过期标记“需更新”。  
+- [x] 域名/查询收紧实施：  
+  - 汇率：reuters/bloomberg/tradingeconomics/wise + “即期/离岸/spot/最新报价”；  
+  - 债券：tradingeconomics/federalreserve.gov/chinabond.com.cn + “yield/收益率 最新”；  
+  - 资金流：eastmoney/jrj/港交所公告页 + “净流入 近5日/120日”；  
+  - 商品：bloomberg/ishares/ft + “latest price/今日/最新价”；  
+  - 为上述指标设 max_age_days=1–2，宏观=30。  
+- [x] Regex 兜底开发：针对 stats.gov.cn、pbc.gov.cn、tradingeconomics 提取工业营收/MLF/政策利率/BDI 等关键数字。  
+- [x] 资金流向路径梳理：Tushare `moneyflow_hsgt` 成功时从 missing_items 删除 north/south；失败则 Stage2 任务，ETF 仅 MCP/人工（不自动 Tavily）。  
+- [x] 任务去重：basic/advanced 二选一；同一 indicator_key 仅一条任务，避免双倍 Tavily 调用。  
+- [x] 测试与评估：  
+  - 跑一次 Stage1→Stage2（长链版），记录 Tavily 调用数、命中数、gap_monitor 缺口。  
+  - 对比优化前后：成功率、缺口数、Tavily 总调用/无值调用占比。  
+  - 抽查时效：确认日频指标时间戳 ≤T+1；过期项是否被阻断或提示。  
+  - 抽查来源：报告中是否标注手工补数/非官方来源，且无占位值残留。  
+- [x] 替代数据源策略：在不可获取官方数据时，允许使用“可信替代源”并强制记录来源/发布日期/官方或否；过期或转述数据不做自动打分，需人工确认。  
+**链路测试过程中发现的问题：
+- [ ] 新增整改（见 TODO_20251124_rectify.md）：
+  - 环境校验：Stage2 启动前检查 TAVILY_API_KEY/DEEPSEEK_API_KEY，缺失即中止提示 `source .env`。
+  - 资金流后端：默认 backend 调整为 mcp/hybrid，TaskPlanner 不自动生成 tavily 资金流任务，需显式开关。
+  - 交易日回退全链路：moneyflow_hsgt、fx_daily、index_daily(000016) 全部使用最近开市日；fx_daily 前置 fx_basic 校验 ts_code。
+  - 搜索白名单：域名/issuer/issuer_alias 过滤落地，统计过滤数量写日志。
+  - Stage2 统计输出：记录 tavily 请求数/命中/过滤/regex 兜底命中，写 log 与 gap_monitor。
+  - missing_items 维护：补齐即剔除 metadata/top-level 缺口，防止 Stage3 误阻断。
+  - 回归验证：用最近开市日重跑全链路，预期 gap_monitor 无资金流/汇率/债券缺口，报告无 “N/A/待 WebSearch”。

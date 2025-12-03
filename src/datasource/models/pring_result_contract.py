@@ -101,6 +101,12 @@ class PringResultContract(BaseModel):
     allocation_suggestion: Optional[str] = None
     asset_recommendations: Dict[str, str] = Field(default_factory=dict)  # bond/stock/commodity
     asset_allocation_pct: Dict[str, str] = Field(default_factory=dict)
+    # 扩展字段（Stage3 V4.3）
+    pending_websearch: List[Any] = Field(default_factory=list)
+    data_completeness: Optional[float] = None
+    fallback_used: bool = False
+    leading_indicator: Optional[Dict[str, Any]] = None
+    weights_version: Optional[str] = None
 
     class Config:
         json_schema_extra = {
