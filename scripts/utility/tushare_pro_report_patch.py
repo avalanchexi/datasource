@@ -32,7 +32,6 @@ from typing import Dict, Iterable, Optional, Tuple, Callable
 
 import numpy as np
 import pandas as pd
-import akshare as ak
 from contextlib import contextmanager
 
 try:
@@ -260,30 +259,9 @@ def standardize_commodity_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def fetch_commodity_dataframe(symbol: str, fetch_type: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-    """Fetch commodity data from AKShare and trim to window."""
-    try:
-        if fetch_type == 'futures_foreign':
-            raw = fetch_with_no_proxy(ak.futures_foreign_hist, symbol=symbol)
-        elif fetch_type == 'us_etf':
-            raw = fetch_with_no_proxy(ak.stock_us_daily, symbol=symbol, adjust="")
-        else:
-            raise ValueError(f"未知的商品数据源类型: {fetch_type}")
-    except Exception as exc:  # pragma: no cover - 外部网络依赖
-        print(f"⚠️ AKShare获取{symbol}数据失败: {exc}")
-        return None
-
-    if raw is None or raw.empty:
-        return None
-
-    normalized = standardize_commodity_dataframe(raw)
-    if normalized.empty:
-        return None
-
-    start_dt = datetime.strptime(start_date, "%Y%m%d") - timedelta(days=260)
-    end_dt = datetime.strptime(end_date, "%Y%m%d")
-    filtered = normalized[(normalized['trade_date'] >= start_dt) & (normalized['trade_date'] <= end_dt)]
-
-    return filtered.reset_index(drop=True)
+    """AKShare 已移除，此函数暂返回 None 以避免依赖外部源。"""
+    print(f"[INFO] 跳过 {symbol}({fetch_type})，AKShare 已移除。")
+    return None
 
 
 def format_pct(value: Optional[float]) -> str:

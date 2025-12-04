@@ -124,22 +124,8 @@ async def test_individual_sources():
     """测试单个数据源"""
     logger.info("\n=== 测试单个数据源 ===")
     
-    from datasource.adapters.akshare_adapter import AKShareAdapter
     from datasource.adapters.tushare_adapter import TuShareAdapter
-    
-    # 测试 AKShare
-    logger.info("测试 AKShare 适配器...")
-    akshare = AKShareAdapter()
-    akshare_available = await akshare.is_available()
-    logger.info(f"AKShare 可用性: {akshare_available}")
-    
-    if akshare_available:
-        response = await akshare.get_stock_basic()
-        if response.error:
-            logger.error(f"AKShare 测试失败: {response.error}")
-        else:
-            logger.info(f"AKShare 测试成功，获取到 {len(response.data) if response.data is not None else 0} 条数据")
-    
+
     # 测试 TuShare
     logger.info("测试 TuShare 适配器...")
     tushare = TuShareAdapter()

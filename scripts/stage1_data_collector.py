@@ -51,11 +51,8 @@ class MarketDataCollector:
     - 任何业务逻辑计算
     """
 
-    def __init__(self, end_date: str, disable_akshare: bool = True):
+    def __init__(self, end_date: str):
         self.end_date = end_date
-        if not disable_akshare:
-            print("[INFO] AKShare通道已停用，disable_akshare=False 将被忽略")
-        self.disable_akshare = True
 
         # 计算开始日期(120天 + 200天缓冲用于MA200计算)
         end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -68,7 +65,7 @@ class MarketDataCollector:
         if hasattr(self.manager, 'fallback_sources'):
             self.manager.fallback_sources = [
                 source for source in self.manager.fallback_sources
-                if source not in {'akshare', 'international_finance'}
+                if source not in {'international_finance'}
             ]
 
         # A股指数配置
@@ -347,7 +344,6 @@ class MarketDataCollector:
             'data_completeness': self._calculate_completeness(
                 stock_indices, commodities, forex, bonds, fund_flow
             ),
-            'disable_akshare': self.disable_akshare,
             'missing_items': {k: v for k, v in self.missing_items.items()}
         }
 

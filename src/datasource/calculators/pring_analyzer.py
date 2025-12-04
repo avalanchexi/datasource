@@ -505,10 +505,6 @@ class PringAnalyzer:
 
         return None
 
-    async def _get_akshare_macro_data(self) -> Optional[Dict]:
-        """已禁用，保留占位避免误用。"""
-        raise RuntimeError("AKShare 宏观数据获取在 Stage3 已禁用")
-
     async def _get_tushare_macro_data(self) -> Optional[Dict]:
         """Stage3 阶段不再兜底 TuShare 采集；应由 Stage1/2 预先写入。"""
         raise RuntimeError("Stage3 不执行 TuShare 拉取，请在 Stage1/2 先补齐宏观数据。")

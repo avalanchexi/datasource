@@ -166,7 +166,7 @@ class TestFundFlowPipeline(unittest.TestCase):
 
         print("[OK] 手动更新工具正确更新了market_data")
 
-    def test_manual_updater_marks_akshare_zero_anomaly(self):
+    def test_manual_updater_marks_zero_anomaly(self):
         market_data = {
             "metadata": {"date": self.test_date},
             "stock_indices": [],

@@ -1,16 +1,14 @@
-Metadata-Version: 2.1
+Metadata-Version: 2.4
 Name: datasource-integration
 Version: 1.0.0
 Summary: 统一的金融数据源集成框架
 Home-page: https://github.com/yourusername/datasource-integration
 Author: DataSource Team
 Author-email: your-email@example.com
-License: UNKNOWN
 Project-URL: Bug Reports, https://github.com/yourusername/datasource-integration/issues
 Project-URL: Source, https://github.com/yourusername/datasource-integration
 Project-URL: Documentation, https://datasource-integration.readthedocs.io/
 Keywords: finance,stock,data,akshare,tushare,integration
-Platform: UNKNOWN
 Classifier: Development Status :: 4 - Beta
 Classifier: Intended Audience :: Developers
 Classifier: Intended Audience :: Financial and Insurance Industry
@@ -26,8 +24,37 @@ Classifier: Topic :: Office/Business :: Financial
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Requires-Python: >=3.7
 Description-Content-Type: text/markdown
+Requires-Dist: akshare>=1.12.0
+Requires-Dist: tushare>=1.2.0
+Requires-Dist: pandas>=1.5.0
+Requires-Dist: numpy>=1.23.0
+Requires-Dist: python-dotenv>=0.19.0
+Requires-Dist: loguru>=0.6.0
+Requires-Dist: pydantic>=1.10.0
+Requires-Dist: httpx>=0.27.0
+Requires-Dist: openai>=1.51.0
+Requires-Dist: tavily-python>=0.3.5
 Provides-Extra: dev
+Requires-Dist: pytest>=6.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21.0; extra == "dev"
+Requires-Dist: black>=22.0; extra == "dev"
+Requires-Dist: flake8>=4.0; extra == "dev"
+Requires-Dist: mypy>=0.950; extra == "dev"
 Provides-Extra: docs
+Requires-Dist: sphinx>=4.0; extra == "docs"
+Requires-Dist: sphinx-rtd-theme>=1.0; extra == "docs"
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: description
+Dynamic: description-content-type
+Dynamic: home-page
+Dynamic: keywords
+Dynamic: project-url
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
 
 # 数据源集成框架
 
@@ -84,7 +111,8 @@ pip install -e ".[dev]"  # 包含测试、格式化、类型检查工具
 3. 配置环境变量（可选）：
 ```bash
 cp .env.example .env
-# 编辑 .env 文件，填入你的 TuShare Token
+# 编辑 .env 文件，填入你的 TuShare Token、TAVILY_API_KEY 与 DEEPSEEK_API_KEY
+# 可运行 `python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
 ```
 
 ## 测试
@@ -95,6 +123,23 @@ python tests/test_datasource.py
 ```
 
 运行专项脚本前可按需执行 `python scripts/market_scanner_unified.py` 等工具验证流水线。
+
+快速测试脚本示例
+
+```bash
+# Pring 分析快速验证（tests/scripts）
+PYTHONPATH=.:src python tests/scripts/run_pring_analysis_test.py \
+  data/YYYYMMDD_market_data_complete.json \
+  data/YYYYMMDD_pring_result.json
+
+# 简版报告生成（测试版脚本）
+PYTHONPATH=.:src python tests/scripts/generate_simple_report_test.py \
+  data/YYYYMMDD_market_data_complete.json \
+  data/YYYYMMDD_pring_result.json \
+  reports/YYYYMMDD背景扫描120.md
+```
+
+
 
 ## 快速开始
 
@@ -157,6 +202,27 @@ python generate_report_simple.py
 
 # 统一市场扫描器 - 配置化的技术指标分析
 python scripts/market_scanner_unified.py
+
+# Stage2 一体化增强（Tavily + DeepSeek 骨架）
+python scripts/stage2_unified_enhancer.py --market-data data/market_data.json --phase all --execute-search \
+  --cache-backend sqlite --cache-path reports/tavily_cache.sqlite
+
+# 重跑指定缺口（示例）
+PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
+  --market-data data/market_data.json \
+  --resume-from-task-file reports/search_tasks_stage2.jsonl \
+  --tasks industrial,bdi \
+  --execute-search
+
+# 仅补资金流向（选择 Tavily 后端）
+PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
+  --market-data data/market_data.json \
+  --tasks northbound,southbound,etf \
+  --fund-flow-backend tavily \
+  --execute-search
+
+# 资金流向为零值时，请运行 MCP 专属脚本
+python scripts/utility/background_scan_120d_generator.py
 
 # 工具脚本 (移动到 scripts/utility/)
 python scripts/utility/get_real_economic_data.py     # 获取最新经济数据用于库存周期验证
@@ -474,5 +540,50 @@ datasource/
 - 支持 AKShare 和 TuShare 数据源
 - 实现统一的数据接口
 - 提供故障转移和缓存功能
+# 资金流向后端选择（默认 tavily，可选 mcp/hybrid）
+PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
+  --market-data data/market_data.json \
+  --execute-search \
+  --fund-flow-backend tavily
+# Datasource Stage2 快速运行（Tavily + DeepSeek）
 
+## 环境准备
+- Python 3.10+
+- 设置环境变量：`TAVILY_API_KEY`、`DEEPSEEK_API_KEY`
+- 推荐在命令前设置 `PYTHONPATH=./src`
 
+## 典型命令
+```bash
+PYTHONPATH=./src \
+TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
+python3 scripts/stage2_unified_enhancer.py \
+  --market-data data/20251203_market_data.json \
+  --output data/20251203_market_data_stage2_new.json \
+  --execute-search \
+  --fund-flow-backend tavily \
+  --log-output logs/stage2_unified_log_20251203_new.json \
+  --gap-monitor reports/gap_monitor_20251203_new.json \
+  --websearch-results reports/websearch_results_20251203_new.json \
+  --task-log logs/stage_task_log_new.jsonl
+```
+
+可选：开启队列化抽取以削峰限流
+```bash
+  --use-queue --queue-concurrency 3 --queue-retry-limit 1
+```
+
+## 关键默认值
+- fund_flow_backend: `tavily`
+- deepseek_model: `deepseek-reasoner`
+- deepseek_timeout: 12s；超时/网络错误自动重试 1 次
+- 实时类搜索参数：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
+- 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
+
+## 观测指标（summary/log）
+- score_filtered_drop, domain_filtered_drop, extract_calls, tavily_extract_calls
+- timeout_count, retry_count, queue_requeued, queue_dead_letters
+- cache_hit_rate, avg_elapsed_ms, success_by_category / total_by_category
+
+## 兼容说明
+- 无 MCP 跳过逻辑，资金流统一 Tavily，零值且无方向直接标人工。
+- LangChain 分支需安装 `langchain-core`，否则使用 deepseek 默认抽取。

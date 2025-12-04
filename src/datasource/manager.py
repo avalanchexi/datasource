@@ -5,7 +5,6 @@ from loguru import logger
 from dotenv import load_dotenv
 
 from .models.base import BaseDataSource, DataResponse, DataRequest
-from .adapters.akshare_adapter import AKShareAdapter, AKShareConfig
 from .adapters.tushare_adapter import TuShareAdapter, TuShareConfig
 from .adapters.international_finance_adapter import InternationalFinanceAdapter, InternationalFinanceConfig
 
@@ -32,7 +31,6 @@ def _get_env_int(var_name: str, default: int) -> int:
 
 class DataSourceType(Enum):
     """数据源类型枚举"""
-    AKSHARE = "akshare"
     TUSHARE = "tushare"
     INTERNATIONAL_FINANCE = "international_finance"
 
@@ -76,23 +74,7 @@ class DataSourceManager:
                 
             source_name = source_type.value
             
-            if source_type == DataSourceType.AKSHARE:
-                if isinstance(config, dict):
-                    config_dict = dict(config)
-                elif config is not None and hasattr(config, "dict"):
-                    config_dict = config.dict()
-                else:
-                    config_dict = {}
-
-                source_config = AKShareConfig(**config_dict)
-                if "cache_enabled" not in config_dict:
-                    source_config.cache_enabled = _get_env_bool("CACHE_ENABLED", source_config.cache_enabled)
-                if "cache_ttl" not in config_dict:
-                    source_config.cache_ttl = _get_env_int("CACHE_TTL", source_config.cache_ttl)
-                source_config.rate_limit = _get_env_int("AKSHARE_RATE_LIMIT", source_config.rate_limit)
-                self.data_sources[source_name] = AKShareAdapter(source_config)
-
-            elif source_type == DataSourceType.TUSHARE:
+            if source_type == DataSourceType.TUSHARE:
                 if isinstance(config, dict):
                     config_dict = dict(config)
                 elif config is not None and hasattr(config, "dict"):
@@ -502,19 +484,7 @@ class DataSourceManager:
         Returns:
             DataResponse: 资金流向数据响应
         """
-        # 优先使用AKShare
-        if "akshare" in self.data_sources:
-            try:
-                source = self.data_sources["akshare"]
-                response = await source.get_hsgt_flow(symbol, **kwargs)
-                if response.data is not None:
-                    logger.info(f"Successfully fetched {symbol} flow data from AKShare: {len(response.data)} records")
-                    return response
-                logger.warning(f"AKShare获取{symbol}失败: {response.error}")
-            except Exception as e:
-                logger.error(f"AKShare异常: {e}")
-
-        # 如果AKShare失败，返回错误响应（需要MCP WebSearch补充）
+        # 暂无直接数据源，返回缺口提示（需 MCP/WebSearch 补齐）
         from datetime import datetime
         return DataResponse(
             data=None,
@@ -554,19 +524,7 @@ class DataSourceManager:
             except Exception as e:
                 logger.error(f"TuShare margin异常: {e}")
 
-        # 优先使用AKShare
-        if "akshare" in self.data_sources:
-            try:
-                source = self.data_sources["akshare"]
-                response = await source.get_margin_summary(start_date, end_date, exchange, **kwargs)
-                if response.data is not None:
-                    logger.info(f"Successfully fetched margin data from AKShare: {len(response.data)} records")
-                    return response
-                logger.warning(f"AKShare获取融资融券失败: {response.error}")
-            except Exception as e:
-                logger.error(f"AKShare异常: {e}")
-
-        # 如果AKShare失败，返回错误响应（需要MCP WebSearch补充）
+        # 若 TuShare 无数据，返回缺口提示（需 MCP/WebSearch 补充）
         from datetime import datetime
         return DataResponse(
             data=None,
@@ -676,15 +634,9 @@ def get_manager(config_file: Optional[str] = None) -> DataSourceManager:
     if _manager_instance is None:
         _manager_instance = DataSourceManager(config_file)
         
-        # 根据环境变量灵活开关数据源（默认禁用AKShare）
-        disable_akshare = _get_env_bool("DISABLE_AKSHARE", True)
+        # 根据环境变量灵活开关数据源
         disable_tushare = _get_env_bool("DISABLE_TUSHARE", False)
         disable_international = _get_env_bool("DISABLE_INTERNATIONAL_FINANCE", False)
-
-        if disable_akshare:
-            logger.info("AKShare data source disabled (default)")
-        else:
-            _manager_instance.add_data_source(DataSourceType.AKSHARE)
 
         if not disable_tushare:
             _manager_instance.add_data_source(DataSourceType.TUSHARE)
@@ -700,10 +652,7 @@ def get_manager(config_file: Optional[str] = None) -> DataSourceManager:
             logger.warning("International finance data source disabled via DISABLE_INTERNATIONAL_FINANCE")
 
         # 设置主数据源和备用顺序（按优先级）
-        preferred_order: List[str] = []
-        if not disable_akshare:
-            preferred_order.append("akshare")
-        preferred_order.extend(["tushare", "international_finance"])
+        preferred_order: List[str] = ["tushare", "international_finance"]
         available_sources = [name for name in preferred_order if name in _manager_instance.data_sources]
 
         if available_sources:

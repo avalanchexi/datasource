@@ -35,16 +35,12 @@ except ImportError:
 class BackgroundScan120DGeneratorFixed:
     """120日背景扫描报告生成器 - 修复版本"""
 
-    def __init__(self, end_date: str = "2025-09-16", disable_akshare: bool = True):
+    def __init__(self, end_date: str = "2025-09-16"):
         self.manager = get_manager()
         self.technical_calc = TechnicalIndicatorCalculator()
         self.pring_analyzer = PringAnalyzer(self.manager)
 
-        # AKShare通道已下线，始终禁用
-        if not disable_akshare:
-            print("[INFO] AKShare通道已停用，disable_akshare=False 将被忽略")
-        self.disable_akshare = True
-        print("[INFO] AKShare数据源已禁用，将使用TuShare+MCP组合策略")
+        print("[INFO] AKShare数据源已下线，使用 TuShare + MCP/Tavily 策略")
         self.manager.set_primary_source('tushare')
 
         # 数据窗口：根据传入的end_date计算120天前的start_date
@@ -629,64 +625,13 @@ class BackgroundScan120DGeneratorFixed:
             if northbound_data:
                 fund_flow_data['northbound'] = northbound_data
                 print(f"    [OK] 北向资金(WebSearch): 5日{northbound_data['recent_5d']}亿, 120日{northbound_data['total_120d']}亿")
-            elif not self.disable_akshare:
-                # 降级到AKShare (仅在未禁用时)
-                print("    WebSearch失败,降级到AKShare...")
-                north_response = await self.manager.get_hsgt_flow('北向资金')
-                if not north_response.error and north_response.data is not None:
-                    df = north_response.data
-                    # 筛选120日数据
-                    if 'date' in df.columns or '日期' in df.columns:
-                        date_col = 'date' if 'date' in df.columns else '日期'
-                        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-                        df = df.dropna(subset=[date_col])
-                        df = df[df[date_col] >= self.start_date]
-                        df = df[df[date_col] <= self.end_date]
-
-                    if len(df) > 0:
-                        # 计算累计流入和近5日流入
-                        flow_col = None
-                        for col in df.columns:
-                            if '净买额' in str(col) or '净流入' in str(col):
-                                flow_col = col
-                                break
-
-                        if flow_col:
-                            df_sorted = df.sort_values(date_col)
-                            total_flow = df_sorted[flow_col].sum() / 100_000_000  # 转换为亿元
-                            recent_5d_flow = df_sorted[flow_col].tail(5).sum() / 100_000_000
-
-                            # 检测异常零值
-                            if total_flow == 0.0 and recent_5d_flow == 0.0:
-                                print("    [WARNING] 检测到异常零值,使用WebSearch验证...")
-                                websearch_data = await self._get_fund_flow_websearch('北向资金')
-                                if websearch_data:
-                                    fund_flow_data['northbound'] = websearch_data
-                                    print(f"    [OK] 北向资金(WebSearch补充): {websearch_data['recent_5d']}亿")
-                                else:
-                                    fund_flow_data['northbound'] = {
-                                        'recent_5d': round(recent_5d_flow, 2),
-                                        'total_120d': round(total_flow, 2),
-                                        'trend': '流入' if recent_5d_flow > 0 else '流出',
-                                        'source': f"{north_response.source}(异常零值)",
-                                        'note': '数据异常,请人工核查'
-                                    }
-                            else:
-                                fund_flow_data['northbound'] = {
-                                    'recent_5d': round(recent_5d_flow, 2),
-                                    'total_120d': round(total_flow, 2),
-                                    'trend': '流入' if recent_5d_flow > 0 else '流出',
-                                    'source': f"{north_response.source}(备用)"
-                                }
-                            print(f"    [OK] 北向资金(AKShare): 5日{recent_5d_flow:.2f}亿, 120日{total_flow:.2f}亿")
             else:
-                # AKShare已禁用且WebSearch失败
-                print("    [WARNING] AKShare已禁用且WebSearch失败，北向资金数据缺失")
+                print("    [WARNING] WebSearch失败，北向资金数据缺失")
                 fund_flow_data['northbound'] = {
                     'recent_5d': 'N/A',
                     'total_120d': 'N/A',
                     'trend': 'N/A',
-                    'source': 'AKShare已禁用',
+                    'source': 'WebSearch失败',
                     'note': 'WebSearch失败，需人工补充'
                 }
 
@@ -697,74 +642,23 @@ class BackgroundScan120DGeneratorFixed:
             if southbound_data:
                 fund_flow_data['southbound'] = southbound_data
                 print(f"    [OK] 南向资金(WebSearch): 5日{southbound_data['recent_5d']}亿, 120日{southbound_data['total_120d']}亿")
-            elif not self.disable_akshare:
-                # 降级到AKShare (仅在未禁用时)
-                print("    WebSearch失败,降级到AKShare...")
-                south_response = await self.manager.get_hsgt_flow('南向资金')
-                if not south_response.error and south_response.data is not None:
-                    df = south_response.data
-                    if 'date' in df.columns or '日期' in df.columns:
-                        date_col = 'date' if 'date' in df.columns else '日期'
-                        df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
-                        df = df.dropna(subset=[date_col])
-                        df = df[df[date_col] >= self.start_date]
-                        df = df[df[date_col] <= self.end_date]
-
-                    if len(df) > 0:
-                        flow_col = None
-                        for col in df.columns:
-                            if '净买额' in str(col) or '净流入' in str(col):
-                                flow_col = col
-                                break
-
-                        if flow_col:
-                            df_sorted = df.sort_values(date_col)
-                            total_flow = df_sorted[flow_col].sum() / 100_000_000
-                            recent_5d_flow = df_sorted[flow_col].tail(5).sum() / 100_000_000
-
-                            # 检测异常零值
-                            if total_flow == 0.0 and recent_5d_flow == 0.0:
-                                print("    [WARNING] 检测到异常零值,使用WebSearch验证...")
-                                websearch_data = await self._get_fund_flow_websearch('南向资金')
-                                if websearch_data:
-                                    fund_flow_data['southbound'] = websearch_data
-                                    print(f"    [OK] 南向资金(WebSearch补充): {websearch_data['recent_5d']}亿")
-                                else:
-                                    fund_flow_data['southbound'] = {
-                                        'recent_5d': round(recent_5d_flow, 2),
-                                        'total_120d': round(total_flow, 2),
-                                        'trend': '流入' if recent_5d_flow > 0 else '流出',
-                                        'source': f"{south_response.source}(异常零值)",
-                                        'note': '数据异常,请人工核查'
-                                    }
-                            else:
-                                fund_flow_data['southbound'] = {
-                                    'recent_5d': round(recent_5d_flow, 2),
-                                    'total_120d': round(total_flow, 2),
-                                    'trend': '流入' if recent_5d_flow > 0 else '流出',
-                                    'source': f"{south_response.source}(备用)"
-                                }
-                            print(f"    [OK] 南向资金(AKShare): 5日{recent_5d_flow:.2f}亿, 120日{total_flow:.2f}亿")
             else:
-                # AKShare已禁用且WebSearch失败
-                print("    [WARNING] AKShare已禁用且WebSearch失败，南向资金数据缺失")
+                print("    [WARNING] WebSearch失败，南向资金数据缺失")
                 fund_flow_data['southbound'] = {
                     'recent_5d': 'N/A',
                     'total_120d': 'N/A',
                     'trend': 'N/A',
-                    'source': 'AKShare已禁用',
+                    'source': 'WebSearch失败',
                     'note': 'WebSearch失败，需人工补充'
                 }
 
             # 3. 融资融券
             print("  获取融资融券数据...")
-            if not self.disable_akshare:
-                # 使用AKShare获取融资融券数据
-                margin_response = await self.manager.get_margin_summary(
-                    self.start_date, self.end_date, 'both'
-                )
-            else:
-                print("    AKShare已禁用，尝试使用WebSearch获取融资融券数据...")
+            margin_response = await self.manager.get_margin_summary(
+                self.start_date, self.end_date, 'both'
+            )
+            if margin_response.error or margin_response.data is None:
+                print("    [WARNING] 融资融券 TuShare 数据缺失，尝试 WebSearch...")
                 margin_websearch = await self._get_fund_flow_websearch('融资融券')
                 if margin_websearch:
                     fund_flow_data['margin'] = margin_websearch
@@ -774,10 +668,10 @@ class BackgroundScan120DGeneratorFixed:
                         'recent_5d': 'N/A',
                         'total_120d': 'N/A',
                         'trend': 'N/A',
-                        'source': 'AKShare已禁用',
-                        'note': 'WebSearch失败，需人工补充'
+                        'source': 'WebSearch失败',
+                        'note': 'TuShare不可用且WebSearch失败，需人工补充'
                     }
-                margin_response = None  # 设置为None跳过后续处理
+                margin_response = None  # 跳过后续基于 dataframe 的计算
 
             if margin_response and not margin_response.error and margin_response.data is not None:
                 df = margin_response.data

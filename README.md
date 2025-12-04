@@ -215,19 +215,10 @@ from datasource import DataSourceManager, DataSourceType
 # 创建自定义管理器
 manager = DataSourceManager()
 
-# 添加数据源with自定义配置
-akshare_config = {
-    "rate_limit": 5,      # 每秒最多5次请求
-    "cache_ttl": 600,     # 缓存10分钟
-    "timeout": 60         # 超时60秒
-}
-
-manager.add_data_source(DataSourceType.AKSHARE, akshare_config)
 manager.add_data_source(DataSourceType.TUSHARE)
 
 # 设置主数据源和备用数据源
 manager.set_primary_source("tushare")
-manager.add_fallback_source("akshare")
 ```
 
 ## API 接口
@@ -271,7 +262,6 @@ manager.add_fallback_source("akshare")
 TUSHARE_TOKEN=your_tushare_token_here
 
 # 速率限制设置
-AKSHARE_RATE_LIMIT=10      # AKShare 每秒请求数
 TUSHARE_RATE_LIMIT=5       # TuShare 每秒请求数
 
 # 缓存设置

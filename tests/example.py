@@ -129,24 +129,16 @@ async def example_custom_configuration():
     custom_manager = DataSourceManager()
     
     # 添加数据源with自定义配置
-    akshare_config = {
-        "rate_limit": 5,  # 降低请求频率
-        "cache_ttl": 600,  # 增加缓存时间
-        "timeout": 60
-    }
-    
     tushare_config = {
         "rate_limit": 3,
         "cache_ttl": 300,
         "timeout": 30
     }
     
-    custom_manager.add_data_source(DataSourceType.AKSHARE, akshare_config)
     custom_manager.add_data_source(DataSourceType.TUSHARE, tushare_config)
     
     # 设置 TuShare 为主数据源
     custom_manager.set_primary_source("tushare")
-    custom_manager.add_fallback_source("akshare")
     
     print("自定义管理器配置完成")
     print(f"状态: {custom_manager.get_status()}")

@@ -61,7 +61,7 @@ setup(
     },
     include_package_data=True,
     zip_safe=False,
-    keywords="finance, stock, data, akshare, tushare, integration",
+    keywords="finance, stock, data, tushare, integration",
     project_urls={
         "Bug Reports": "https://github.com/yourusername/datasource-integration/issues",
         "Source": "https://github.com/yourusername/datasource-integration",

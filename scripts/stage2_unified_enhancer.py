@@ -30,6 +30,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+try:  # pragma: no cover - 可选依赖
+    import httpx
+except Exception:  # noqa: W0703
+    httpx = None
 
 try:
     from dotenv import load_dotenv  # type: ignore
@@ -181,6 +185,77 @@ def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
             if not issuer:
                 warnings.append(f"{key}: 未设置 issuer（发布机构），建议补充筛选提示")
     return warnings
+
+
+def _is_placeholder_number(val: Any) -> bool:
+    """判断数值是否为空/占位/零。"""
+    if val is None or val == "" or val == "N/A":
+        return True
+    try:
+        num = float(val)
+    except Exception:
+        return True
+    return abs(num) < 1e-9
+
+
+def _has_non_placeholder_value(market_payload: Dict[str, Any], indicator_key: str) -> (bool, Optional[float]):
+    """
+    检查 market_payload 中某指标是否已有有效值（非占位、非估算）。
+    返回 (has_value, value)；value 仅用于记录，可能为 float。
+    """
+    # fund_flow
+    fund_flow = market_payload.get("fund_flow", {})
+    if indicator_key in fund_flow:
+        entry = fund_flow[indicator_key] or {}
+        if entry.get("is_estimated") is True:
+            return False, None
+        r5 = entry.get("recent_5d")
+        t120 = entry.get("total_120d")
+        if not _is_placeholder_number(r5) and not _is_placeholder_number(t120):
+            return True, float(r5)
+    # commodities
+    for item in market_payload.get("commodities", []):
+        if item.get("symbol") == indicator_key:
+            if item.get("is_estimated") is True:
+                return False, None
+            price = item.get("current_price")
+            if not _is_placeholder_number(price):
+                return True, float(price)
+    # forex
+    for item in market_payload.get("forex", []):
+        if item.get("pair") == indicator_key or item.get("symbol") == indicator_key:
+            if item.get("is_estimated") is True:
+                return False, None
+            rate = item.get("current_rate")
+            if not _is_placeholder_number(rate):
+                return True, float(rate)
+    # bonds
+    for item in market_payload.get("bonds", []):
+        if item.get("symbol") == indicator_key:
+            if item.get("is_estimated") is True:
+                return False, None
+            yld = item.get("current_yield")
+            if not _is_placeholder_number(yld):
+                return True, float(yld)
+    # macro_indicators
+    macro = market_payload.get("macro_indicators", {})
+    if indicator_key in macro:
+        entry = macro[indicator_key] or {}
+        if entry.get("is_estimated") is True:
+            return False, None
+        val = entry.get("current_value")
+        if not _is_placeholder_number(val):
+            return True, float(val)
+    # monetary_policy
+    monetary = market_payload.get("monetary_policy", {})
+    if indicator_key in monetary:
+        entry = monetary[indicator_key] or {}
+        if entry.get("is_estimated") is True:
+            return False, None
+        val = entry.get("current_value")
+        if not _is_placeholder_number(val):
+            return True, float(val)
+    return False, None
 
 def _dump_json(payload: Dict[str, Any], path: Path, backup: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +466,9 @@ async def _execute_tasks(
     queue_concurrency: int = 3,
     queue_maxsize: int = 100,
     queue_retry_limit: int = 1,
+    disable_extract: bool = False,
+    extract_topk: int = 3,
+    llm_hard_timeout: Optional[float] = None,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
     completed: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
@@ -410,6 +488,11 @@ async def _execute_tasks(
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
+
+    async def _run_with_timeout(coro):
+        if llm_hard_timeout and llm_hard_timeout > 0:
+            return await asyncio.wait_for(coro, timeout=llm_hard_timeout)
+        return await coro
 
     async def _do_extract(snips: List[Dict[str, Any]], task: Dict[str, Any]) -> Dict[str, Any]:
         """执行抽取，记录 DeepSeek 延迟与错误；regex 模式直接返回占位。"""
@@ -431,21 +514,25 @@ async def _execute_tasks(
             attempts += 1
             try:
                 if task["indicator_key"] in serial_keys:
-                    result = await extractor.extract(
-                        snips,
-                        task["indicator_key"],
-                        unit_hint=task.get("unit"),
-                        issuer_hint=task.get("issuer"),
-                        request_timeout=deepseek_timeout,
-                    )
-                else:
-                    async with ds_semaphore:
-                        result = await extractor.extract(
+                    result = await _run_with_timeout(
+                        extractor.extract(
                             snips,
                             task["indicator_key"],
                             unit_hint=task.get("unit"),
                             issuer_hint=task.get("issuer"),
                             request_timeout=deepseek_timeout,
+                        )
+                    )
+                else:
+                    async with ds_semaphore:
+                        result = await _run_with_timeout(
+                            extractor.extract(
+                                snips,
+                                task["indicator_key"],
+                                unit_hint=task.get("unit"),
+                                issuer_hint=task.get("issuer"),
+                                request_timeout=deepseek_timeout,
+                            )
                         )
                 result = result or {}
                 result["llm_latency_ms"] = int((time.perf_counter() - start_llm) * 1000)
@@ -582,8 +669,67 @@ async def _execute_tasks(
         backend = task.get("fund_flow_backend") or fund_flow_backend
         backend_forex = task.get("forex_backend") or forex_backend
         try:
+            # 若已存在非占位有效值，直接跳过搜索
+            has_value, existing_val = _has_non_placeholder_value(market_payload, task["indicator_key"])
+            if has_value:
+                now_ts = int(datetime.now().timestamp())
+                task_record = {
+                    "task_id": task["task_id"],
+                    "indicator_key": task["indicator_key"],
+                    "stage_phase": task["stage_phase"],
+                    "search_backend": task["search_backend"],
+                    "fund_flow_backend": backend if is_fund_flow else None,
+                    "extraction_backend": extraction_backend,
+                    "manual_required": False,
+                    "note": "skip_existing_value",
+                    "attempt_index": 0,
+                    "elapsed_ms": 0,
+                    "created_at": task.get("created_at", now_ts),
+                    "finished_at": now_ts,
+                    "confidence": 1.0,
+                    "source_url": None,
+                    "llm_latency_ms": 0,
+                    "llm_error": None,
+                    "deepseek_error": None,
+                }
+                _append_task_log(task_log_path, task_record)
+                completed.append(task_record)
+                websearch_results.append(
+                    {
+                        "task": task,
+                        "extraction": {
+                            "value": existing_val,
+                            "unit": task.get("unit"),
+                            "note": "existing_value",
+                            "confidence": 1.0,
+                            "source_url": None,
+                        },
+                        "extraction_backend": extraction_backend,
+                        "raw_results": [],
+                    }
+                )
+                continue
             for attempt in count(start=1):
                 started = time.perf_counter()
+                # fund_flow_backend=mcp: 跳过实时搜索，直接标记待人工/MCP
+                if is_fund_flow and backend == "mcp":
+                    task_record = {
+                        "task_id": task["task_id"],
+                        "indicator_key": task["indicator_key"],
+                        "stage_phase": task["stage_phase"],
+                        "search_backend": task["search_backend"],
+                        "fund_flow_backend": backend,
+                        "extraction_backend": extraction_backend,
+                        "manual_required": True,
+                        "note": "fund_flow_backend=mcp skip search",
+                        "attempt_index": attempt,
+                        "elapsed_ms": None,
+                        "created_at": task.get("created_at", int(datetime.now().timestamp())),
+                        "finished_at": int(datetime.now().timestamp()),
+                    }
+                    failures.append(task_record)
+                    _append_task_log(task_log_path, task_record)
+                    break
                 try:
                     result = await client.search(
                         query=task.get("query") or task["indicator_key"],
@@ -601,8 +747,11 @@ async def _execute_tasks(
                     snippets = result.get("results") or []
                     # Tavily extract (two-step) for noisy tasks
                     try:
-                        if is_fund_flow or is_forex or task["indicator_key"] in {"GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"}:
-                            top_for_extract = snippets[:3]
+                        if (
+                            not disable_extract
+                            and (is_fund_flow or is_forex or task["indicator_key"] in {"GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"})
+                        ):
+                            top_for_extract = snippets[: max(1, extract_topk)]
                             if top_for_extract:
                                 stats["tavily_extract_calls"] += 1
                                 extract_resp = await client.extract(
@@ -744,8 +893,6 @@ async def _execute_tasks(
         for c in consumers:
             c.cancel()
         await asyncio.gather(*consumers, return_exceptions=True)
-    if manual_required_keys:
-        _append_gap_monitor(Path(args.gap_monitor), [], sorted(set(manual_required_keys)))
     return completed, failures, websearch_results
 
 
@@ -901,7 +1048,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="增强后输出路径；默认覆盖输入")
     parser.add_argument("--phase", choices=["essential", "assets", "all"], default="all")
     parser.add_argument("--search-backend", choices=["tavily"], default="tavily")
-    parser.add_argument("--fund-flow-backend", choices=["tavily", "hybrid"], default="tavily")
+    parser.add_argument("--fund-flow-backend", choices=["tavily", "hybrid", "mcp"], default="tavily")
     parser.add_argument("--task-file", default="reports/search_tasks_stage2.jsonl", help="输出任务文件路径")
     parser.add_argument("--task-log", default="logs/stage_task_log.jsonl")
     parser.add_argument("--websearch-results", default="reports/websearch_results_auto.json", help="搜索抽取结果保存路径")
@@ -949,6 +1096,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--queue-concurrency", type=int, default=3, help="Queue 消费者并发数")
     parser.add_argument("--queue-maxsize", type=int, default=100, help="Queue 最大容量")
     parser.add_argument("--queue-retry-limit", type=int, default=2, help="Queue 抽取重试次数（超时/网络错误）")
+    parser.add_argument(
+        "--disable-extract", action="store_true", help="跳过 Tavily extract 二阶段，直接使用 search 结果"
+    )
+    parser.add_argument(
+        "--extract-topk", type=int, default=3, help="Tavily extract 使用的搜索结果条数（默认3）"
+    )
+    parser.add_argument(
+        "--llm-hard-timeout", type=float, default=15.0, help="对单次 LLM 抽取的 asyncio 硬超时（秒），0 表示不设硬超时"
+    )
+    parser.add_argument(
+        "--fast-mode",
+        action="store_true",
+        help="极速模式：regex 抽取、并发放大、短超时、队列不重试，资金流改 mcp，禁用 extract 以加速",
+    )
     return parser.parse_args()
 
 
@@ -978,6 +1139,24 @@ def _ensure_keys(require_tavily: bool = True, require_deepseek: bool = True) -> 
     return missing
 
 
+def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
+    """快速探测代理可用性；不可用则返回 None 并给出提示。"""
+    if not proxies:
+        return None
+    if httpx is None:
+        logger.warning("[Stage2] httpx 未安装，无法验证代理可用性，继续按配置使用。")
+        return proxies
+    test_url = "https://api.tavily.com"
+    try:
+        resp = httpx.get(test_url, timeout=3, proxies=proxies)
+        if resp.status_code < 500:
+            logger.info(f"[Stage2] 代理可用，继续使用: {proxies}")
+            return proxies
+    except Exception as exc:
+        logger.warning(f"[Stage2] 代理不可用，已自动禁用：{exc}")
+    return None
+
+
 def _parse_task_filter(arg: Optional[str]) -> (List[str], List[str]):
     if not arg:
         return [], []
@@ -1001,12 +1180,28 @@ async def main() -> int:
     log_output = Path(args.log_output)
     gap_monitor_path = Path(args.gap_monitor)
 
+    # Fast mode: 优先速度，牺牲部分准确度
+    if args.fast_mode:
+        logger.info("[Stage2] Fast mode enabled: regex extraction, higher queue concurrency, shorter timeouts.")
+        args.extraction_backend = "regex"
+        args.queue_concurrency = max(args.queue_concurrency, 6)
+        args.queue_retry_limit = 0
+        args.deepseek_max_concurrency = 0
+        args.deepseek_timeout = 8.0 if args.deepseek_timeout is None else min(args.deepseek_timeout, 8.0)
+        args.llm_hard_timeout = 8.0 if args.llm_hard_timeout is None or args.llm_hard_timeout == 0 else min(
+            args.llm_hard_timeout, 8.0
+        )
+        if args.fund_flow_backend == "tavily":
+            logger.info("[Stage2] Fast mode: fund_flow_backend forced to mcp to skip realtime fund-flow search.")
+            args.fund_flow_backend = "mcp"
+        args.disable_extract = True
+
     market_payload = _load_json(market_path)
     _merge_missing_items(market_payload)
 
     # 先校验密钥并加载 .env，避免在初始化 TavilyClient 时 api_key 为空
     require_tavily = True  # 当前 search_backend 固定 tavily
-    require_deepseek = True  # extractor 默认 deepseek/langchain
+    require_deepseek = args.extraction_backend not in {"regex"}  # regex 模式无需 DeepSeek key
     missing_keys = _ensure_keys(require_tavily=require_tavily, require_deepseek=require_deepseek)
     if missing_keys and args.execute_search:
         print(f"[ERROR] 缺少密钥: {', '.join(missing_keys)}。请先执行 `source .env` 或设置环境变量后重试。")
@@ -1052,6 +1247,7 @@ async def main() -> int:
         proxies["http://"] = args.http_proxy
     if args.https_proxy:
         proxies["https://"] = args.https_proxy
+    proxies = _validate_proxies(proxies)
     tavily = AsyncTavilyClient(
         api_key=os.getenv("TAVILY_API_KEY"),
         cache=cache,
@@ -1105,10 +1301,23 @@ async def main() -> int:
                 extraction_backend=args.extraction_backend,
                 deepseek_max_concurrency=args.deepseek_max_concurrency,
                 stats=exec_stats,
+                use_queue=args.use_queue,
+                queue_concurrency=args.queue_concurrency,
+                queue_maxsize=args.queue_maxsize,
+                queue_retry_limit=args.queue_retry_limit,
+                disable_extract=args.disable_extract,
+                extract_topk=args.extract_topk,
+                llm_hard_timeout=args.llm_hard_timeout,
             )
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
     if websearch_results:
+        # 按 indicator_key 去重，保留最新记录
+        dedup: Dict[str, Dict[str, Any]] = {}
+        for item in websearch_results:
+            key = item.get("task", {}).get("indicator_key")
+            dedup[key] = item
+        websearch_results = list(dedup.values())
         _dump_json({"results": websearch_results}, websearch_results_path)
         split_dir = websearch_results_path.parent / "websearch_results"
         split_dir.mkdir(parents=True, exist_ok=True)

@@ -32,13 +32,11 @@ class SimpleLogger:
 
 
 # 替换 loguru
-import datasource.adapters.akshare_adapter as akshare_module
 import datasource.adapters.tushare_adapter as tushare_module
 import datasource.manager as manager_module
 
 # 用简化的日志器替换
 logger = SimpleLogger()
-akshare_module.logger = logger
 tushare_module.logger = logger
 manager_module.logger = logger
 
@@ -47,23 +45,6 @@ async def simple_test():
     """简单测试"""
     try:
         print("开始数据源测试...")
-        
-        # 测试 AKShare
-        print("\n=== 测试 AKShare ===")
-        from datasource.adapters.akshare_adapter import AKShareAdapter
-        
-        akshare = AKShareAdapter()
-        available = await akshare.is_available()
-        print(f"AKShare 可用性: {available}")
-        
-        if available:
-            # 测试获取股票基本信息
-            response = await akshare.get_stock_basic()
-            if response.error:
-                print(f"获取股票基本信息失败: {response.error}")
-            else:
-                print(f"成功获取股票基本信息，数据行数: {len(response.data) if response.data is not None else 0}")
-        
         # 测试 TuShare
         print("\n=== 测试 TuShare ===")
         from datasource.adapters.tushare_adapter import TuShareAdapter

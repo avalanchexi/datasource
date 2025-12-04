@@ -24,7 +24,6 @@ import pandas as pd
 import numpy as np
 import json
 from typing import Dict, List, Any, Optional
-import akshare as ak
 
 # 添加项目根目录到Python路径
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -479,36 +478,9 @@ class BackgroundScanner120D:
             return []
 
     async def _fetch_commodity_dataframe(self, symbol: str, fetch_type: str) -> Optional[pd.DataFrame]:
-        """通过AKShare获取外盘期货/ETF数据并裁剪时间范围"""
-        loop = asyncio.get_event_loop()
-
-        async def _call_api():
-            try:
-                if fetch_type == 'futures_foreign':
-                    return await loop.run_in_executor(None, lambda: fetch_with_no_proxy(ak.futures_foreign_hist, symbol=symbol))
-                if fetch_type == 'us_etf':
-                    return await loop.run_in_executor(None, lambda: fetch_with_no_proxy(ak.stock_us_daily, symbol=symbol, adjust=""))
-                raise ValueError(f"未知商品数据源类型: {fetch_type}")
-            except Exception as exc:
-                return exc
-
-        result = await _call_api()
-
-        if isinstance(result, Exception):
-            print(f"获取商品数据失败 {symbol}: {result}")
-            return None
-
-        if result is None or getattr(result, 'empty', True):
-            return None
-
-        df = self._standardize_commodity_dataframe(result)
-        if df.empty:
-            return None
-
-        buffer_start = self.start_date - timedelta(days=260)
-        filtered = df[(df['trade_date'] >= buffer_start) & (df['trade_date'] <= self.end_date)]
-
-        return filtered.reset_index(drop=True)
+        """已移除 AKShare 依赖，此处直接返回 None，待后续接入 WebSearch/TuShare 替代。"""
+        print(f"[INFO] AKShare 已移除，commodity {symbol}({fetch_type}) 暂无数据源，返回空。")
+        return None
 
     def _standardize_commodity_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """统一商品数据列名为 trade_date/close 等标准格式"""
