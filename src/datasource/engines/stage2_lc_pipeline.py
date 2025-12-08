@@ -30,6 +30,7 @@ async def run_tasks_lc(
     forex_backend: str,
     lc_max_concurrency: int,
     deepseek_timeout: Optional[float],
+    llm_hard_timeout: Optional[float],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Execute tasks using LangChain Runnable pipeline.
@@ -41,6 +42,8 @@ async def run_tasks_lc(
         _validate_general_extraction,
         _update_missing_items,
         _apply_extraction,
+        _filter_by_domain,
+        _prefer_fresh_snippets,
     )
 
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
@@ -81,20 +84,25 @@ async def run_tasks_lc(
                         include_raw_content=task["indicator_key"] in {"northbound", "southbound", "etf", "margin"},
                         cache_ttl=cache_ttl,
                     )
-                    extra = extract_resp.get("results") or []
-                    for ex in extra:
-                        content = ex.get("content") or ex.get("raw_content")
-                        if content:
-                            snippets.append(
-                                {
-                                    "content": content,
-                                    "snippet": ex.get("snippet") or "",
-                                    "url": ex.get("url") or ex.get("source_url"),
-                                    "score": ex.get("score"),
-                                }
-                            )
+                    if extract_resp.get("status") == 422:
+                        logger.debug("Tavily extract 422 in LC, fallback to search-only")
+                    else:
+                        extra = extract_resp.get("results") or []
+                        for ex in extra:
+                            content = ex.get("content") or ex.get("raw_content")
+                            if content:
+                                snippets.append(
+                                    {
+                                        "content": content,
+                                        "snippet": ex.get("snippet") or "",
+                                        "url": ex.get("url") or ex.get("source_url"),
+                                        "score": ex.get("score"),
+                                    }
+                                )
             except Exception as exc:
                 logger.debug(f"Tavily extract skipped/failed in LC: {exc}")
+        snippets = _filter_by_domain(snippets, task.get("preferred_domains"))
+        snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
         return {"task": task, "search_result": {**result, "results": snippets}, "skipped_mcp": False}
 
     async def _extract(bundle: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,19 +112,56 @@ async def run_tasks_lc(
         filtered = [s for s in snippets if s.get("score") is None or s.get("score", 0) >= 0.5]
         if filtered:
             snippets = filtered
+        if not snippets:
+            return {
+                "task": task,
+                "extraction": {
+                    "value": None,
+                    "unit": task.get("unit"),
+                    "note": "skipped_deepseek:no_snippets",
+                    "llm_error": "skipped_deepseek:no_snippets",
+                    "llm_timeout": False,
+                    "confidence": 0.0,
+                    "llm_latency_ms": 0,
+                },
+                "raw_results": [],
+                "search_result": bundle.get("search_result"),
+            }
+
         async with ds_semaphore:
             start_llm = asyncio.get_event_loop().time()
-            extraction = await extractor.extract(
+            coro = extractor.extract(
                 snippets,
                 task["indicator_key"],
                 unit_hint=task.get("unit"),
                 issuer_hint=task.get("issuer"),
                 request_timeout=deepseek_timeout,
             )
+            llm_timeout = False
+            try:
+                if llm_hard_timeout and llm_hard_timeout > 0:
+                    extraction = await asyncio.wait_for(coro, timeout=llm_hard_timeout)
+                else:
+                    extraction = await coro
+            except Exception as exc:
+                llm_timeout = isinstance(exc, asyncio.TimeoutError) or "Timeout" in str(exc)
+                logger.debug(f"DeepSeek (LC) failed, fallback regex: {exc}")
+                val, url = extractor._fallback_extract(snippets)
+                extraction = {
+                    "value": val,
+                    "unit": task.get("unit"),
+                    "note": f"deepseek_error:{exc}",
+                    "llm_error": str(exc),
+                    "llm_timeout": llm_timeout,
+                    "source_url": url or (snippets[0].get("url") if snippets else None),
+                    "confidence": 0.2 if val is not None else 0.0,
+                }
             llm_latency_ms = int((asyncio.get_event_loop().time() - start_llm) * 1000)
             if extraction is None:
                 extraction = {}
             extraction["llm_latency_ms"] = llm_latency_ms
+            if llm_timeout:
+                extraction["llm_timeout"] = True
         return {
             "task": task,
             "extraction": extraction,

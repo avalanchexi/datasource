@@ -31,6 +31,14 @@
    ```
    使用方式：`bash run_preflight.sh && <后续 Stage1/Stage2… 命令>`；若终端重开，请先跑一次再执行流水线。
 
+6) **Health Check（可选，建议在 Stage2 前跑）**：`PYTHONPATH=./src python3 scripts/stage2_health_check.py`
+   - 校验 Tavily/DeepSeek 密钥、缓存路径可写、基础连通性（HEAD Ping）。失败即退出；需代理时先设置环境变量再跑。
+6) **代码语法预检（可选）**
+   ```bash
+   python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py
+   # 如有 SyntaxError，先修复再执行流水线
+   ```
+
 ## Style & Naming
 - Python ≥3.7, 4-space indent, UTF-8.
 - Prefer async with `DataSourceManager`; keep adapters thin, move logic to engines/calculators.
@@ -88,6 +96,18 @@
 - Source annotation in reports
 - ETF fund flow data is real (no placeholders)
 
+## WebSearch JSON Schema 必填字段
+注入脚本 `inject_websearch_data_test.py` 要求以下必填字段：
+
+| 类别 | 必填字段 | 示例 |
+|------|----------|------|
+| commodities | `symbol`, `name`, `current_price`, `unit` | `{"symbol": "GC=F", "name": "COMEX黄金", "current_price": 2650.5, "unit": "$/oz"}` |
+| forex | `pair`, `name`, `current_rate` | `{"pair": "USDCNY", "name": "USD/CNY在岸", "current_rate": 7.248}` |
+| bonds | `symbol`, `name`, `current_yield` | `{"symbol": "US10Y", "name": "美国10年期国债", "current_yield": 4.18}` |
+| fund_flow | `recent_5d`, `total_120d`, `trend`, `source` | `{"recent_5d": 85.6, "total_120d": 1250.0, "trend": "流入", "source": "MCP WebSearch实时获取"}` |
+
+**注意**：`recent_5d`/`total_120d` 必须是可解析的数字，不能是描述性文本（如“波动”“净流入”）。
+
 ## Stage1 → Stage3 Daily Run
 - **0) Preflight（必跑）**：`bash run_preflight.sh`，校验 `.env` 中 `TAVILY_API_KEY/DEEPSEEK_API_KEY/TUSHARE_TOKEN` 且清空代理；失败直接终止。
 - 设置日期：`DATE=$(date +%Y-%m-%d)`；`DATE_NH=${DATE//-/}`。
@@ -101,21 +121,28 @@
   ```
   - 商品行情不走 Yahoo/Investing 兜底；北向/南向/ETF 资金流写占位符，后续必补。
 
-- **Stage2** Tavily/DeepSeek 增强（fund flow/commodities/forex/bonds）：
+- **Stage2** Tavily 增强（推荐速度优先配置）：
   ```bash
   PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
     --market-data data/${DATE_NH}_market_data.json \
     --output data/${DATE_NH}_market_data_stage2.json \
     --phase all --execute-search \
     --fund-flow-backend tavily \
-    --deepseek-timeout 8 --deepseek-max-concurrency 4 \
-    --queue-retry-limit 1 \
+    --extraction-backend regex \
+    --disable-extract \
+    --deepseek-timeout 8 \
+    --llm-hard-timeout 10 \
+    --deepseek-max-concurrency 1 \
+    --queue-retry-limit 0 \
     --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
     --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
     --log-output logs/stage2_unified_log_${DATE_NH}.json \
-    --gap-monitor reports/gap_monitor_${DATE_NH}.json \
-    --disable-extract   # Tavily extract 422 时可先关，改 regex/LLM 兜底
+    --gap-monitor reports/gap_monitor_${DATE_NH}.json
   ```
+  - 使用 `--extraction-backend regex --disable-extract` 跳过 DeepSeek/Tavily extract，30–60 秒完成。
+  - 若需更高精度：改为 `--extraction-backend deepseek --deepseek-model deepseek-chat --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`；langchain 默认禁用，如需实验必须加 `--allow-langchain`。
+  - Tavily extract 422 频发时：用 `--disable-extract` 或收紧 `--extract-topk 1`，可先 search-only，避免 422 软拒绝。
+  - LangChain 默认禁用；如需实验，必须显式传 `--allow-langchain`（自备依赖）。
   - 仅重试资金流：加 `--tasks northbound,southbound,etf`；失败落 `gap_monitor`，转 Stage2.5。
 
 - **Stage2.5 WebSearch 手工注入（补缺口）**：
@@ -162,6 +189,25 @@
 - When real numbers filled for `stock_indices/forex/bonds/commodities/fund_flow`, gaps drop automatically.
 - Macro metrics missing `previous_value` are back-filled with `current_value - change_rate`; if no change_rate, fallback `previous_value=current_value` to reduce “N/A”.
 
+### Stage2.5 注入后完整度检查
+注入完成后执行，确保数据完整度 ≥80%：
+```bash
+python -c "
+import json
+d = json.load(open('data/${DATE_NH}_market_data_complete.json'))
+comp = d.get('metadata',{}).get('data_completeness', 0)
+print(f'数据完整度: {comp*100:.1f}%')
+if comp < 0.8:
+    nulls = []
+    for cat in ['macro_indicators', 'monetary_policy', 'stock_indices']:
+        for k,v in d.get(cat,{}).items():
+            if isinstance(v, dict) and v.get('current_value') is None:
+                nulls.append(f'{cat}.{k}')
+    print(f'WARNING: Null字段需补充: {nulls}')
+"
+```
+若完整度不足，需手动补数据后重新注入。
+
 ## Tavily / MCP Modes (2025-12 update)
 - Fund flow & forex default to Tavily; `fund-flow-backend` default `tavily`. `hybrid` = Tavily fallback from MCP; no automatic MCP channel.
 - Required keys: `.env` sets `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`; prefer `PYTHONPATH=./src` when running.
@@ -187,6 +233,11 @@
 - Reduce Tavily extract load: set `top_for_extract = snippets[:2]` or `extract_depth="basic"` for commodities/forex to avoid 422/timeout.
 - Reuse cache: keep `reports/tavily_cache.sqlite`; second run only gaps; watch `cache_hit_rate`.
 
+### Stage2 性能瓶颈与快速模式
+- 常见瓶颈：Tavily extract 422；DeepSeek 请求超时（单指标可耗时 30–40s）；并发受限或串行导致总耗时上升。
+- 快速绕行：`--extraction-backend regex --disable-extract --queue-retry-limit 0 --deepseek-max-concurrency 0`，资金流仍用 tavily，整体 30–60s 完成。
+- 需要方向/高精度时再移除上述两参数启用 DeepSeek（3–5 分钟），并适当调低 `--deepseek-timeout/--deepseek-max-concurrency`。
+
 ## Proxy & Connectivity
 - Prefer no global proxy in production; if needed, set in `.env` then `source .env`. If skipping proxy, prefix commands with `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`.
 - Stage2 proxy precedence: CLI `--http-proxy/--https-proxy` overrides env; when globally disabled, omit these flags.
@@ -204,3 +255,13 @@ If proxy required, pass `proxies` explicitly in the check.
 - Tavily second: `hybrid` = MCP then Tavily; `tavily` = direct Tavily.
 - WebSearch JSON last resort: use `data/websearch_results_${DATE}.json` + `inject_websearch_data_test.py` for forex/fund_flow/macro/currency/commodities/bonds write-back.
 - Market fallback: after Stage2 run `scripts/fill_market_data_from_yahoo.py`, then WebSearch injection to fill commodities/bonds/forex gaps.
+
+## Troubleshooting 速查表
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| Stage2 DeepSeek 持续超时 | API 响应慢或网络问题 | `--extraction-backend regex --disable-extract`，或降低 `--deepseek-timeout` 并串行关键指标 |
+| Tavily extract 422 | API 参数/限制 | 加 `--disable-extract`；或缩小 `--extract-topk` |
+| Stage3 完整度 <80% 报错 | 关键字段为 null | 检查 macro/monetary/stock_indices，手动补数据后重注入 |
+| 注入时 KeyError: 'symbol' | WebSearch JSON 缺必填字段 | 参照 WebSearch JSON Schema 补全字段 |
+| 报告出现 N/A | 数据未注入或格式错误 | 查 gap_monitor，确认数字字段为可解析数值 |
+| SyntaxError 启动失败 | 代码语法错误 | `python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py` |

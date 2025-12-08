@@ -234,28 +234,8 @@ class InternationalFinanceAdapter(BaseDataSource):
                 except Exception as ts_err:
                     logger.error(f"TuShare us_tycr 获取 {symbol} 失败: {ts_err}")
 
-            # 对于美国国债，尝试从Yahoo Finance获取
-            if symbol == "US10Y":
-                yahoo_symbol = bond_config.get("yahoo_symbol", "^TNX")
-                data = fetch_price_history(yahoo_symbol, start_date, end_date)
-                if data is not None and not data.empty:
-                    formatted_data = self._format_bond_yield_data(data, symbol, bond_config)
-                    self.cache.set(cache_key, formatted_data)
-
-                    return DataResponse(
-                        data=formatted_data,
-                        source=self.name,
-                        timestamp=datetime.now(),
-                        metadata={
-                            "source_type": "yahoo_finance",
-                            "symbol": symbol,
-                            "yahoo_symbol": yahoo_symbol,
-                            "data_source": bond_config.get("data_source", "FRED数据")
-                        }
-                    )
-
             # 对于中国国债，使用债券ETF代理
-            elif symbol in ["CN10Y", "CN10Y_CDB"]:
+            if symbol in ["CN10Y", "CN10Y_CDB"]:
                 proxy_etf = bond_config.get("proxy_etf")
                 if proxy_etf:
                     # 从DataSourceManager获取债券ETF数据

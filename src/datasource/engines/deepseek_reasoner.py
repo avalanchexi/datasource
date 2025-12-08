@@ -29,7 +29,7 @@ class DeepSeekExtractionAgent:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "deepseek-reasoner",
+        model: str = "deepseek-chat",
         base_url: Optional[str] = None,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")

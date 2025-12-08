@@ -46,6 +46,8 @@ class AsyncTavilyClient:
         self.timeout = timeout
         self.connect_timeout = connect_timeout
         self.semaphore = asyncio.Semaphore(max_concurrency)
+        # extract 专用信号量：固定并发 1，避免 422/配额连环触发
+        self.extract_semaphore = asyncio.Semaphore(1)
         self.cache = cache
         self.default_search_depth = default_search_depth
         self.proxies = proxies
@@ -188,13 +190,20 @@ class AsyncTavilyClient:
             payload["search_result_id"] = search_result_id
         if search_results:
             minimal = []
-            for item in search_results:
-                minimal.append(
-                    {
-                        "url": item.get("url"),
-                        "content": item.get("content") or item.get("snippet") or "",
-                    }
-                )
+            # 仅保留前 2 条高分且可解析的 URL，过滤 PDF/空内容，降低 422 风险
+            sorted_results = sorted(
+                search_results, key=lambda x: x.get("score", 0), reverse=True
+            )[:2]
+            for item in sorted_results:
+                url = (item.get("url") or "").strip()
+                if not url or url.lower().endswith(".pdf"):
+                    continue
+                content = (item.get("content") or item.get("snippet") or "").strip()
+                if not content:
+                    continue
+                minimal.append({"url": url, "content": content})
+            if not minimal:
+                return {"results": [], "cache_hit": False, "warning": "extract_input_empty"}
             payload["search_results"] = minimal
 
         cache_key = self._make_cache_key({"extract": payload})
@@ -204,7 +213,7 @@ class AsyncTavilyClient:
                 cached["cache_hit"] = True
                 return cached
 
-        async with self.semaphore:
+        async with self.extract_semaphore:
             client = await self._ensure_client()
             url = self.base_url.replace("/search", "/extract")
             logger.debug(f"Tavily extract depth={extract_depth} raw={include_raw_content}")
@@ -214,8 +223,14 @@ class AsyncTavilyClient:
                 data = resp.json()
                 data["cache_hit"] = False
             except Exception as exc:
+                status = getattr(getattr(exc, "response", None), "status_code", None)
                 logger.debug(f"Tavily extract failed: {exc}")
-                data = {"error": str(exc), "cache_hit": False, "results": []}
+                data = {
+                    "error": str(exc),
+                    "status": status,
+                    "cache_hit": False,
+                    "results": [],
+                }
 
         if self.cache:
             self.cache.set(cache_key, data, ttl=cache_ttl)

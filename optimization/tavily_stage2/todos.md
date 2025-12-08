@@ -55,3 +55,35 @@
 - [x] 宏观/低时效 profile 收紧：time_range=year/month，max_results<=6，必要时设置 max_age_days。
 - [x] 回归对比脚本 `scripts/compare_stage2_runs.py` 实现并输出表格/JSON。
 - [ ] 文档同步（README/AGENTS/SCRIPTS），示例命令加 `PYTHONPATH=./src`，默认参数更新。
+
+## 12. LangChain 临时禁用与保护
+- [x] 在 Stage2 入口增加检查：未显式开启则不走 langchain；缺依赖时友好报错并退出。
+- [x] 文档/示例移除 `--extraction-backend langchain` 默认选项，标注为“实验/暂不使用”。
+- [x] 确保 langchain 分支复用主流程的超时/并发/过滤参数，避免悬挂（score/domain/max_age 过滤、422 回退、llm_hard_timeout）。
+
+## 13. Tavily extract 422 优化落地
+- [x] 在 `tavily_client.extract` 前置校验 results：空列表或缺 url/snippet/content/score 直接跳过 extract。
+- [x] 提取输入裁剪：仅传 top1–2 高分 URL，过滤 PDF/失效链接；默认 `extract_depth=basic`、`include_raw_content=False`。
+- [x] 捕获 422：回退 search-only，不重试；task_log/websearch_results note 标 `tavily_extract_422`，summary 计数 `tavily_extract_422_count`。
+- [x] 为 extract 增加专用并发/重试（并发固定 1，重试 0）及短退避（0.5–1s）防止配额连环触发。
+- [x] CLI 提示：保留 `--disable-extract`/`--extract-topk`，更新 README/AGENTS/requirements 说明 422 降级策略。
+
+## 14. DeepSeek 超时与模型降级落地
+- [x] 默认模型改为 `deepseek-chat`（入口 CLI 默认值 & docs 同步）。
+- [x] 收紧超时：`deepseek_timeout` 默认 8s，`llm_hard_timeout` 默认 10s，使用 `asyncio.wait_for` 硬控；超时立即回退 regex，不重试。
+- [x] 并发保护：默认 `deepseek_max_concurrency=1`，关键指标可通过 `--deepseek-serial-keys` 串行。
+- [x] Tavily 搜索失败/返回为空或 extract 异常时，跳过 DeepSeek，直接 regex/人工，避免空跑。
+- [x] 输入裁剪：传入 DeepSeek 的 snippets 仅保留前 1–2 条高分文本。
+- [ ] 观测：summary 增加 DeepSeek p95/p50 延迟与超时计数；task_log 记录超时类型。
+
+## 15. 配置/验证/健康检查补齐
+- [x] 文档同步：AGENTS/README/脚本示例更新默认值（deepseek-chat、timeout 8/10s、禁用 langchain、快速模式说明）。
+- [x] 回归测试：新增/更新测试或脚本覆盖超时、422、regex 快速模式路径。
+- [x] 健康检查：增加 Tavily/DeepSeek ping 脚本入口；可选在 preflight 中输出 ping 结果，失败阻断 Stage2。
+
+## 16. 新增（2025-12-06）
+- [x] 资金流 regex 路径补方向推断：基于 snippet 关键词流入/流出，修正正负号并写 note，降低 manual_required。
+- [x] Tavily 无结果 / extract=422 时跳过 DeepSeek，直接 regex/人工，减少空跑耗时。
+- [x] LangChain 保护开关：默认禁用，未显式开启时报错退出；示例命令移除 langchain（待代码护栏+文档）。
+- [x] 回归与观测补齐：task_log 标记 deepseek_timeout/skip 原因；增加 422/timeout/regex 路径的最小测试或断言（测试已补）。
+- [x] 文档同步：AGENTS/README/requirements 增加本次改动与 CLI 默认值更新（deepseek-chat、timeout 8/10、skip-deepseek-on-422）。

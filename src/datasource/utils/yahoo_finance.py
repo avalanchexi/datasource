@@ -1,11 +1,11 @@
-"""Yahoo Finance data fetching utilities - V2.0待MCP替代
-⚠️ DEPRECATED: 此模块将被MCP工具(WebFetch)替代
-📍 替代模块: src.datasource.utils.mcp_tools.MCPDataFetcher
-🔧 迁移方式: 使用 webfetch_yahoo_finance() 替代此模块所有功能
+"""Yahoo Finance data fetching utilities - 已禁用外部接口
+⚠️ 本模块现统一返回 None，不再向 query1.finance.yahoo.com 发起请求
+📍 请改用 MCP WebSearch / 官方数据源
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 import json
@@ -22,6 +22,8 @@ USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
+
+logger = logging.getLogger(__name__)
 
 
 YAHOO_SYMBOL_MAP: Dict[str, str] = {
@@ -112,93 +114,13 @@ def fetch_price_history(
     symbol: str, start_date: str, end_date: str, *, buffer_days: int = 0
 ) -> Optional[pd.DataFrame]:
     """
-    ⚠️ DEPRECATED - 将被MCP WebFetch替代
-
-    V2.0迁移说明:
-    from datasource.utils.mcp_tools import mcp_fetcher
-    data = await mcp_fetcher.webfetch_yahoo_finance(symbol, start_date, end_date)
-
-    Fetch historical price data from Yahoo Finance as a fallback.
-
-    Args:
-        symbol: Internal symbol (e.g. "000300") or direct Yahoo symbol.
-        start_date: Start date (YYYY-MM-DD).
-        end_date: End date (YYYY-MM-DD).
-        buffer_days: Extra days added before ``start_date`` to enlarge history.
-
-    Returns:
-        Pandas DataFrame with columns ``date`` (datetime), ``close``, ``open``,
-        ``high``, ``low`` and ``volume``. ``None`` when data is unavailable.
+    已禁用的 Yahoo Finance 拉取函数，统一返回 None 以阻断外部接口。
     """
-
-    if Request is None or urlopen is None:
-        return None
-
-    resolved = _resolve_symbol(symbol)
-    if resolved is None:
-        return None
-
-    try:
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        if buffer_days:
-            start_dt = start_dt - timedelta(days=buffer_days)
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
-
-        period1 = int(start_dt.timestamp())
-        period2 = int(end_dt.timestamp())
-
-        url = (
-            f"https://query1.finance.yahoo.com/v8/finance/chart/{resolved}"
-            f"?period1={period1}&period2={period2}&interval=1d&includePrePost=false"
-        )
-
-        request = Request(url, headers={"User-Agent": USER_AGENT})
-        with urlopen(request, timeout=10) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-
-        chart = payload.get("chart", {})
-        results = chart.get("result")
-        if not results:
-            return None
-
-        result = results[0]
-        timestamps = result.get("timestamp")
-        indicators = result.get("indicators", {})
-        quotes = (indicators.get("quote") or [{}])[0]
-        adjclose = (indicators.get("adjclose") or [{}])[0]
-
-        if not timestamps or "close" not in quotes:
-            return None
-
-        closes = quotes.get("close")
-        opens = quotes.get("open") or adjclose.get("adjclose")
-        highs = quotes.get("high")
-        lows = quotes.get("low")
-        volumes = quotes.get("volume")
-
-        dates = pd.to_datetime(timestamps, unit="s", utc=True)
-        dates = dates.tz_convert("Asia/Shanghai").tz_localize(None)
-
-        df = pd.DataFrame(
-            {
-                "date": dates,
-                "close": closes,
-                "open": opens,
-                "high": highs,
-                "low": lows,
-                "volume": volumes,
-            }
-        )
-
-        df = df.dropna(subset=["close"])
-        if df.empty:
-            return None
-
-        df = df.sort_values("date")
-        return df
-
-    except Exception:
-        return None
+    logger.warning(
+        "fetch_price_history disabled: Yahoo Finance access is forbidden, "
+        "please use MCP WebSearch or official sources instead."
+    )
+    return None
 
 
 def get_international_finance_data(

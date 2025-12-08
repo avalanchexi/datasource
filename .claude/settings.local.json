@@ -68,7 +68,19 @@
       "Bash(source .env)",
       "Bash(set +a)",
       "Bash(PYTHONIOENCODING=utf-8 python3:*)",
-      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=.:src python3:*)"
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONPATH=.:src python3:*)",
+      "Bash(echo:*)",
+      "Bash(unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY)",
+      "Bash(DATE=\"2025-12-05\")",
+      "Bash(DATE_NH=\"20251205\")",
+      "Bash(PYTHONPATH=./src python3:*)",
+      "Bash(PYTHONPATH=. python:*)",
+      "Bash(data/20251205_market_data.json )",
+      "Bash(reports/websearch_results_20251205_manual.json )",
+      "Bash(data/20251205_market_data_complete.json)",
+      "Bash(data/20251205_pring_result.json )",
+      "Bash(reports/20251205背景扫描120.md)",
+      "Bash(powershell.exe -Command \"(Get-Item ''reports/20251205背景扫描120.md'').Length\")"
     ],
     "deny": [],
     "ask": []

@@ -61,6 +61,7 @@ BACKOFF_FACTOR = 2.0
 CACHE_DIR = Path("data/cache/yahoo")
 CACHE_TTL_DAYS = 3
 _LAST_REQUEST_TS = 0.0
+YAHOO_DISABLED = True  # 全局开关：禁止访问 Yahoo 接口
 
 
 def _is_placeholder_value(value: Any) -> bool:
@@ -117,6 +118,8 @@ def _respect_rate_limit() -> None:
 
 
 def _download_history(ticker: str, days: int = 400) -> Tuple[List[Dict[str, float]], Dict[str, Any]]:
+    if YAHOO_DISABLED:
+        raise RuntimeError("Yahoo Finance access disabled by policy")
     cached = _load_cache(ticker)
     if cached:
         return cached, {"source": "cache", "retries": 0}
@@ -287,16 +290,20 @@ class MarketDataFiller:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="使用Yahoo Finance填充Stage2商品/债券数据")
+    parser = argparse.ArgumentParser(
+        description="【已禁用】使用Yahoo Finance填充Stage2商品/债券数据（接口被禁用，脚本仅保留占位）"
+    )
     parser.add_argument("--input", required=True, help="Stage2输出文件 (market_data_stage2.json)")
     parser.add_argument("--output", required=True, help="更新后的输出文件 (market_data_complete.json)")
     return parser.parse_args()
 
 
 def main() -> None:
-    args = parse_args()
-    filler = MarketDataFiller(Path(args.input), Path(args.output))
-    filler.fill()
+    # 确保不会再触发 Yahoo API 访问
+    raise RuntimeError(
+        "fill_market_data_from_yahoo.py 已停用：禁止访问 Yahoo Finance。"
+        "请改用 MCP WebSearch/官方数据源或手工注入 websearch_results 后再生成报告。"
+    )
 
 
 if __name__ == "__main__":

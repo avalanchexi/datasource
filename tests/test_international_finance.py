@@ -8,6 +8,10 @@ import asyncio
 import sys
 import os
 from datetime import datetime, timedelta
+import pytest
+
+# Yahoo Finance 接口已禁用，相关外部数据用 WebSearch/MCP 替代，测试整体跳过。
+pytest.skip("Yahoo Finance disabled by policy; skip international finance Yahoo tests", allow_module_level=True)
 
 # 添加项目根路径下的 src 目录
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))

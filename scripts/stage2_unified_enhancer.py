@@ -163,6 +163,24 @@ def _prefer_fresh_snippets(snippets: Optional[List[Dict[str, Any]]], max_age_day
     return fresh or snippets
 
 
+def _percentile(values: List[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    values = sorted(values)
+    if pct <= 0:
+        return values[0]
+    if pct >= 100:
+        return values[-1]
+    k = (len(values) - 1) * pct / 100.0
+    f = int(k)
+    c = min(f + 1, len(values) - 1)
+    if f == c:
+        return values[int(k)]
+    d0 = values[f] * (c - k)
+    d1 = values[c] * (k - f)
+    return d0 + d1
+
+
 def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
     """检查任务的查询信息是否完整，返回警告列表"""
     warnings: List[str] = []
@@ -480,14 +498,32 @@ async def _execute_tasks(
     stats.setdefault("regex_hits", 0)
     stats.setdefault("score_filtered_drop", 0)
     stats.setdefault("timeout_count", 0)
+    stats.setdefault("deepseek_timeouts", 0)
     stats.setdefault("retry_count", 0)
     stats.setdefault("extract_calls", 0)
     stats.setdefault("tavily_extract_calls", 0)
+    stats.setdefault("tavily_extract_422_count", 0)
     stats.setdefault("queue_requeued", 0)
     stats.setdefault("queue_dead_letters", 0)
+    stats.setdefault("deepseek_latencies", [])
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
+
+    def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
+        """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
+        text_parts: List[str] = []
+        for s in snips[:3]:  # 只看前几条，减少噪声
+            for field in ("content", "snippet"):
+                val = s.get(field)
+                if val:
+                    text_parts.append(str(val))
+        blob = " ".join(text_parts).lower()
+        if any(k in blob for k in ["流出", "净流出", "净卖出", "卖出"]):
+            return "outflow"
+        if any(k in blob for k in ["流入", "净流入", "净买入", "买入"]):
+            return "inflow"
+        return None
 
     async def _run_with_timeout(coro):
         if llm_hard_timeout and llm_hard_timeout > 0:
@@ -536,12 +572,15 @@ async def _execute_tasks(
                         )
                 result = result or {}
                 result["llm_latency_ms"] = int((time.perf_counter() - start_llm) * 1000)
+                stats.setdefault("deepseek_latencies", []).append(result["llm_latency_ms"])
                 if attempts > 1:
                     stats["retry_count"] += 1
                 return result
             except Exception as exc:  # pragma: no cover
                 last_exc = exc
                 stats["timeout_count"] += 1
+                stats["deepseek_timeouts"] += 1
+                is_timeout = isinstance(exc, asyncio.TimeoutError) or "Timeout" in str(exc)
                 if attempts >= 2:
                     logger.warning(f"DeepSeek 请求失败，将使用 regex 兜底: {exc}")
                     val, url = extractor._fallback_extract(snips)  # type: ignore
@@ -552,6 +591,7 @@ async def _execute_tasks(
                         "confidence": 0.2 if val is not None else 0.0,
                         "note": f"deepseek_error:{exc}",
                         "llm_error": str(exc),
+                        "llm_timeout": is_timeout,
                         "llm_latency_ms": int((time.perf_counter() - start_llm) * 1000),
                     }
     queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize) if use_queue else None  # type: ignore
@@ -711,6 +751,7 @@ async def _execute_tasks(
                 continue
             for attempt in count(start=1):
                 started = time.perf_counter()
+                skip_deepseek_reason: Optional[str] = None
                 # fund_flow_backend=mcp: 跳过实时搜索，直接标记待人工/MCP
                 if is_fund_flow and backend == "mcp":
                     task_record = {
@@ -745,6 +786,8 @@ async def _execute_tasks(
                     )
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     snippets = result.get("results") or []
+                    if not snippets:
+                        skip_deepseek_reason = "no_snippets"
                     # Tavily extract (two-step) for noisy tasks
                     try:
                         if (
@@ -760,19 +803,25 @@ async def _execute_tasks(
                                     include_raw_content=is_fund_flow,
                                     cache_ttl=cache_ttl,
                                 )
-                                extra_res = extract_resp.get("results") or []
-                                # 将 extract 的内容附加为额外 snippet，供后续抽取/regex 使用
-                                for ex in extra_res:
-                                    content = ex.get("content") or ex.get("raw_content")
-                                    if content:
-                                        snippets.append(
-                                            {
-                                                "content": content,
-                                                "snippet": ex.get("snippet") or "",
-                                                "url": ex.get("url") or ex.get("source_url"),
-                                                "score": ex.get("score"),
-                                            }
-                                        )
+                                if extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
+                                    stats["tavily_extract_422_count"] += 1
+                                    logger.debug("Tavily extract 422, fallback to search-only")
+                                    skip_deepseek_reason = "tavily_extract_422"
+                                    await asyncio.sleep(0.5)
+                                else:
+                                    extra_res = extract_resp.get("results") or []
+                                    # 将 extract 的内容附加为额外 snippet，供后续抽取/regex 使用
+                                    for ex in extra_res:
+                                        content = ex.get("content") or ex.get("raw_content")
+                                        if content:
+                                            snippets.append(
+                                                {
+                                                    "content": content,
+                                                    "snippet": ex.get("snippet") or "",
+                                                    "url": ex.get("url") or ex.get("source_url"),
+                                                    "score": ex.get("score"),
+                                                }
+                                            )
                     except Exception as exc:  # pragma: no cover
                         logger.debug(f"Tavily extract skipped/failed: {exc}")
                     # score 过滤
@@ -791,8 +840,21 @@ async def _execute_tasks(
                         await queue.put((task, snippets, attempt))  # type: ignore
                         break
                     else:
-                        stats["extract_calls"] += 1
-                        extraction = await _do_extract(snippets, task)
+                        # 当 Tavily 无结果 / extract 422 / search 异常时，跳过 DeepSeek，直接 regex/人工
+                        if skip_deepseek_reason:
+                            extraction = {
+                                "value": None,
+                                "unit": task.get("unit"),
+                                "note": f"skipped_deepseek:{skip_deepseek_reason}",
+                                "source_url": None,
+                                "confidence": 0.0,
+                                "llm_error": f"skipped_deepseek:{skip_deepseek_reason}",
+                                "llm_timeout": False,
+                                "llm_latency_ms": 0,
+                            }
+                        else:
+                            stats["extract_calls"] += 1
+                            extraction = await _do_extract(snippets, task)
                         # regex 兜底：关键指标无值时尝试直接提取数字
                         if extraction.get("value") is None:
                             regex_val = _regex_fallback(snippets, task["indicator_key"])
@@ -800,6 +862,18 @@ async def _execute_tasks(
                                 extraction["value"] = regex_val
                                 extraction.setdefault("note", "regex_fallback")
                                 stats["regex_hits"] += 1
+                        # 对资金流再尝试基于片段推断方向，补充 note，减少 manual_required
+                        if is_fund_flow and extraction.get("value") is not None:
+                            inferred_dir = _infer_flow_direction(snippets)
+                            if inferred_dir:
+                                dir_cn = "流出" if inferred_dir == "outflow" else "流入"
+                                extraction["note"] = (
+                                    (extraction.get("note") or "") + f" regex_dir:{inferred_dir} {dir_cn}"
+                                ).strip()
+                                if inferred_dir == "outflow" and extraction["value"] > 0:
+                                    extraction["value"] = -abs(extraction["value"])
+                                if inferred_dir == "inflow" and extraction["value"] < 0:
+                                    extraction["value"] = abs(extraction["value"])
                         # fund_flow 低置信度或无值 → manual_required
                         manual_required = False
                         if is_fund_flow and (extraction.get("confidence", 0.0) < 0.5 or extraction.get("value") is None):
@@ -832,6 +906,7 @@ async def _execute_tasks(
                             "note": extraction.get("note"),
                             "llm_latency_ms": extraction.get("llm_latency_ms"),
                             "llm_error": extraction.get("llm_error"),
+                            "llm_timeout": extraction.get("llm_timeout"),
                             "deepseek_error": extraction.get("note")
                             if isinstance(extraction.get("note"), str)
                             and extraction["note"].startswith("deepseek_error")
@@ -1061,9 +1136,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--connect-timeout", type=float, default=10.0)
     parser.add_argument("--read-timeout", type=float, default=30.0)
     parser.add_argument("--max-retries", type=int, default=2)
-    parser.add_argument("--deepseek-timeout", type=float, default=12.0, help="DeepSeek抽取超时时间(秒)")
-    parser.add_argument("--deepseek-max-concurrency", type=int, default=2, help="DeepSeek并发上限")
-    parser.add_argument("--deepseek-model", default="deepseek-reasoner", help="DeepSeek模型名")
+    parser.add_argument("--deepseek-timeout", type=float, default=8.0, help="DeepSeek抽取超时时间(秒)")
+    parser.add_argument("--deepseek-max-concurrency", type=int, default=1, help="DeepSeek并发上限")
+    parser.add_argument("--deepseek-model", default="deepseek-chat", help="DeepSeek模型名")
     parser.add_argument(
         "--deepseek-base-url",
         default=os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
@@ -1078,6 +1153,11 @@ def _parse_args() -> argparse.Namespace:
         choices=["deepseek", "regex", "langchain"],
         default="deepseek",
         help="抽取后端：deepseek 优先，或强制 regex 兜底",
+    )
+    parser.add_argument(
+        "--allow-langchain",
+        action="store_true",
+        help="显式启用 langchain 抽取（默认禁用）；缺依赖或未开启则直接退出",
     )
     parser.add_argument(
         "--lc-max-concurrency", type=int, default=3, help="LangChain 抽取并发上限（仅在 extraction-backend=langchain 时生效）"
@@ -1103,7 +1183,7 @@ def _parse_args() -> argparse.Namespace:
         "--extract-topk", type=int, default=3, help="Tavily extract 使用的搜索结果条数（默认3）"
     )
     parser.add_argument(
-        "--llm-hard-timeout", type=float, default=15.0, help="对单次 LLM 抽取的 asyncio 硬超时（秒），0 表示不设硬超时"
+        "--llm-hard-timeout", type=float, default=10.0, help="对单次 LLM 抽取的 asyncio 硬超时（秒），0 表示不设硬超时"
     )
     parser.add_argument(
         "--fast-mode",
@@ -1172,6 +1252,12 @@ def _parse_task_filter(arg: Optional[str]) -> (List[str], List[str]):
 
 async def main() -> int:
     args = _parse_args()
+    if args.extraction_backend == "langchain" and not args.allow_langchain:
+        print(
+            "[ERROR] langchain 模式已默认禁用。如需使用，请添加 --allow-langchain（需安装依赖）或改用 deepseek/regex。",
+            file=sys.stderr,
+        )
+        return 1
     market_path = Path(args.market_data)
     output_path = Path(args.output) if args.output else market_path
     task_file = Path(args.task_file)
@@ -1285,6 +1371,7 @@ async def main() -> int:
                 forex_backend="hybrid",
                 lc_max_concurrency=args.lc_max_concurrency,
                 deepseek_timeout=args.lc_timeout,
+                llm_hard_timeout=args.llm_hard_timeout,
             )
         else:
             completed_tasks, failures, websearch_results = await _execute_tasks(
@@ -1343,8 +1430,18 @@ async def main() -> int:
     _gap_monitor(pending_keys, gap_monitor_path, manual_required=pending_manual)
 
     avg_elapsed = 0
+    p50_elapsed = 0
+    p95_elapsed = 0
+    deepseek_latency_list = exec_stats.get("deepseek_latencies", [])
+    p50_llm = _percentile(deepseek_latency_list, 50) if deepseek_latency_list else 0
+    p95_llm = _percentile(deepseek_latency_list, 95) if deepseek_latency_list else 0
     if completed_tasks:
-        avg_elapsed = sum(t.get("elapsed_ms", 0) or 0 for t in completed_tasks) / len(completed_tasks)
+        elapsed_vals = sorted([t.get("elapsed_ms", 0) or 0 for t in completed_tasks])
+        avg_elapsed = sum(elapsed_vals) / len(elapsed_vals)
+        mid = len(elapsed_vals) // 2
+        p50_elapsed = elapsed_vals[mid]
+        idx95 = max(0, min(len(elapsed_vals) - 1, int(len(elapsed_vals) * 0.95) - 1))
+        p95_elapsed = elapsed_vals[idx95]
     cache_hits = sum(1 for t in completed_tasks if t.get("cache_hit"))
     cache_hit_rate = cache_hits / len(completed_tasks) if completed_tasks else 0
 
@@ -1383,14 +1480,20 @@ async def main() -> int:
         "proxy": {"http": args.http_proxy or os.getenv("HTTP_PROXY"), "https": args.https_proxy or os.getenv("HTTPS_PROXY")},
         "fund_flow_backend": args.fund_flow_backend,
         "avg_elapsed_ms": avg_elapsed,
+        "p50_elapsed_ms": p50_elapsed,
+        "p95_elapsed_ms": p95_elapsed,
         "cache_hit_rate": cache_hit_rate,
         "domain_filtered_drop": exec_stats.get("domain_filtered_drop", 0),
         "regex_hits": exec_stats.get("regex_hits", 0),
         "score_filtered_drop": exec_stats.get("score_filtered_drop", 0),
         "timeout_count": exec_stats.get("timeout_count", 0),
+        "deepseek_timeouts": exec_stats.get("deepseek_timeouts", 0),
         "retry_count": exec_stats.get("retry_count", 0),
         "extract_calls": exec_stats.get("extract_calls", 0),
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),
+        "tavily_extract_422_count": exec_stats.get("tavily_extract_422_count", 0),
+        "deepseek_p50_ms": p50_llm,
+        "deepseek_p95_ms": p95_llm,
         "queue_requeued": exec_stats.get("queue_requeued", 0),
         "queue_dead_letters": exec_stats.get("queue_dead_letters", 0),
         "success_by_category": success_by_cat,

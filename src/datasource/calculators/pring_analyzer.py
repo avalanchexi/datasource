@@ -1107,7 +1107,13 @@ class PringAnalyzer:
                         valid_signals.append(single_score)
                         print(f"  {name}({symbol})技术评分: {single_score:.1f}/40分")
                     else:
-                        print(f"  {name}({symbol}) 数据缺失，暂无法计分")
+                        snapshot = self._find_preloaded_commodity(symbol)
+                        if snapshot:
+                            single_score = self._snapshot_commodity_score(snapshot)
+                            valid_signals.append(single_score)
+                            print(f"  {name}({symbol}) 使用已注入市场数据评分: {single_score:.1f}/40分 (price={getattr(snapshot, 'current_price', None)})")
+                        else:
+                            print(f"  {name}({symbol}) 数据缺失，暂无法计分")
                 except Exception as e:
                     print(f"  获取{name}({symbol})数据失败: {e}")
                     continue
@@ -1152,6 +1158,45 @@ class PringAnalyzer:
         except Exception as e:
             print(f"    [ERROR] 获取商品{symbol}数据失败: {e}")
             return None
+
+    def _find_preloaded_commodity(self, target_symbol: str) -> Optional[Any]:
+        """优先复用 Stage2 已注入的商品快照，避免 Stage3 再次联网失败。"""
+        if not self.preloaded_market_data:
+            return None
+        alias_map = {
+            "CL": ["CL", "CL=F", "WTI", "WTI原油"],
+            "OIL": ["OIL", "BZ=F", "Brent", "布伦特"],
+            "HG": ["HG", "HG=F", "铜"],
+            "XAU": ["XAU", "XAUUSD", "GC=F", "黄金"],
+            "GSG": ["GSG", "BCOM", "BCOM指数"],
+        }
+        candidates = alias_map.get(target_symbol, [target_symbol])
+        for item in getattr(self.preloaded_market_data, "commodities", []):
+            symbol = getattr(item, "symbol", None)
+            name = getattr(item, "name", "") or ""
+            if symbol in candidates:
+                return item
+            name_lower = name.lower()
+            if any(alias.lower() in name_lower for alias in candidates):
+                return item
+        return None
+
+    def _snapshot_commodity_score(self, item: Any) -> float:
+        """基于已注入的快照字段给出简化技术评分，取值 10~40。"""
+        base = 20.0
+        try:
+            ytd = getattr(item, "ytd_change", None)
+            if ytd is not None:
+                base += max(min(float(ytd), 20.0), -20.0) * 0.5  # ±10分
+        except Exception:
+            pass
+        try:
+            daily = getattr(item, "daily_change", None)
+            if daily is not None:
+                base += max(min(float(daily), 5.0), -5.0) * 0.5  # ±2.5分
+        except Exception:
+            pass
+        return float(min(max(base, 10.0), 40.0))
 
     def _standardize_commodity_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
         """标准化外盘期货/ETF数据列名以便技术指标计算"""

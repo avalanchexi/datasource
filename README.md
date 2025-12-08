@@ -57,6 +57,23 @@ cp .env.example .env
 # 可运行 `python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
 ```
 
+## 快速运行 Stage2（Tavily + DeepSeek/Regex）
+- 运行前：`bash run_preflight.sh`；可选健康检查 `PYTHONPATH=./src python3 scripts/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
+- 速度优先（regex，无 LLM）：
+```bash
+PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
+  --market-data data/${DATE_NH}_market_data.json \
+  --output data/${DATE_NH}_market_data_stage2.json \
+  --execute-search --phase all --fund-flow-backend tavily \
+  --extraction-backend regex --disable-extract \
+  --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1 \
+  --log-output logs/stage2_unified_log_${DATE_NH}.json \
+  --gap-monitor reports/gap_monitor_${DATE_NH}.json \
+  --websearch-results reports/websearch_results_${DATE_NH}_auto.json
+```
+- 精度模式：改用 `--extraction-backend deepseek --deepseek-model deepseek-chat`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
+- Tavily extract 422/配额：可保留 `--disable-extract` 或调低 `--extract-topk 1`，先 search-only 再 regex 兜底。
+
 ## 测试
 
 ```bash

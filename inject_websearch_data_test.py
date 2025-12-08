@@ -8,6 +8,7 @@ AI WebSearch数据注入脚本 (测试版)
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -25,6 +26,22 @@ MONETARY_KEY_MAP = {
     "m1_growth": "m1",
     "m2_growth": "m2",
 }
+
+
+def _normalize_keyed_list(payload: Any, key_field: str) -> list:
+    """接受 dict/list/None，统一为 list 并补齐 key_field。"""
+    if payload is None:
+        return []
+    if isinstance(payload, dict):
+        normalized = []
+        for key, value in payload.items():
+            item = dict(value or {})
+            item.setdefault(key_field, key)
+            normalized.append(item)
+        return normalized
+    if isinstance(payload, list):
+        return payload
+    return []
 
 
 def _is_placeholder_numeric(value: Any) -> bool:
@@ -89,6 +106,18 @@ def _refresh_stage2_notes(metadata: Dict[str, Any], gap_summary: Dict[str, int])
     metadata['stage2_notes'] = filtered
 
 
+def _cleanup_metadata_missing(metadata: Dict[str, Any]) -> None:
+    """若 metadata.missing_items 已清空，则移除字段，避免 Stage3 误阻断。"""
+    missing = metadata.get('missing_items')
+    if not isinstance(missing, dict):
+        return
+    cleaned = {k: [item for item in v if item] for k, v in missing.items() if v}
+    if cleaned:
+        metadata['missing_items'] = cleaned
+    else:
+        metadata.pop('missing_items', None)
+
+
 def _normalize_fund_flow_payload(raw_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     normalized = dict(payload or {})
     if raw_key == "etf_flow":
@@ -121,6 +150,11 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
     print(f"[INFO] 读取WebSearch结果: {websearch_path}")
     with open(websearch_path, 'r', encoding='utf-8') as f:
         websearch_data = json.load(f)
+    # 统一结构，容忍 {symbol: {...}} / list / None
+    websearch_data['forex'] = _normalize_keyed_list(websearch_data.get('forex'), 'pair')
+    websearch_data['bonds'] = _normalize_keyed_list(websearch_data.get('bonds'), 'symbol')
+    websearch_data['commodities'] = _normalize_keyed_list(websearch_data.get('commodities'), 'symbol')
+    websearch_data['stock_indices'] = _normalize_keyed_list(websearch_data.get('stock_indices'), 'symbol')
 
     inject_count = 0
 
@@ -166,11 +200,7 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
 
     # 4. 注入外汇数据
     print("\n[STEP 4] 注入外汇数据...")
-    forex_payload = websearch_data.get('forex', [])
-    if isinstance(forex_payload, dict):
-        forex_iterable = forex_payload.values()
-    else:
-        forex_iterable = forex_payload or []
+    forex_iterable = websearch_data.get('forex') or []
 
     market_forex = market_data.setdefault('forex', [])
     for fx in forex_iterable:
@@ -190,45 +220,91 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
         _remove_missing_item(metadata, 'forex', pair)
         _remove_top_missing(market_data, pair)
 
-    # 5. 注入债券收益率
-    print("\n[STEP 5] 注入债券收益率数据...")
-    bonds_payload = websearch_data.get('bonds', {})
-    if isinstance(bonds_payload, dict):
-        bond_iterable = bonds_payload.values()
-    else:
-        bond_iterable = bonds_payload or []
+    # 5. 注入股票指数（含 000016 等补全）
+    print("\n[STEP 5] 注入股票指数数据...")
+    stock_indices_iterable = websearch_data.get('stock_indices') or []
+    stock_indices_section = market_data.setdefault('stock_indices', [])
+    for idx_payload in stock_indices_iterable:
+        symbol = idx_payload.get('symbol')
+        if not symbol:
+            print("  [WARN] stock_index 缺少 symbol，已跳过")
+            continue
+        price = _coerce_float(idx_payload.get('current_price') or idx_payload.get('close') or idx_payload.get('price'))
+        if price is None:
+            print(f"  [WARN] {symbol} 缺少可解析价格，跳过注入")
+            continue
+        merged = False
+        for i, existing in enumerate(stock_indices_section):
+            if existing.get('symbol') == symbol:
+                stock_indices_section[i] = _merge_stock_index_entry(existing, idx_payload)
+                merged = True
+                break
+        if not merged:
+            stock_indices_section.append(_build_stock_index_entry(symbol, idx_payload))
+        inject_count += 1
+        print(f"  [OK] {idx_payload.get('name', symbol)}: {price}")
+        _remove_missing_item(metadata, 'stock_indices', symbol)
+        _remove_top_missing(market_data, symbol)
+
+    # 6. 注入债券收益率
+    print("\n[STEP 6] 注入债券收益率数据...")
+    bond_iterable = websearch_data.get('bonds') or []
 
     for bond_data in bond_iterable:
-        symbol = bond_data['symbol']
+        symbol = bond_data.get('symbol')
+        if not symbol:
+            print("  [WARN] bond 缺少 symbol，已跳过")
+            continue
+        bond_data.setdefault('name', symbol)
+        bond_data['current_yield'] = _coerce_float(bond_data.get('current_yield'))
+        if bond_data['current_yield'] is None:
+            print(f"  [WARN] {symbol} 缺少 current_yield，跳过注入")
+            continue
         # 在bonds列表中找到对应项并更新
+        updated = False
         for i, bond in enumerate(market_data['bonds']):
-            if bond['symbol'] == symbol:
-                market_data['bonds'][i] = bond_data
+            if bond.get('symbol') == symbol:
+                market_data['bonds'][i] = _merge_bond_entry(bond, bond_data)
                 inject_count += 1
                 print(f"  [OK] {bond_data['name']}: {bond_data['current_yield']}%")
                 _remove_missing_item(metadata, 'bonds', symbol)
                 _remove_top_missing(market_data, symbol)
+                updated = True
                 break
+        if not updated:
+            merged_entry = _merge_bond_entry({}, bond_data)
+            market_data.setdefault('bonds', []).append(merged_entry)
+            inject_count += 1
+            _remove_missing_item(metadata, 'bonds', symbol)
+            _remove_top_missing(market_data, symbol)
 
-    # 6. 注入商品价格
-    print("\n[STEP 6] 注入商品价格数据...")
-    commodities_payload = websearch_data.get('commodities', [])
-    if isinstance(commodities_payload, dict):
-        commodity_iterable = commodities_payload.values()
-    else:
-        commodity_iterable = commodities_payload or []
+    # 7. 注入商品价格
+    print("\n[STEP 7] 注入商品价格数据...")
+    commodity_iterable = websearch_data.get('commodities') or []
 
     for commodity_data in commodity_iterable:
-        symbol = commodity_data['symbol']
+        symbol = commodity_data.get('symbol')
+        if not symbol:
+            print("  [WARN] commodity 缺少 symbol，已跳过")
+            continue
+        commodity_data.setdefault('name', symbol)
+        commodity_data['current_price'] = _coerce_float(commodity_data.get('current_price'))
+        if commodity_data['current_price'] is None:
+            print(f"  [WARN] {symbol} 缺少 current_price，跳过注入")
+            continue
         # 在commodities列表中找到对应项并更新
+        updated = False
         for i, commodity in enumerate(market_data['commodities']):
-            if commodity['symbol'] == symbol:
-                market_data['commodities'][i] = commodity_data
-                inject_count += 1
-                print(f"  [OK] {commodity_data['name']}: {commodity_data['unit']}{commodity_data['current_price']:.2f} (YTD {commodity_data['ytd_change']:+.2f}%)")
-                _remove_missing_item(metadata, 'commodities', symbol)
-                _remove_top_missing(market_data, symbol)
+            if commodity.get('symbol') == symbol:
+                market_data['commodities'][i] = _merge_commodity_entry(commodity, commodity_data)
+                updated = True
                 break
+        if not updated:
+            market_data.setdefault('commodities', []).append(_merge_commodity_entry({}, commodity_data))
+        inject_count += 1
+        print(f"  [OK] {commodity_data['name']}: {commodity_data.get('unit','')}{commodity_data['current_price']:.2f} (YTD {commodity_data.get('ytd_change', 0):+.2f}%)")
+        _remove_missing_item(metadata, 'commodities', symbol)
+        _remove_top_missing(market_data, symbol)
 
     # 更新元数据
     metadata_section = websearch_data.get('metadata', {})
@@ -257,6 +333,10 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
     for item in market_data.get('bonds', []):
         total += 1
         filled += 1 if _is_filled(item.get('current_yield')) else 0
+    # stock indices
+    for item in market_data.get('stock_indices', []):
+        total += 1
+        filled += 1 if _is_filled(item.get('current_price')) else 0
     # fund flow
     for item in market_data.get('fund_flow', {}).values():
         total += 1
@@ -285,6 +365,9 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
     # 同步根据已填充的 stock_indices 清理缺口
     for idx in market_data.get('stock_indices', []):
         _remove_top_missing(market_data, idx.get('symbol'))
+    _cleanup_metadata_missing(metadata)
+    if not market_data.get('missing_items'):
+        market_data['missing_items'] = []
 
     gap_summary = _refresh_stage2_gap_monitor(market_data)
     _refresh_stage2_notes(metadata, gap_summary)
@@ -444,15 +527,98 @@ def _coerce_percent(value: Any) -> Optional[float]:
         return None
 
 
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {'true', '1', 'yes', 'y', '是'}
+    return False
+
+
+def _merge_stock_index_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    """更新已存在的股票指数条目，缺失字段用原值或默认值兜底。"""
+    merged = dict(orig)
+    merged['symbol'] = payload.get('symbol', orig.get('symbol'))
+    merged['name'] = payload.get('name', orig.get('name', merged['symbol']))
+    merged['current_price'] = _coerce_float(payload.get('current_price') or payload.get('close') or payload.get('price')) or orig.get('current_price', 0.0)
+    merged['change_5d'] = _coerce_float(payload.get('change_5d') or payload.get('change_5d_pct') or payload.get('weekly_change')) or orig.get('change_5d', 0.0)
+    merged['change_120d'] = _coerce_float(
+        payload.get('change_120d') or payload.get('change_120d_pct') or payload.get('ytd_change') or payload.get('change_ytd')
+    ) or orig.get('change_120d', 0.0)
+    merged['above_ma50'] = _coerce_bool(payload.get('above_ma50') if 'above_ma50' in payload else orig.get('above_ma50', False))
+    merged['above_ma200'] = _coerce_bool(payload.get('above_ma200') if 'above_ma200' in payload else orig.get('above_ma200', False))
+    merged['ma50_slope'] = _coerce_float(payload.get('ma50_slope')) or orig.get('ma50_slope', 0.0)
+    merged['volatility_30d'] = _coerce_float(payload.get('volatility_30d') or payload.get('volatility')) or orig.get('volatility_30d', 0.0)
+    merged['trend_score'] = int(payload.get('trend_score', orig.get('trend_score', 0)))
+    merged['trend_label'] = payload.get('trend_label', orig.get('trend_label', '中性'))
+    merged['source'] = _format_source_label(payload.get('source') or orig.get('source'))
+    return merged
+
+
+def _build_stock_index_entry(symbol: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """为缺失的指数（如000016）构造完整条目，确保 Pydantic 校验通过。"""
+    return {
+        "symbol": symbol,
+        "name": payload.get('name', symbol),
+        "current_price": _coerce_float(payload.get('current_price') or payload.get('close') or payload.get('price')) or 0.0,
+        "change_5d": _coerce_float(payload.get('change_5d') or payload.get('change_5d_pct') or payload.get('weekly_change')) or 0.0,
+        "change_120d": _coerce_float(
+            payload.get('change_120d') or payload.get('change_120d_pct') or payload.get('ytd_change') or payload.get('change_ytd')
+        ) or 0.0,
+        "above_ma50": _coerce_bool(payload.get('above_ma50')),
+        "above_ma200": _coerce_bool(payload.get('above_ma200')),
+        "ma50_slope": _coerce_float(payload.get('ma50_slope')) or 0.0,
+        "volatility_30d": _coerce_float(payload.get('volatility_30d') or payload.get('volatility')) or 0.0,
+        "trend_score": int(payload.get('trend_score', 0)),
+        "trend_label": payload.get('trend_label', '中性'),
+        "source": _format_source_label(payload.get('source')),
+    }
+
+
+def _merge_bond_entry(existing: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    merged['symbol'] = payload.get('symbol', existing.get('symbol'))
+    merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
+    merged['current_yield'] = _coerce_float(payload.get('current_yield')) or existing.get('current_yield')
+    merged['change_5d_bp'] = _coerce_float(payload.get('change_5d_bp')) or existing.get('change_5d_bp')
+    merged['change_120d_bp'] = _coerce_float(payload.get('change_120d_bp')) or existing.get('change_120d_bp')
+    merged['trend'] = payload.get('trend', existing.get('trend', '未知'))
+    merged['source'] = _format_source_label(payload.get('source') or existing.get('source'))
+    merged['is_estimated'] = bool(payload.get('is_estimated', existing.get('is_estimated', False)))
+    merged['note'] = payload.get('note', existing.get('note'))
+    return merged
+
+
+def _merge_commodity_entry(existing: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    merged['symbol'] = payload.get('symbol', existing.get('symbol'))
+    merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
+    merged['current_price'] = _coerce_float(payload.get('current_price')) or existing.get('current_price')
+    merged['unit'] = payload.get('unit', existing.get('unit', ''))
+    merged['daily_change'] = _coerce_percent(payload.get('daily_change')) if 'daily_change' in payload else existing.get('daily_change')
+    merged['ytd_change'] = _coerce_percent(payload.get('ytd_change')) if 'ytd_change' in payload else existing.get('ytd_change')
+    merged['trend'] = payload.get('trend', existing.get('trend', '未知'))
+    merged['source'] = _format_source_label(payload.get('source') or existing.get('source'))
+    merged['timestamp'] = payload.get('timestamp') or existing.get('timestamp') or datetime.now().strftime("%Y-%m-%d")
+    merged['note'] = payload.get('note', existing.get('note'))
+    return merged
+
+
 def _merge_forex_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(orig)
     merged['pair'] = payload.get('pair', orig.get('pair'))
     merged['name'] = payload.get('name', orig.get('name', merged['pair']))
-    merged['current_rate'] = _coerce_float(payload.get('current_rate'))
+    merged['current_rate'] = _coerce_float(payload.get('current_rate')) or merged.get('current_rate')
     merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
     merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
     merged['trend'] = payload.get('trend', orig.get('trend', '未知'))
     merged['source'] = _format_source_label(payload.get('source'))
+    if merged['daily_change'] is None:
+        merged['daily_change'] = 0.0
+    if merged['change_120d'] is None:
+        merged['change_120d'] = 0.0
     return merged
 
 
@@ -461,9 +627,9 @@ def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "pair": pair,
         "name": payload.get('name', pair),
-        "current_rate": _coerce_float(payload.get('current_rate')),
-        "daily_change": _coerce_percent(payload.get('daily_change')),
-        "change_120d": _coerce_percent(payload.get('change_120d')),
+        "current_rate": _coerce_float(payload.get('current_rate')) or 0.0,
+        "daily_change": _coerce_percent(payload.get('daily_change')) or 0.0,
+        "change_120d": _coerce_percent(payload.get('change_120d')) or 0.0,
         "trend": payload.get('trend', '未知'),
         "source": _format_source_label(payload.get('source')),
     }

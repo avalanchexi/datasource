@@ -70,6 +70,8 @@
 
 19) **LC 分支同步**：LangChain 抽取路径也应用 score 过滤、参数透传、二步抽取、超时/重试策略。
 
+    - 已对 LC 分支补充：score>=0.5 过滤、域名/新鲜度过滤、extract 422 回退、llm_hard_timeout 包装；默认禁用，需 `--allow-langchain` 才能启用。
+
 20) **并发/速率上限**：配置 Tavily max_concurrency、DeepSeek semaphore、队列消费者数，防止配额/超额。
 
 21) **回归对比自动化**：提供脚本对比新运行与 20251202/20251203 基线的成功率、请求量、延迟、人工缺口，输出表格/JSON。
@@ -87,3 +89,56 @@
 27) **回归对比脚本**：新增 `scripts/compare_stage2_runs.py`，对比两次 Stage2 日志（成功率、cache_hit、score_filtered_drop、timeout/retry、tavily_extract_calls、per-type 成功率、延迟）。
 
 28) **文档同步**：更新 README/AGENTS/SCRIPTS 中的 Stage2 默认参数与运行示例（fund_flow_backend=tavily、deepseek-reasoner、timeout=10s、max_results/topic/language/search_depth），注明需 `PYTHONPATH=./src`。
+
+29) **Stage2 等待时间压缩（诊断→修复→验收）**：聚焦 DeepSeek/Tavily 阶段耗时过长问题，先做可观测诊断，再实施修复并回归。
+    - 诊断：收集近两次 Stage2 日志的 `avg_elapsed_ms/95p`、`timeout_count/retry_count`、`tavily_extract_calls`、`queue_dead_letters`，按任务类型拆分耗时；若日志缺 95p，先补统计。
+    - 修复措施候选：减少 DeepSeek 参与度（regex/fast_mode）、限定 `deepseek_max_concurrency`、启用/调优队列并发与重试、压缩 Tavily extract（禁用或 top1+raw_content）、清空代理或验证代理可用性。
+    - 验收：同日重复跑两次 Stage2，平均耗时下降 ≥20%，95p 下降 ≥15%，超时次数较基线下降 ≥50%；成功率不低于原始基线。
+    - 回归输出：在 `logs/stage2_unified_log_*.json` 补充/对比延迟统计，生成一页总结（可复用 compare_stage2_runs.py）。
+
+## 代码层面的可行优化（建议，落地需评估）
+- **Tavily extract 422 兜底**：在 `tavily_client.extract` 捕获 4xx/422 时自动回退“search-only”，并在 `_execute_tasks` 将 `note` 标记 `tavily_extract_422`，避免重复调用同 URL 的 extract。
+- **DeepSeek 超时硬控**：在 `_do_extract` 使用 `asyncio.wait_for` 包裹 `extractor.extract` 并尊重 CLI `--llm-hard-timeout`（当前部分路径未生效）；超时立即返回 regex_fallback，减少 30s 阻塞。
+- **资金流方向判定增强**：在 `_validate_fund_flow_extraction`/regex 路径增加关键词表（流入/净买入/净流出/卖出）和数值正负修正，避免“未能识别流入/流出方向”触发人工。
+- **缓存 key 扩展**：将 `time_range/topic/language/search_depth/extract_depth` 纳入 tavily cache key，避免参数变化导致缓存命中率下降或脏读。
+- **跳过已有值与占位识别**：`_has_non_placeholder_value` 增加对非 0 但缺趋势字段的判定；若仅缺 `trend` 可单独补方向，不再全量 DeepSeek。
+- **队列重试退避**：在 queue 消费者中对超时/429 使用指数退避（例如 0.5s,1s,2s），防止持续打爆配额。
+- **日志 95P 延迟输出**：在 summary 里对 `elapsed_ms` 计算 p50/p95，便于压缩等待时间的回归对比。
+
+- **Tavily extract 422 优化细化**：
+  - 输入约束：`extract` 仅传前 1–2 条高分 URL，过滤 PDF/失效/无 content 链接；对无法解析的 URL 直接跳过 extract。
+  - 失败降级：捕获 422 时立即回退 search-only，不再重试；在 `task_log`/`websearch_results` note 标记 `tavily_extract_422`，避免后续重复调用同 URL。
+  - 参数收紧：默认 `extract_depth=basic`，`include_raw_content=False`；高噪声任务再显式开启 raw_content(top1)。
+  - 观测与开关：summary 增加 `tavily_extract_422_count`；提供 CLI 开关 `--disable-extract` 与 `--extract-topk`（已有）组合，方便快速绕过。
+  - 配额/限流退避：extract 遇 422 视作软拒绝，单独限制并发(1–2)与重试(0)，并对后续任务短暂 sleep(0.5–1s) 退避，防止连续触发配额。
+  - 预校验：若 `results` 为空或缺 url/snippet/content/score，则跳过 extract，直接进入 regex/LLM 抽取，避免格式 422。
+
+- **DeepSeek 超时与模型降级（代码层优化）**：
+  - 默认模型切换为 `deepseek-chat`（兼容性更好，响应相对快），CLI 默认值与 README/AGENTS 同步；`--deepseek-model` 仍可覆盖。
+  - Timeout 收紧：`--deepseek-timeout` 默认 8s，`--llm-hard-timeout` 默认 10s，超过立即回退 regex，不再二次重试。
+  - 并发保护：`deepseek_max_concurrency` 默认 1；关键指标仍可通过 `--deepseek-serial-keys` 串行，避免限流导致的排队超时。
+  - 搜索失败即跳过 LLM：当 Tavily search 无结果或 extract 422/异常时，直接走 regex/人工，不再调用 DeepSeek，减少空跑等待。
+  - 输入裁剪：对传入 DeepSeek 的 snippets 只保留前 1–2 条高分文本，避免长上下文导致响应超时。
+
+  - **CLI 提示（422/降级）**：保留 `--disable-extract` 快捷关闭 Tavily extract；如需开启，建议配合 `--extract-topk 1`，出现 422 自动 search-only；LangChain 默认禁用，必须显式加 `--allow-langchain`。
+
+30) **暂缓使用 LangChain 抽取**：
+    - 默认不启用 `--extraction-backend langchain`，文档示例移除该选项。
+    - 若用户强制开启，入口先检查依赖；缺失则友好报错退出，不进入耗时流程。
+    - 在代码中增加保护：langchain 分支与主流程保持相同超时/并发/过滤参数，避免与 DeepSeek 路径不一致导致长时间悬挂。
+
+31) **配置一致性与回归验证补齐**：
+    - 文档同步：AGENTS/README/脚本示例更新默认值（deepseek-chat、timeout 8/10s、禁用 langchain、快速模式说明）。
+    - 观测指标：summary 增加 p50/p95、tavily_extract_422_count、DeepSeek timeout_count；task_log/websearch_results note 标记 422/深度超时类型。
+    - 回归测试：补最小测试/脚本覆盖超时、422、regex 快速模式路径，避免改完无自动验证。
+
+32) **数据准确性兜底增强**：
+    - 资金流方向判定：在 `_validate_fund_flow_extraction`/regex 路径增加方向关键词修正，减少 manual_required。
+    - trend 补全：已有数值但缺 trend 时轻量填充，避免重复触发 LLM。
+    - DeepSeek 不可用时自动 fallback：当无 key 或两次超时，直接切 regex，提供明确 CLI 开关。
+
+33) **健康检查补充**：
+    - 在 AGENTS/README 增加 DeepSeek/Tavily ping 脚本入口，便于运行前诊断网络/密钥。
+    - 可选：在 preflight 或单独脚本输出 ping 结果，失败则阻断后续 Stage2。
+
+34) **DeepSeek 短路与 regex 兜底**：当 Tavily search 无结果或 extract 返回 422/异常时，跳过 DeepSeek 直接走 regex/人工，note 标明 skip 原因；资金流 regex 补充方向推断，修正正负号以减少 manual_required。
