@@ -27,6 +27,33 @@ MONETARY_KEY_MAP = {
     "m2_growth": "m2",
 }
 
+# indicator → 类别映射，供 Stage2 results 转换
+INDICATOR_CATEGORY = {
+    # commodities
+    "GC=F": "commodities",
+    "CL=F": "commodities",
+    "BZ=F": "commodities",
+    "HG=F": "commodities",
+    "BCOM": "commodities",
+    "GSG": "commodities",
+    # forex
+    "USDCNY": "forex",
+    "USDCNH": "forex",
+    "DXY": "forex",
+    # bonds
+    "US10Y": "bonds",
+    "CN10Y": "bonds",
+    "CN10Y_CDB": "bonds",
+    # fund flow
+    "northbound": "fund_flow",
+    "southbound": "fund_flow",
+    "etf": "fund_flow",
+    # macro
+    "industrial": "macro_indicators",
+    "industrial_sales": "macro_indicators",
+    "bdi": "macro_indicators",
+}
+
 
 def _normalize_keyed_list(payload: Any, key_field: str) -> list:
     """接受 dict/list/None，统一为 list 并补齐 key_field。"""
@@ -60,9 +87,18 @@ def _remove_missing_item(metadata: Dict[str, Any], category: str, key: str) -> N
     missing = metadata.get('missing_items')
     if not missing or category not in missing:
         return
-    items = [item for item in missing[category] if item.get('key') != key]
-    if items:
-        missing[category] = items
+    cleaned = []
+    for item in missing[category]:
+        if isinstance(item, dict):
+            item_key = item.get('key') or item.get('indicator_key')
+            if item_key == key:
+                continue
+        else:
+            if item == key:
+                continue
+        cleaned.append(item)
+    if cleaned:
+        missing[category] = cleaned
     else:
         missing.pop(category, None)
 
@@ -130,6 +166,93 @@ def _normalize_fund_flow_payload(raw_key: str, payload: Dict[str, Any]) -> Dict[
     return normalized
 
 
+def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    将 Stage2 Unified 的 websearch_results（results 数组，含 task/extraction）转换为
+    inject_websearch_data_test.py 期望的 schema。
+    """
+    if "results" not in raw or not isinstance(raw.get("results"), list):
+        return raw
+    schema: Dict[str, Any] = {
+        "commodities": [],
+        "forex": [],
+        "bonds": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+    }
+
+    def _num(val):
+        try:
+            return float(val)
+        except Exception:
+            return None
+
+    for item in raw["results"]:
+        task = item.get("task") or {}
+        extraction = item.get("extraction") or {}
+        key = task.get("indicator_key")
+        if not key:
+            continue
+        cat = INDICATOR_CATEGORY.get(key)
+        if not cat:
+            continue
+        val = _num(extraction.get("value"))
+        if val is None:
+            continue
+        source = extraction.get("note") or extraction.get("source_url") or "MCP WebSearch自动抽取"
+        if cat == "commodities":
+            schema["commodities"].append(
+                {
+                    "symbol": key,
+                    "name": key,
+                    "current_price": val,
+                    "unit": task.get("unit") or "",
+                    "ytd_change": extraction.get("ytd_change"),
+                    "trend": "未知",
+                    "source": source,
+                }
+            )
+        elif cat == "forex":
+            schema["forex"].append(
+                {
+                    "pair": key,
+                    "name": key,
+                    "current_rate": val,
+                    "daily_change": extraction.get("daily_change"),
+                    "change_120d": extraction.get("change_120d"),
+                    "trend": extraction.get("trend") or "未知",
+                    "source": source,
+                }
+            )
+        elif cat == "bonds":
+            schema["bonds"].append(
+                {
+                    "symbol": key,
+                    "name": key,
+                    "current_yield": val,
+                    "change_5d_bp": extraction.get("change_5d_bp"),
+                    "change_120d_bp": extraction.get("change_120d_bp"),
+                    "trend": extraction.get("trend") or "未知",
+                    "source": source,
+                }
+            )
+        elif cat == "fund_flow":
+            # 单值无法拆 recent_5d/total_120d，跳过，仍留 gap_monitor 提醒人工
+            continue
+        elif cat == "macro_indicators":
+            schema["macro_indicators"][key] = {
+                "indicator_name": key,
+                "current_value": val,
+                "previous_value": extraction.get("previous_value"),
+                "change_rate": extraction.get("change_rate"),
+                "unit": task.get("unit") or "%",
+                "date": extraction.get("date") or "",
+                "source": source,
+            }
+    # 移除空类别，保持与原脚本兼容
+    return {k: v for k, v in schema.items() if v}
+
+
 def inject_websearch_data(market_data_path, websearch_path, output_path):
     """
     将WebSearch结果注入到市场数据JSON中
@@ -149,7 +272,9 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
     # 读取WebSearch结果
     print(f"[INFO] 读取WebSearch结果: {websearch_path}")
     with open(websearch_path, 'r', encoding='utf-8') as f:
-        websearch_data = json.load(f)
+        websearch_raw = json.load(f)
+    # 若为 Stage2 results 结构，先转换为 schema
+    websearch_data = _coerce_stage2_results_to_schema(websearch_raw)
     # 统一结构，容忍 {symbol: {...}} / list / None
     websearch_data['forex'] = _normalize_keyed_list(websearch_data.get('forex'), 'pair')
     websearch_data['bonds'] = _normalize_keyed_list(websearch_data.get('bonds'), 'symbol')
@@ -302,7 +427,9 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
         if not updated:
             market_data.setdefault('commodities', []).append(_merge_commodity_entry({}, commodity_data))
         inject_count += 1
-        print(f"  [OK] {commodity_data['name']}: {commodity_data.get('unit','')}{commodity_data['current_price']:.2f} (YTD {commodity_data.get('ytd_change', 0):+.2f}%)")
+        price_val = commodity_data.get('current_price') or 0.0
+        ytd_val = commodity_data.get('ytd_change') or 0.0
+        print(f"  [OK] {commodity_data['name']}: {commodity_data.get('unit','')}{price_val:.2f} (YTD {ytd_val:+.2f}%)")
         _remove_missing_item(metadata, 'commodities', symbol)
         _remove_top_missing(market_data, symbol)
 
@@ -421,11 +548,14 @@ def _apply_macro_entry(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
     entry['unit'] = payload.get('unit', entry.get('unit', ''))
     entry['date'] = payload.get('date', entry.get('date'))
     entry['source'] = _format_source_label(payload.get('source'))
-    entry['note'] = payload.get('note', entry.get('note'))
+    # 确保 note 为字符串，避免 None 参与字符串拼接时报错
+    note_val = payload.get('note', entry.get('note'))
+    entry['note'] = note_val if isinstance(note_val, str) else ''
     entry['is_estimated'] = False
     # 兜底回填前值：若有 current_value + change_rate 但前值缺失，用差值推算；若连 change_rate 也无，则假定前值=当前值
     if entry['previous_value'] is None and entry['current_value'] is not None:
-        entry.setdefault('note', '')
+        if not entry.get('note'):
+            entry['note'] = ''
         if entry['change_rate'] is not None:
             try:
                 entry['previous_value'] = round(entry['current_value'] - entry['change_rate'], 4)
@@ -612,13 +742,13 @@ def _merge_forex_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> Dict[st
     merged['name'] = payload.get('name', orig.get('name', merged['pair']))
     merged['current_rate'] = _coerce_float(payload.get('current_rate')) or merged.get('current_rate')
     merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+    if merged['daily_change'] is None:
+        merged['daily_change'] = orig.get('daily_change', 0.0)
     merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
+    if merged['change_120d'] is None:
+        merged['change_120d'] = orig.get('change_120d', 0.0)
     merged['trend'] = payload.get('trend', orig.get('trend', '未知'))
     merged['source'] = _format_source_label(payload.get('source'))
-    if merged['daily_change'] is None:
-        merged['daily_change'] = 0.0
-    if merged['change_120d'] is None:
-        merged['change_120d'] = 0.0
     return merged
 
 
@@ -627,7 +757,7 @@ def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "pair": pair,
         "name": payload.get('name', pair),
-        "current_rate": _coerce_float(payload.get('current_rate')) or 0.0,
+        "current_rate": _coerce_float(payload.get('current_rate')),
         "daily_change": _coerce_percent(payload.get('daily_change')) or 0.0,
         "change_120d": _coerce_percent(payload.get('change_120d')) or 0.0,
         "trend": payload.get('trend', '未知'),

@@ -121,7 +121,7 @@
   ```
   - 商品行情不走 Yahoo/Investing 兜底；北向/南向/ETF 资金流写占位符，后续必补。
 
-- **Stage2** Tavily 增强（推荐速度优先配置）：
+- **Stage2** Tavily 增强（推荐速度优先配置；同日只跑 1 次 Tavily，失败转 Stage2.5/MCP 补数）：
   ```bash
   PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
     --market-data data/${DATE_NH}_market_data.json \
@@ -136,25 +136,47 @@
     --queue-retry-limit 0 \
     --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
     --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
-    --log-output logs/stage2_unified_log_${DATE_NH}.json \
-    --gap-monitor reports/gap_monitor_${DATE_NH}.json
+  --log-output logs/stage2_unified_log_${DATE_NH}.json \
+  --gap-monitor reports/gap_monitor_${DATE_NH}.json
   ```
   - 使用 `--extraction-backend regex --disable-extract` 跳过 DeepSeek/Tavily extract，30–60 秒完成。
+  - 若代理导致 TLS/证书报错，优先直连：在命令前加 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`；需要高精度时去掉 `--disable-extract` 让 DeepSeek 抽取生效。
   - 若需更高精度：改为 `--extraction-backend deepseek --deepseek-model deepseek-chat --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`；langchain 默认禁用，如需实验必须加 `--allow-langchain`。
-  - Tavily extract 422 频发时：用 `--disable-extract` 或收紧 `--extract-topk 1`，可先 search-only，避免 422 软拒绝。
+  - Tavily extract 422 频发时：用 `--disable-extract` 或收紧 `--extract-topk 1`，可先 search-only，避免 422 软拒绝；当日不要重复跑 Stage2，缺口改用 Stage2.5 `_manual.json` 或 MCP 注入。
   - LangChain 默认禁用；如需实验，必须显式传 `--allow-langchain`（自备依赖）。
   - 仅重试资金流：加 `--tasks northbound,southbound,etf`；失败落 `gap_monitor`，转 Stage2.5。
+
+- **Stage2 优化命令（防 Tavily extract 422，保持 DeepSeek 抽取；同日只跑一次 Tavily）**：
+  ```bash
+  PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
+    --market-data data/${DATE_NH}_market_data.json \
+    --output data/${DATE_NH}_market_data_stage2.json \
+    --phase all --execute-search \
+    --fund-flow-backend tavily \
+    --extraction-backend deepseek \
+    --disable-extract \
+    --deepseek-timeout 8 \
+    --deepseek-max-concurrency 1 \
+    --queue-retry-limit 0 \
+    --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
+    --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
+    --log-output logs/stage2_unified_log_${DATE_NH}_rerun.json \
+    --gap-monitor reports/gap_monitor_${DATE_NH}_rerun.json
+  ```
+  - 适用：Tavily extract 多次 422 或需快速验证搜索相关性；跳过 extract 直接用 DeepSeek/regex 处理 snippets。
+  - 可选：如需更高并发可加 `--use-queue --queue-concurrency 3`；若只补资金流，加 `--tasks northbound,southbound,etf`。
 
 - **Stage2.5 WebSearch 手工注入（补缺口）**：
   - 汇总实时搜索写入 `reports/websearch_results_${DATE_NH}_manual.json`（遵循 fund_flow/commodities/forex/bonds 结构与来源标注）。
   ```bash
-  PYTHONPATH=. python inject_websearch_data_test.py \
+  PYTHONPATH=./src python inject_websearch_data_test.py \
     data/${DATE_NH}_market_data_stage2.json \
     reports/websearch_results_${DATE_NH}_manual.json \
     data/${DATE_NH}_market_data_complete.json
   ```
   - 成功后 `metadata.missing_items`、`reports/gap_monitor_${DATE_NH}.json` 应为空；零值标记 `异常零值-需核查`。
   - （可选）如需自动结果：将 `_manual.json` 换成 `_auto.json`，手工编辑后反复注入。
+  - 手工补数应尽量填入真实数字；避免保留 0/None 占位（脚本会将 0 视为缺口）。如仍缺，标注 `异常零值-需核查`，并在 note 写明来源与时间。
 
 - **Stage3** Pring 分析：
   ```bash
@@ -177,6 +199,11 @@
 ### 报告生成时的 Plan 要求
 - 生成日报/背景扫描报告前，先列出 3–5 步的 plan（覆盖 Stage2.5 补数、Stage3 分析、Report 输出等），不得使用单步 plan。
 - 若任务非常简单（如仅重跑生成已齐全数据的报告），可注明“任务简单，按既定流程直接执行”，但需在回复中显式说明未使用 plan 的理由。
+
+### 报告生成快捷流程（2025-12-09 更新）
+- Stage2 产出的 `reports/websearch_results_${DATE}_auto.json`（含 `results` 数组）可直接喂给 `inject_websearch_data_test.py`，脚本会自动转换为 schema 并注入；若终端打印 “注入数据项: 0”，说明结果无可解析数值或文件为空，需改用手工 schema 版 `_manual.json`。
+- fund_flow 仍需真实数字：若 Tavily 抽取 422 或无值，请手工填 `recent_5d/total_120d/trend/source` 后再注入，确保 `metadata.data_completeness≥0.8` 且 `gap_monitor` 为空。
+- 注入成功后再跑 Stage3 与生成报告命令，避免报告出现 “N/A（待 WebSearch）/无数据”。
 
 ### Stage3 estimated fallback
 - Add `--allow-estimated` to Stage3 to let `is_estimated=True` data score; values must be non-null.
@@ -231,10 +258,12 @@ if comp < 0.8:
 - Turbo no-LLM: `--extraction-backend regex --queue-concurrency 6 --deepseek-max-concurrency 0 --deepseek-timeout 8 --queue-retry-limit 0` (faster, slightly less accurate).
 - With LLM: `--deepseek-timeout 8 --queue-concurrency 5 --deepseek-max-concurrency 4 --queue-retry-limit 0`; consider two-pass `--phase essential` then `--phase assets`.
 - Reduce Tavily extract load: set `top_for_extract = snippets[:2]` or `extract_depth="basic"` for commodities/forex to avoid 422/timeout.
+- 中文高频指标（USDCNY/USDCNH/CN10Y/CN10Y_CDB/北向/南向/ETF/两融/BDI）：已在 search_profiles 增补 stats.gov.cn / ce.cn / people.com.cn / cfets.com.cn / data.eastmoney.com / balticexchange.com，优先使用这些域名，避免匹配到英文新闻无数值。
 - Reuse cache: keep `reports/tavily_cache.sqlite`; second run only gaps; watch `cache_hit_rate`.
 
 ### Stage2 性能瓶颈与快速模式
 - 常见瓶颈：Tavily extract 422；DeepSeek 请求超时（单指标可耗时 30–40s）；并发受限或串行导致总耗时上升。
+- Tavily 调用策略：**当日 Stage2 只跑 1 次 tavily search/extract**，失败或 422 不要重复跑 Stage2；改用 Stage2.5 WebSearch/manual JSON（`reports/websearch_results_${DATE}_manual.json`）或 MCP 兜底，再注入→Stage3；`--resume-from-task-file` 仅用于跨天/中断恢复。
 - 快速绕行：`--extraction-backend regex --disable-extract --queue-retry-limit 0 --deepseek-max-concurrency 0`，资金流仍用 tavily，整体 30–60s 完成。
 - 需要方向/高精度时再移除上述两参数启用 DeepSeek（3–5 分钟），并适当调低 `--deepseek-timeout/--deepseek-max-concurrency`。
 
