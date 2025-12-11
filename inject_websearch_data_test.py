@@ -285,10 +285,12 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
 
     # 1. 注入宏观指标
     print("\n[STEP 1] 注入宏观指标数据...")
+    macro_section = market_data.setdefault('macro_indicators', {})
     for key, payload in websearch_data.get('macro_indicators', {}).items():
-        if key not in market_data.get('macro_indicators', {}):
-            continue
-        if _apply_macro_entry(market_data['macro_indicators'][key], payload):
+        if key not in macro_section:
+            # 缺失即创建占位，避免 industrial_sales 等被跳过
+            macro_section[key] = _create_macro_placeholder(key, payload, metadata)
+        if _apply_macro_entry(macro_section[key], payload):
             inject_count += 1
             print(f"  [OK] {payload.get('indicator_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'macro_indicators', key)
@@ -570,6 +572,9 @@ def _apply_macro_entry(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
             if entry['note']:
                 entry['note'] += '；'
             entry['note'] += 'auto-backfilled previous_value=current_value (no change_rate provided)'
+    # 若仍无有效 current_value，则视为缺失，抛出异常阻断流程，避免 Stage3 出现 N/A
+    if entry['current_value'] is None:
+        raise ValueError(f"macro_indicators.{entry.get('indicator_name', 'unknown')} current_value is missing after injection")
     return True
 
 
@@ -585,6 +590,22 @@ def _create_monetary_placeholder(key: str, payload: Dict[str, Any], metadata: Di
         "source": "待MCP WebSearch获取(websearch导入)",
         "note": payload.get('note'),
         "is_estimated": True
+    }
+
+
+def _create_macro_placeholder(key: str, payload: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """缺失宏观指标时创建占位，便于后续注入而不跳过"""
+    default_date = payload.get('date') or metadata.get('date') or metadata.get('end_date') or ""
+    return {
+        "indicator_name": payload.get('indicator_name', key),
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": payload.get('unit', payload.get('unit', '%')),
+        "date": default_date,
+        "source": "MCP WebSearch待补充",
+        "note": payload.get('note'),
+        "is_estimated": True,
     }
 
 
@@ -712,8 +733,12 @@ def _merge_bond_entry(existing: Dict[str, Any], payload: Dict[str, Any]) -> Dict
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
     merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
     merged['current_yield'] = _coerce_float(payload.get('current_yield')) or existing.get('current_yield')
-    merged['change_5d_bp'] = _coerce_float(payload.get('change_5d_bp')) or existing.get('change_5d_bp')
-    merged['change_120d_bp'] = _coerce_float(payload.get('change_120d_bp')) or existing.get('change_120d_bp')
+    merged['change_5d_bp'] = _coerce_float(payload.get('change_5d_bp'))
+    if merged['change_5d_bp'] is None:
+        merged['change_5d_bp'] = existing.get('change_5d_bp', 0.0)
+    merged['change_120d_bp'] = _coerce_float(payload.get('change_120d_bp'))
+    if merged['change_120d_bp'] is None:
+        merged['change_120d_bp'] = existing.get('change_120d_bp', 0.0)
     merged['trend'] = payload.get('trend', existing.get('trend', '未知'))
     merged['source'] = _format_source_label(payload.get('source') or existing.get('source'))
     merged['is_estimated'] = bool(payload.get('is_estimated', existing.get('is_estimated', False)))
@@ -727,8 +752,12 @@ def _merge_commodity_entry(existing: Dict[str, Any], payload: Dict[str, Any]) ->
     merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
     merged['current_price'] = _coerce_float(payload.get('current_price')) or existing.get('current_price')
     merged['unit'] = payload.get('unit', existing.get('unit', ''))
-    merged['daily_change'] = _coerce_percent(payload.get('daily_change')) if 'daily_change' in payload else existing.get('daily_change')
-    merged['ytd_change'] = _coerce_percent(payload.get('ytd_change')) if 'ytd_change' in payload else existing.get('ytd_change')
+    merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+    if merged['daily_change'] is None:
+        merged['daily_change'] = existing.get('daily_change', 0.0)
+    merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))
+    if merged['ytd_change'] is None:
+        merged['ytd_change'] = existing.get('ytd_change', 0.0)
     merged['trend'] = payload.get('trend', existing.get('trend', '未知'))
     merged['source'] = _format_source_label(payload.get('source') or existing.get('source'))
     merged['timestamp'] = payload.get('timestamp') or existing.get('timestamp') or datetime.now().strftime("%Y-%m-%d")

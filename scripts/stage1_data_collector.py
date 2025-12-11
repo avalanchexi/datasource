@@ -464,41 +464,51 @@ class MarketDataCollector:
         try:
             import pandas as pd
             import tushare as ts
-            pro = ts.pro_api()
+            token = os.getenv("TUSHARE_TOKEN")
+            pro = ts.pro_api(token) if token else ts.pro_api()
             ts_code = f"{symbol}.SH" if symbol.startswith("0") else f"{symbol}.SZ"
-            df = pro.index_daily(ts_code=ts_code, start_date=start_date.replace("-", ""), end_date=end_date.replace("-", ""))
-            if df is None or df.empty:
-                return None
-            df = df.sort_values("trade_date")
-            df["close"] = pd.to_numeric(df["close"], errors="coerce")
-            df = df.dropna(subset=["close"])
-            if df.empty:
-                return None
-            closes = df["close"]
-            current = float(closes.iloc[-1])
-            # 5日、120日涨跌
-            change_5d = (current / closes.iloc[-6] - 1) * 100 if len(closes) > 6 else 0.0
-            change_120d = (current / closes.iloc[-121] - 1) * 100 if len(closes) > 121 else 0.0
-            ma50 = closes.rolling(50).mean().iloc[-1] if len(closes) >= 50 else closes.mean()
-            ma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else ma50
-            above_ma50 = current > (ma50 or current)
-            above_ma200 = current > (ma200 or current)
-            ma50_slope = float(closes.rolling(50).mean().diff().iloc[-1] or 0.0) if len(closes) >= 51 else 0.0
-            vol30 = float(closes.pct_change().rolling(30).std().iloc[-1] * (252 ** 0.5) * 100) if len(closes) > 30 else 0.0
-            return StockIndexData(
-                symbol=symbol,
-                name=name,
-                current_price=current,
-                change_5d=change_5d,
-                change_120d=change_120d,
-                above_ma50=above_ma50,
-                above_ma200=above_ma200,
-                ma50_slope=ma50_slope,
-                volatility_30d=vol30,
-                trend_score=50,
-                trend_label="中性",
-                source="TuShare index_daily(fallback)"
-            )
+            last_error = None
+            for attempt in range(3):
+                try:
+                    df = pro.index_daily(ts_code=ts_code, start_date=start_date.replace("-", ""), end_date=end_date.replace("-", ""))
+                    if df is None or df.empty:
+                        raise ValueError("empty dataframe")
+                    df = df.sort_values("trade_date")
+                    df["close"] = pd.to_numeric(df["close"], errors="coerce")
+                    df = df.dropna(subset=["close"])
+                    if df.empty:
+                        raise ValueError("close series empty")
+                    closes = df["close"]
+                    current = float(closes.iloc[-1])
+                    change_5d = (current / closes.iloc[-6] - 1) * 100 if len(closes) > 6 else 0.0
+                    change_120d = (current / closes.iloc[-121] - 1) * 100 if len(closes) > 121 else 0.0
+                    ma50 = closes.rolling(50).mean().iloc[-1] if len(closes) >= 50 else closes.mean()
+                    ma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else ma50
+                    above_ma50 = current > (ma50 or current)
+                    above_ma200 = current > (ma200 or current)
+                    ma50_slope = float(closes.rolling(50).mean().diff().iloc[-1] or 0.0) if len(closes) >= 51 else 0.0
+                    vol30 = float(closes.pct_change().rolling(30).std().iloc[-1] * (252 ** 0.5) * 100) if len(closes) > 30 else 0.0
+                    return StockIndexData(
+                        symbol=symbol,
+                        name=name,
+                        current_price=current,
+                        change_5d=change_5d,
+                        change_120d=change_120d,
+                        above_ma50=above_ma50,
+                        above_ma200=above_ma200,
+                        ma50_slope=ma50_slope,
+                        volatility_30d=vol30,
+                        trend_score=50,
+                        trend_label="中性",
+                        source="TuShare index_daily(fallback)"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    await asyncio.sleep(1)
+                    continue
+            if last_error:
+                print(f"    [WARN] index_daily fallback retries exhausted for {name}: {last_error}")
+            return None
         except Exception:
             return None
 
@@ -699,18 +709,29 @@ class MarketDataCollector:
         """尝试获取最近开市日的北向/南向资金（十亿元）"""
         try:
             import tushare as ts  # 局部导入，避免环境缺少时报错
-            pro = ts.pro_api()
+            token = os.getenv("TUSHARE_TOKEN")
+            pro = ts.pro_api(token) if token else ts.pro_api()
             open_dates = self._get_recent_open_dates(count=5)
+            last_error = None
             for trade_date in open_dates[::-1]:  # 从最近往前最多 5 个开市日
-                df = pro.moneyflow_hsgt(trade_date=trade_date)
-                if df is None or df.empty:
-                    continue
-                north = df.iloc[0].get('north_money')
-                south = df.iloc[0].get('south_money')
-                nb_val = float(north) if north is not None else None  # TuShare 单位：亿元
-                sb_val = float(south) if south is not None else None
-                if nb_val is not None or sb_val is not None:
-                    return nb_val, sb_val
+                for attempt in range(3):
+                    try:
+                        df = pro.moneyflow_hsgt(trade_date=trade_date)
+                        if df is None or df.empty:
+                            break
+                        north = df.iloc[0].get('north_money')
+                        south = df.iloc[0].get('south_money')
+                        nb_val = float(north) if north is not None else None  # TuShare 单位：亿元
+                        sb_val = float(south) if south is not None else None
+                        if nb_val is not None or sb_val is not None:
+                            return nb_val, sb_val
+                        break
+                    except Exception as exc:  # noqa: BLE001
+                        last_error = exc
+                        await asyncio.sleep(1)
+                # 尝试完此交易日继续往前
+            if last_error:
+                print(f"  [WARN] moneyflow_hsgt retries exhausted: {last_error}")
             return None, None
         except Exception:
             return None, None
@@ -1718,10 +1739,24 @@ class MarketDataCollector:
 async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='Stage 1: 市场数据收集器')
-    parser.add_argument('--date', required=True, help='结束日期 (YYYY-MM-DD)')
+    parser.add_argument('--date', required=True, help='结束日期 (YYYY-MM-DD 或 YYYYMMDD)')
     parser.add_argument('--output', help='输出JSON文件路径 (默认: data/YYYYMMDD_market_data.json)')
 
     args = parser.parse_args()
+
+    def _normalize_date_str(date_text: str) -> str:
+        """
+        接受 YYYY-MM-DD / YYYYMMDD，标准化为 YYYY-MM-DD。
+        若格式不合法则抛出 ValueError。
+        """
+        candidates = ["%Y-%m-%d", "%Y%m%d"]
+        for fmt in candidates:
+            try:
+                dt = datetime.strptime(date_text.strip(), fmt)
+                return dt.strftime("%Y-%m-%d")
+            except ValueError:
+                continue
+        raise ValueError(f"无法解析日期 {date_text}，请使用 YYYY-MM-DD 或 YYYYMMDD")
 
     def _resolve_last_trading_day(target_date: str) -> str:
         """
@@ -1756,10 +1791,17 @@ async def main():
         output_dir.mkdir(exist_ok=True)
         output_path = output_dir / 'market_data.json'
 
+    # 统一日期格式，容忍 YYYYMMDD
+    try:
+        normalized_date = _normalize_date_str(args.date)
+    except ValueError as ve:
+        print(f"[ERROR] {ve}")
+        return
+
     # 若传入日期为休市日，则回退到最近交易日
-    trading_date = _resolve_last_trading_day(args.date)
-    if trading_date != args.date:
-        print(f"[INFO] 目标日期 {args.date} 为休市日，自动回退至最近交易日 {trading_date}")
+    trading_date = _resolve_last_trading_day(normalized_date)
+    if trading_date != normalized_date:
+        print(f"[INFO] 目标日期 {normalized_date} 为休市日，自动回退至最近交易日 {trading_date}")
     else:
         print(f"[INFO] 使用交易日: {trading_date}")
 

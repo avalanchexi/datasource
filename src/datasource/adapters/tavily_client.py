@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from typing import Any, Dict, List, Optional
 
 try:  # pragma: no cover - optional dependency
@@ -40,6 +41,7 @@ class AsyncTavilyClient:
         cache: Optional[Any] = None,
         default_search_depth: str = "basic",
         proxies: Optional[Dict[str, str]] = None,
+        verify: Optional[Any] = True,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -51,7 +53,31 @@ class AsyncTavilyClient:
         self.cache = cache
         self.default_search_depth = default_search_depth
         self.proxies = proxies
+        self.verify = self._resolve_verify(verify)
         self._client: Optional[Any] = None
+
+    @staticmethod
+    def _resolve_verify(verify: Optional[Any]) -> Any:
+        """
+        解析 SSL 校验配置：
+        - 环境变量 TAVILY_VERIFY 支持 false/0/no/off 关闭校验；
+          也可传 CA 路径。
+        - 环境变量 TAVILY_CA_BUNDLE 提供自定义 CA 路径。
+        """
+        env_verify = os.getenv("TAVILY_VERIFY")
+        env_ca = os.getenv("TAVILY_CA_BUNDLE")
+        if env_verify:
+            flag = env_verify.strip().lower()
+            if flag in {"0", "false", "no", "off"}:
+                return False
+            # 若传入路径，直接返回字符串
+            if os.path.exists(env_verify):
+                return env_verify
+        if verify is None:
+            verify = True
+        if env_ca and os.path.exists(env_ca):
+            return env_ca
+        return verify
 
     async def __aenter__(self) -> "AsyncTavilyClient":
         if httpx is None:
@@ -63,11 +89,13 @@ class AsyncTavilyClient:
             pool=None,
         )
         try:
-            self._client = httpx.AsyncClient(timeout=timeout_cfg, proxies=self.proxies)
+            self._client = httpx.AsyncClient(timeout=timeout_cfg, proxies=self.proxies, verify=self.verify)
         except TypeError:
             # 兼容老版本 httpx 无 proxies 参数
             logger.warning("httpx 版本不支持 proxies 参数，回退使用环境变量代理")
-            self._client = httpx.AsyncClient(timeout=timeout_cfg)
+            self._client = httpx.AsyncClient(timeout=timeout_cfg, verify=self.verify)
+        if self.verify is False:
+            logger.warning("Tavily SSL 验证已关闭（开发环境专用），请在生产环境提供有效 CA。")
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
@@ -90,10 +118,10 @@ class AsyncTavilyClient:
                 pool=None,
             )
             try:
-                self._client = httpx.AsyncClient(timeout=timeout_cfg, proxies=self.proxies)
+                self._client = httpx.AsyncClient(timeout=timeout_cfg, proxies=self.proxies, verify=self.verify)
             except TypeError:
                 logger.warning("httpx 版本不支持 proxies 参数，回退使用环境变量代理")
-                self._client = httpx.AsyncClient(timeout=timeout_cfg)
+                self._client = httpx.AsyncClient(timeout=timeout_cfg, verify=self.verify)
         return self._client
 
     async def search(
