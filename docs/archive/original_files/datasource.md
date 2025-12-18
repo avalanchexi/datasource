@@ -72,11 +72,12 @@ Both data sources can provide essential information for `持仓股20250718.xls`:
 # Example integration pattern
 import akshare as ak
 import tushare as ts
+import os
 
 class ExternalDataCollector:
     def __init__(self):
         # Initialize API connections
-        self.ts_pro = ts.pro_api('your_token_here')
+        self.ts_pro = ts.pro_api(os.getenv('TUSHARE_TOKEN'))
   
     def get_stock_basic_info(self, symbol):
         # Fetch current price, volume, market cap

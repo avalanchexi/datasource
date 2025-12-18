@@ -1,12 +1,11 @@
 # AI执行背景扫描报告检查清单
 
-**执行日期**: YYYY-MM-DD
-**目标报告**: YYYYMMDD背景扫描120.md
-**AI执行开始时间**: HH:MM
+**版本**: V4.0 - 与CLAUDE.md/AGENTS.md流水线一致
+**更新日期**: 2025-12-09
 
 ---
 
-## 🎯 执行总览
+## 执行总览
 
 ### 用户指令
 ```
@@ -14,239 +13,182 @@
 ```
 
 ### 执行计划
-- **数据窗口**: [起始日期] 至 [结束日期] (120个自然日)
-- **预期时间**: 45-60分钟
+- **数据窗口**: 120个自然日
+- **预期时间**: 3-5分钟
 - **输出文件**: `reports/YYYYMMDD背景扫描120.md`
 
 ---
 
-## 📋 阶段执行检查清单
+## 阶段执行检查清单
 
-### ✅ 阶段1: 环境准备与验证 (5分钟)
+### Stage 1: API数据收集 (30-40s)
 
-**Todo创建**:
-- [ ] 使用TodoWrite创建5个阶段任务
-- [ ] 任务状态正确设置(pending/in_progress/completed)
-
-**环境验证**:
-- [ ] `.env`文件存在且配置正确
-- [ ] `scripts/utility/background_scan_120d_generator.py`存在
-- [ ] 数据源连接测试通过
-- [ ] Python依赖可用
-
-**Bash命令执行**:
+**命令**:
 ```bash
-ls -la .env
-ls scripts/utility/background_scan_120d_generator.py
-python -c "from datasource import get_manager; print('DataSource OK')"
+DATE=YYYYMMDD
+python scripts/stage1_data_collector.py --date $DATE --output data/${DATE}_market_data.json
 ```
 
-**完成标志**:
-- [ ] Todo显示"阶段1完成"
-- [ ] 环境验证无错误
+**检查点**:
+- [ ] 输出文件 `data/${DATE}_market_data.json` 存在
+- [ ] A股指数数据（000001, 000300, 000016, 399001, 399006, 000905）
+- [ ] 美股指数数据（SPX, DJI, IXIC）
+- [ ] 基础汇率/债券占位符已创建
 
 ---
 
-### ✅ 阶段2: 数据收集与计算 (15分钟)
+### Stage 2: Tavily+DeepSeek增强 (90-150s)
 
-**日期计算**:
-- [ ] 正确计算120日数据窗口
-- [ ] 起始日期 = 目标日期 - 120天
+**命令**:
+```bash
+PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
+  --market-data data/${DATE}_market_data.json \
+  --output data/${DATE}_market_data_stage2.json \
+  --execute-search --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
+  --websearch-results reports/websearch_results_${DATE}_auto.json \
+  --gap-monitor reports/gap_monitor_${DATE}.json
+```
 
-**脚本配置更新**:
-- [ ] 使用Edit工具修改`self.end_date`
-- [ ] 使用Edit工具修改`self.start_date`
-- [ ] 使用Edit工具修改`report_filename`
+**快速模式（可选，30-60s）**:
+```bash
+PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
+  --market-data data/${DATE}_market_data.json \
+  --output data/${DATE}_market_data_stage2.json \
+  --execute-search --extraction-backend regex --disable-extract
+```
 
-**数据收集执行**:
-- [ ] 运行background_scan_120d_generator.py成功
-- [ ] 生成初始报告文件
-- [ ] 获取到核心指数数据
-
-**数据收集范围验证**:
-- [ ] 股票指数: 沪深300、上证50、创业板指、深证成指、上证指数
-- [ ] 商品基准: WTI原油、Brent原油、COMEX铜、现货黄金、BCOM(GSG代理)
-- [ ] 普林格分析: 库存周期矫正完成
-
-**完成标志**:
-- [ ] 报告文件存在于`reports/`目录
-- [ ] Todo显示"阶段2完成"
-
----
-
-### ✅ 阶段3: 缺失数据补充 (20分钟)
-
-**N/A值分析**:
-- [ ] 使用Read工具读取报告
-- [ ] 识别所有N/A、"数据获取中"、"数据接入中"
-
-**股票指数数据补充**:
-- [ ] WebSearch搜索沪深300最新数据
-- [ ] WebFetch从investing.com获取数据
-- [ ] 补充原油/金属/BCOM商品数据
-
-**汇率数据补充**:
-- [ ] 获取USD/CNY汇率数据
-- [ ] 获取美元指数(DXY)数据
-- [ ] WebFetch从cn.investing.com获取
-
-**债券收益率补充**:
-- [ ] 获取中国10年期国债收益率
-- [ ] 获取美国10年期国债收益率
-- [ ] WebFetch从investing.com获取
-
-**资金流向数据补充**:
-- [ ] 搜索北向资金流向数据
-- [ ] 搜索融资融券余额数据
-- [ ] WebFetch从data.eastmoney.com获取
-
-**财经要闻收集**:
-- [ ] WebSearch搜索当日财经要闻
-- [ ] WebFetch从wallstreetcn.com获取
-- [ ] 整理5-10条重要新闻
-
-**数据源使用记录**:
-- [ ] investing.com使用次数: ___
-- [ ] 东方财富网使用次数: ___
-- [ ] 华尔街见闻使用次数: ___
-- [ ] WebSearch使用次数: ___
-
-**完成标志**:
-- [ ] 所有主要N/A值已补充
-- [ ] Todo显示"阶段3完成"
+**检查点**:
+- [ ] 输出文件 `data/${DATE}_market_data_stage2.json` 存在
+- [ ] `reports/websearch_results_${DATE}_auto.json` 生成
+- [ ] 检查 `reports/gap_monitor_${DATE}.json` 是否有缺口
 
 ---
 
-### ✅ 阶段4: 报告优化与完善 (10分钟)
+### Stage 2+ (可选): 价格兜底
 
-**批量内容更新**:
-- [ ] 使用MultiEdit更新市场结论要点
-- [ ] 使用MultiEdit更新股票市场表格
-- [ ] 使用MultiEdit更新商品与黄金表格
-- [ ] 使用MultiEdit更新汇率变化表格
-- [ ] 使用MultiEdit更新债券收益率表格
-- [ ] 使用MultiEdit更新资金流向表格
-- [ ] 使用MultiEdit更新财经要闻章节
+**命令**:
+```bash
+PYTHONPATH=. python scripts/fill_market_data_from_yahoo.py \
+  --input data/${DATE}_market_data_stage2.json \
+  --output data/${DATE}_market_data_stage2_filled.json
+```
 
-**市场结论完善**:
-- [ ] 生成3-6条核心市场观点
-- [ ] 包含主要指数表现
-- [ ] 包含汇率/债券关键变化
-- [ ] 包含普林格阶段判断
-
-**格式标准化验证**:
-- [ ] 百分比保留1位小数 (如: -2.4%)
-- [ ] 基点保留1位小数 (如: +15.0bp)
-- [ ] 价格保留2位小数 (如: 3156.78)
-- [ ] 斜率保留4位小数 (如: +0.1234)
-
-**完成标志**:
-- [ ] 报告内容丰富完整
-- [ ] 格式规范统一
-- [ ] Todo显示"阶段4完成"
+**检查点**:
+- [ ] 商品价格已填充（Gold, Oil, Copper等）
+- [ ] 债券收益率已填充
 
 ---
 
-### ✅ 阶段5: 质量验证与交付 (5分钟)
+### Stage 2.5: WebSearch注入
 
-**结构完整性检查**:
-- [ ] 一、市场结论要点
-- [ ] 二、股票市场综述
-- [ ] 三、商品与黄金
-- [ ] 四、汇率变化
-- [ ] 五、利率与债券收益率
-- [ ] 六、资金流向综述
-- [ ] 七、财经要闻
-- [ ] 八、普林格阶段推断
-- [ ] 九、附注说明
+**命令**:
+```bash
+python inject_websearch_data_test.py \
+  data/${DATE}_market_data_stage2_filled.json \
+  reports/websearch_results_${DATE}_auto.json \
+  data/${DATE}_market_data_complete.json
+```
 
-**数据质量验证**:
-- [ ] 表格无N/A值
-- [ ] 数值格式正确
-- [ ] 时间戳准确
-- [ ] 数据源引用完整
-
-**内容质量检查**:
-- [ ] 市场结论要点3-6条
-- [ ] 财经要闻5-10条
-- [ ] 普林格分析包含库存周期矫正
-- [ ] 所有表格数据完整
-
-**合规性检查**:
-- [ ] 包含"本报告仅供研究与教学参考"
-- [ ] 包含"不构成任何投资建议"
-- [ ] 包含"投资有风险，决策需谨慎"
-- [ ] 无投资建议表述
-
-**最终交付**:
-- [ ] 更新所有Todo状态为completed
-- [ ] 生成执行总结
-- [ ] 提供报告路径
-- [ ] 提供核心发现摘要
-
-**完成标志**:
-- [ ] 质量验证全部通过
-- [ ] Todo列表全部完成
-- [ ] 交付总结生成
+**检查点**:
+- [ ] `data/${DATE}_market_data_complete.json` 生成
+- [ ] 注入数据项 > 0
+- [ ] `metadata.data_completeness` >= 0.8
 
 ---
 
-## 📊 执行统计
+### Stage 3: Pring分析 (15-25s)
 
-### 时间记录
-- **阶段1完成时间**: HH:MM
-- **阶段2完成时间**: HH:MM
-- **阶段3完成时间**: HH:MM
-- **阶段4完成时间**: HH:MM
-- **阶段5完成时间**: HH:MM
-- **总执行时间**: ___分钟
+**命令**:
+```bash
+PYTHONPATH=. python scripts/stage3_pring_analyzer.py \
+  --market-data data/${DATE}_market_data_complete.json \
+  --output data/${DATE}_pring_result.json
+```
 
-### 数据获取统计
-- **成功获取数据源**: ___个
-- **使用WebSearch次数**: ___次
-- **使用WebFetch次数**: ___次
-- **修复N/A值数量**: ___个
-
-### 工具使用统计
-- **TodoWrite使用**: ___次
-- **Read使用**: ___次
-- **Edit使用**: ___次
-- **MultiEdit使用**: ___次
-- **Bash使用**: ___次
+**检查点**:
+- [ ] `data/${DATE}_pring_result.json` 生成
+- [ ] Pring阶段已判定（Stage I-VI）
+- [ ] 库存周期评分已计算
 
 ---
 
-## 🎯 最终交付确认
+### Stage 4: 报告生成 (10-15s)
 
-### 报告文件
-- **文件路径**: `reports/YYYYMMDD背景扫描120.md`
-- **文件大小**: ___KB
-- **字符数**: ___字符
-- **生成时间**: YYYY-MM-DD HH:MM:SS
+**命令**:
+```bash
+PYTHONPATH=. python tests/scripts/generate_simple_report_test.py \
+  data/${DATE}_market_data_complete.json \
+  data/${DATE}_pring_result.json \
+  reports/${DATE}背景扫描120.md
+```
 
-### 核心发现 (3-6条)
-1. ________________________________
-2. ________________________________
-3. ________________________________
-4. ________________________________
-5. ________________________________
-6. ________________________________
-
-### 数据源汇总
-- **股票数据**: AKShare + 网络补充
-- **汇率数据**: cn.investing.com
-- **债券数据**: investing.com
-- **资金流向**: data.eastmoney.com + 新闻
-- **财经要闻**: wallstreetcn.com + WebSearch
+**检查点**:
+- [ ] `reports/${DATE}背景扫描120.md` 生成
+- [ ] 文件大小约 4800-5200 bytes
 
 ---
 
-## ✅ 执行完成确认
+### 验证
 
-- [ ] **所有阶段完成**: 5/5阶段全部完成
-- [ ] **质量标准达成**: 结构、数据、内容、合规全部通过
-- [ ] **用户交付**: 报告路径、核心发现、执行总结已提供
+**命令**:
+```bash
+cat reports/gap_monitor_${DATE}.json  # 应为 [] 或 {}
+```
+
+**最终检查**:
+- [ ] `gap_monitor` 为空或只有少量非关键缺口
+- [ ] 报告中无 "N/A（待 WebSearch）"
+- [ ] 9个标准章节齐全
+
+---
+
+## 报告结构验证
+
+**必需章节**:
+- [ ] 核心结论
+- [ ] 股票市场
+- [ ] 商品与黄金
+- [ ] 债券市场
+- [ ] 外汇市场
+- [ ] 宏观经济指标
+- [ ] 货币政策
+- [ ] Pring三层框架
+- [ ] 资金流向
+
+---
+
+## 数据质量标准
+
+### WebSearch JSON格式（关键）
+
+| 类别 | 必填字段 | 示例 |
+|------|---------|------|
+| commodities | `symbol`, `name`, `current_price`, `unit` | `{"symbol": "GC=F", "current_price": 2650.5}` |
+| forex | `pair`, `name`, `current_rate` | `{"pair": "USDCNY", "current_rate": 7.248}` |
+| bonds | `symbol`, `name`, `current_yield` | `{"symbol": "US10Y", "current_yield": 4.18}` |
+| fund_flow | `recent_5d`, `total_120d`, `trend`, `source` | `{"recent_5d": 85.6, "total_120d": 1250.0}` |
+
+**注意**: 数值字段必须为可解析数字，不能是描述性文本。
+
+---
+
+## 常见问题处理
+
+| 问题 | 解决方案 |
+|------|----------|
+| Stage2超时 | 使用 `--extraction-backend regex --disable-extract` |
+| Tavily 422错误 | 添加 `--disable-extract` |
+| 数据完整度<80% | 检查并补充 macro/monetary 字段 |
+| 报告显示N/A | 检查 gap_monitor，确保数值字段 |
+
+---
+
+## 执行完成确认
+
+- [ ] 所有Stage完成
+- [ ] gap_monitor为空
+- [ ] 报告文件存在且大小正常
+- [ ] 无N/A值
 
 **AI执行状态**: ✅ **成功完成**
-
-**交付时间**: YYYY-MM-DD HH:MM:SS

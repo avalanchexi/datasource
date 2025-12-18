@@ -576,7 +576,7 @@ class TuShareAdapter(BaseDataSource):
 
                 # 转换指数代码格式
                 if '.' not in symbol:
-                    if symbol in ['000001', '000300', '000905']:  # 上证综指、沪深300、中证500
+                    if symbol in ['000001', '000016', '000300', '000905']:  # 上证综指、上证50、沪深300、中证500
                         ts_code = f"{symbol}.SH"
                     elif symbol in ['399001', '399006']:  # 深证成指、创业板指
                         ts_code = f"{symbol}.SZ"

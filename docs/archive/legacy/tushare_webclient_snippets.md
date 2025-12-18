@@ -5,7 +5,8 @@
 ## 1. CPI（`cn_cpi`）
 ```python
 import tushare as ts
-pro = ts.pro_api('YOUR_TOKEN')
+import os
+pro = ts.pro_api(os.getenv('TUSHARE_TOKEN'))
 df = pro.cn_cpi(start_m='202401', end_m='202510', fields='month,nt_yoy,nt_mom,nt_val')
 print(df.tail())
 ```
@@ -15,7 +16,8 @@ print(df.tail())
 ## 2. PMI（`cn_pmi`）
 ```python
 import tushare as ts
-pro = ts.pro_api('YOUR_TOKEN')
+import os
+pro = ts.pro_api(os.getenv('TUSHARE_TOKEN'))
 df = pro.cn_pmi(start_m='202401', end_m='202510')
 df.columns = [c.lower() for c in df.columns]
 print(df[['month','pmi010100','pmi010400','pmi010500']].tail())
@@ -28,7 +30,8 @@ print(df[['month','pmi010100','pmi010400','pmi010500']].tail())
 ## 3. 融资融券（`margin`）
 ```python
 import tushare as ts
-pro = ts.pro_api('YOUR_TOKEN')
+import os
+pro = ts.pro_api(os.getenv('TUSHARE_TOKEN'))
 frames = []
 for exch in ['SSE','SZSE']:
     part = pro.margin(exchange_id=exch, start_date='20240501', end_date='20251119', fields='trade_date,exchange_id,rzye,rzrqye')

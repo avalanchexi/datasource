@@ -6,6 +6,13 @@ DataSource: 统一的金融数据源集成框架
 - 引擎/计算：技术指标、资金流向、债券收益率、普林格六阶段
 """
 
+try:  # pragma: no cover - 运行环境可能缺失系统 DNS 配置
+    from .utils.dns_patch import apply_dns_patch
+
+    apply_dns_patch()
+except Exception:
+    pass
+
 from .manager import DataSourceManager, DataSourceType, get_manager, initialize_default_manager
 from .models.base import BaseDataSource, DataSourceConfig, DataRequest, DataResponse
 from .adapters.tushare_adapter import TuShareAdapter, TuShareConfig

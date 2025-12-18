@@ -60,18 +60,30 @@ async def run_tasks_lc(
 
     async def _search(task: Dict[str, Any]) -> Dict[str, Any]:
         # 所有任务统一 Tavily，不再跳过 MCP
-        result = await tavily_client.search(
-            query=task.get("query") or task["indicator_key"],
-            search_depth=task.get("search_depth") or ("advanced" if task["stage_phase"] == "assets" else "basic"),
-            include_domains=task.get("preferred_domains") or None,
-            time_range=task.get("time_range"),
-            topic=task.get("topic"),
-            language=task.get("language"),
-            max_results=task.get("max_results"),
-            chunks_per_source=task.get("chunks_per_source"),
-            auto_parameters=task.get("auto_parameters"),
-            cache_ttl=cache_ttl,
-        )
+        search_params = {
+            "query": task.get("query") or task["indicator_key"],
+            "search_depth": task.get("search_depth")
+            or ("advanced" if task["stage_phase"] == "assets" else "basic"),
+            "include_domains": task.get("preferred_domains") or None,
+            "time_range": task.get("time_range"),
+            "topic": task.get("topic"),
+            "language": task.get("language"),
+            "max_results": task.get("max_results"),
+            "chunks_per_source": task.get("chunks_per_source"),
+            "auto_parameters": task.get("auto_parameters"),
+            "days": task.get("days"),
+            "cache_ttl": cache_ttl,
+        }
+        compact_params = {k: v for k, v in search_params.items() if v is not None}
+        try:
+            result = await tavily_client.search(**compact_params)
+        except TypeError as exc:
+            # 兼容旧版 tavily SDK 不支持 days 参数的情况
+            if "days" in compact_params:
+                compact_params.pop("days", None)
+                result = await tavily_client.search(**compact_params)
+            else:
+                raise exc
         snippets = result.get("results") or []
         # two-step extract for noisy tasks
         if task["indicator_key"] in {"northbound", "southbound", "etf", "margin", "USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY", "GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"}:

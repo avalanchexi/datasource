@@ -276,7 +276,7 @@ manager.set_primary_source("tushare")
 
 ```bash
 # TuShare API Token（必填，如果使用TuShare）
-TUSHARE_TOKEN=your_tushare_token_here
+TUSHARE_TOKEN=your_tushare_token_here  # 请仅在本地 .env 设置，代码中不要硬编码
 
 # 速率限制设置
 TUSHARE_RATE_LIMIT=5       # TuShare 每秒请求数

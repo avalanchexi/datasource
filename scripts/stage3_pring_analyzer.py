@@ -63,6 +63,7 @@ def _require_data_completeness(
     market_payload: Dict[str, Any],
     min_completeness: float,
     allow_estimated: bool = False,
+    skip_fund_flow_check: bool = False,
 ) -> None:
     """在开始 Stage3 之前阻断缺失数据的情形。"""
     metadata = market_payload.get("metadata", {})
@@ -98,11 +99,18 @@ def _require_data_completeness(
             return False
 
         missing_items = [k for k in missing_items if not _has_non_null_value(k)]
+    if skip_fund_flow_check:
+        fund_flow_keys = set(market_payload.get("fund_flow", {}).keys())
+        for flow in market_payload.get("fund_flow", {}).values():
+            if isinstance(flow, dict) and flow.get("type"):
+                fund_flow_keys.add(str(flow.get("type")))
+        missing_items = [k for k in missing_items if k not in fund_flow_keys]
     # 硬阻断占位/零值：fund_flow/forex/bonds/commodities 中的 0 或 None
     hard_gaps = []
-    for flow in market_payload.get("fund_flow", {}).values():
-        if flow.get("recent_5d") in (0, None) or flow.get("total_120d") in (0, None):
-            hard_gaps.append(flow.get("type"))
+    if not skip_fund_flow_check:
+        for flow in market_payload.get("fund_flow", {}).values():
+            if flow.get("recent_5d") in (0, None) or flow.get("total_120d") in (0, None):
+                hard_gaps.append(flow.get("type"))
     for fx in market_payload.get("forex", []):
         if fx.get("current_rate") in (0, None):
             hard_gaps.append(fx.get("pair"))
@@ -157,6 +165,7 @@ async def _run_analysis(
     min_completeness: float = MIN_COMPLETENESS_DEFAULT,
     gap_monitor_path: Optional[Path] = None,
     skip_gap_check: bool = False,
+    skip_fund_flow_check: bool = False,
     days: int = 120,
     allow_fallback: bool = False,
     allow_estimated: bool = False,
@@ -177,7 +186,12 @@ async def _run_analysis(
 
     fallback_used = False
     try:
-        _require_data_completeness(market_payload, min_completeness, allow_estimated=allow_estimated)
+        _require_data_completeness(
+            market_payload,
+            min_completeness,
+            allow_estimated=allow_estimated,
+            skip_fund_flow_check=skip_fund_flow_check,
+        )
     except RuntimeError as e:
         if allow_fallback:
             fallback_used = True
@@ -327,6 +341,11 @@ def parse_args() -> argparse.Namespace:
         help="跳过 gap monitor 检查（仅调试用，生产禁止）"
     )
     parser.add_argument(
+        "--skip-fund-flow-check",
+        action="store_true",
+        help="跳过 fund_flow 的占位/零值硬阻断（仅在资金流缺口时临时出报告用）"
+    )
+    parser.add_argument(
         "--allow-fallback",
         action="store_true",
         help="允许在数据缺失时继续（不推荐，生产请保持关闭）"
@@ -360,6 +379,7 @@ def main() -> None:
         min_completeness=min_completeness,
         gap_monitor_path=Path(args.gap_monitor),
         skip_gap_check=args.skip_gap_check,
+        skip_fund_flow_check=args.skip_fund_flow_check,
         days=days,
         allow_fallback=args.allow_fallback,
         allow_estimated=args.allow_estimated,

@@ -60,7 +60,7 @@ class Stage2TaskPlanner:
 
     def _infer_phase(self, indicator_key: str) -> str:
         key = (indicator_key or "").lower()
-        if key in {"cpi", "ppi", "pmi", "pmi_new_orders", "industrial_output", "gdp", "m1", "m2"}:
+        if key in {"cpi", "ppi", "pmi", "pmi_new_orders", "gdp", "m1", "m2"}:
             return "essential"
         return "assets"
 
@@ -114,6 +114,7 @@ class Stage2TaskPlanner:
             "search_depth": profile.get("search_depth"),
             "chunks_per_source": profile.get("chunks_per_source"),
             "auto_parameters": profile.get("auto_parameters"),
+            "days": profile.get("days"),
             "source_hint": source_hint,
             "retry_count": 0,
             "created_at": int(time.time()),

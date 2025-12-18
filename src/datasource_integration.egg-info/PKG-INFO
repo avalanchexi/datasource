@@ -326,7 +326,7 @@ manager.add_fallback_source("akshare")
 
 ```bash
 # TuShare API Token（必填，如果使用TuShare）
-TUSHARE_TOKEN=your_tushare_token_here
+TUSHARE_TOKEN=your_tushare_token_here  # 仅在本地 .env 配置，勿提交代码库
 
 # 速率限制设置
 AKSHARE_RATE_LIMIT=10      # AKShare 每秒请求数

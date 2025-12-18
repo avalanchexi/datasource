@@ -27,6 +27,17 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     report_date = market_data['metadata']['date']
     completeness = market_data['metadata']['data_completeness']
 
+    def _as_list(section: Any) -> list:
+        """兼容 dict/list 结构，避免 Stage2.5 注入后的结构差异导致 N/A。"""
+        if isinstance(section, dict):
+            return list(section.values())
+        return section or []
+
+    stock_indices = _as_list(market_data.get('stock_indices', []))
+    commodities = _as_list(market_data.get('commodities', []))
+    bonds = _as_list(market_data.get('bonds', []))
+    forex_list = _as_list(market_data.get('forex', []))
+
     report = f"""# A股背景扫描120日报告
 
 **报告日期**: {report_date}
@@ -50,8 +61,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 | 指数 | 最新点位 | 近5日涨跌 | 近120日涨跌 | MA50趋势 | MA200趋势 | 趋势评级 |
 |------|----------|-----------|-------------|----------|-----------|----------|
 """
-
-    for idx in market_data['stock_indices']:
+    for idx in stock_indices:
         above_ma50 = "向上" if idx['above_ma50'] else "向下"
         above_ma200 = "向上" if idx['above_ma200'] else "向下"
         report += f"| {idx['name']} | {idx['current_price']:.2f} | {idx['change_5d']:+.2f}% | {idx['change_120d']:+.1f}% | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
@@ -65,25 +75,24 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 | 品种 | 最新报价 | 日涨跌 | 年内涨跌 | 趋势方向 |
 |------|----------|--------|----------|----------|
 """
-
-    for comm in market_data['commodities']:
+    for comm in commodities:
         current_price = comm.get('current_price')
-        is_placeholder = (
-            current_price in (None, 0.0)
-            or '待获取' in comm.get('source', '')
-            or '待MCP' in comm.get('trend', '')
-        )
+        is_placeholder = current_price in (None, 0.0)
 
         if is_placeholder:
             latest_price = NA_TEXT
-            daily_change = "N/A"
-            ytd_change = "N/A"
-            trend = "待 WebSearch"
         else:
-            latest_price = f"{comm['unit']} {current_price:.2f}".strip()
-            daily_change = f"{comm['daily_change']:+.2f}%" if comm.get('daily_change') is not None else "N/A"
-            ytd_change = f"{comm['ytd_change']:+.2f}%" if comm.get('ytd_change') is not None else "N/A"
-            trend = comm['trend']
+            latest_price = f"{comm.get('unit', '')} {current_price:.2f}".strip()
+
+        daily_change = (
+            f"{comm['daily_change']:+.2f}%"
+            if comm.get('daily_change') is not None else "N/A"
+        )
+        ytd_change = (
+            f"{comm['ytd_change']:+.2f}%"
+            if comm.get('ytd_change') is not None else "N/A"
+        )
+        trend = comm.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
         report += f"| {comm['name']} | {latest_price} | {daily_change} | {ytd_change} | {trend} |\n"
 
@@ -96,28 +105,21 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 | 债券品种 | 当前收益率 | 近5日变化 | 近120日变化 | 趋势方向 |
 |----------|-----------|----------|-------------|----------|
 """
-
-    for bond in market_data['bonds']:
+    for bond in bonds:
         current_yield = bond.get('current_yield')
-        is_placeholder = (
-            current_yield in (None, 0.0)
-            or '待获取' in bond.get('source', '')
-            or bond.get('is_estimated', False)
-            or '待MCP' in bond.get('trend', '')
-        )
+        is_placeholder = current_yield in (None, 0.0)
 
         if is_placeholder:
             yield_str = NA_TEXT
-            bp5_str = "N/A"
-            bp120_str = "N/A"
-            trend = "待 WebSearch"
         else:
-            yield_str = f"{current_yield:.2f}%"
-            bp5 = bond.get('change_5d_bp', 0) or 0
-            bp120 = bond.get('change_120d_bp', 0) or 0
-            bp5_str = f"{bp5:+.1f}bp"
-            bp120_str = f"{bp120:+.1f}bp"
-            trend = bond['trend']
+            suffix = "(估)" if bond.get('is_estimated') else ""
+            yield_str = f"{current_yield:.2f}%{suffix}"
+
+        bp5 = bond.get('change_5d_bp')
+        bp120 = bond.get('change_120d_bp')
+        bp5_str = f"{bp5:+.1f}bp" if bp5 is not None else "N/A"
+        bp120_str = f"{bp120:+.1f}bp" if bp120 is not None else "N/A"
+        trend = bond.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
         report += f"| {bond['name']} | {yield_str} | {bp5_str} | {bp120_str} | {trend} |\n"
 
@@ -130,8 +132,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 | 货币对 | 当前汇率 | 日涨跌 | 近120日变化 | 趋势方向 |
 |--------|---------|--------|-------------|----------|
 """
-
-    for forex in market_data['forex']:
+    for forex in forex_list:
         report += f"| {forex['name']} | {forex['current_rate']:.4f} | {forex['daily_change']:+.2f}% | {forex['change_120d']:+.2f}% | {forex['trend']} |\n"
 
     report += """

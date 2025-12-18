@@ -6,6 +6,7 @@
 """
 
 import asyncio
+import os
 import pandas as pd
 import tushare as ts
 from datetime import datetime, timedelta
@@ -208,7 +209,8 @@ class InternationalFinanceAdapter(BaseDataSource):
             # 优先尝试 TuShare us_tycr 获取美国国债收益率（官方数据）
             if symbol == "US10Y":
                 try:
-                    pro = ts.pro_api()
+                    token = os.getenv("TUSHARE_TOKEN")
+                    pro = ts.pro_api(token) if token else ts.pro_api()
                     start = start_date.replace("-", "")
                     end = end_date.replace("-", "")
                     # y10 字段为10年期国债收益率（%）

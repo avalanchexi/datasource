@@ -12,6 +12,14 @@ def monkey_patch_tushare():
     为TuShare添加pandas 2.0+兼容性补丁
     """
     try:
+        # 先尝试修复可能的 DNS 失效环境（如缺失 /etc/resolv.conf）
+        try:
+            from .dns_patch import apply_dns_patch
+
+            apply_dns_patch()
+        except Exception as dns_err:
+            logger.debug(f"DNS patch skipped/failed: {dns_err}")
+
         # 如果pandas版本>=2.0且DataFrame没有append方法，则添加补丁
         if not hasattr(pd.DataFrame, 'append'):
             def append_replacement(self, other, ignore_index=False, **kwargs):

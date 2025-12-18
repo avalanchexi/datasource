@@ -270,6 +270,10 @@ if comp < 0.8:
 ## Proxy & Connectivity
 - Prefer no global proxy in production; if needed, set in `.env` then `source .env`. If skipping proxy, prefix commands with `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`.
 - Stage2 proxy precedence: CLI `--http-proxy/--https-proxy` overrides env; when globally disabled, omit these flags.
+
+## TLS / 证书
+- Tavily 客户端支持 `TAVILY_VERIFY=false` 关闭校验（仅开发环境）；生产必须提供有效 CA，可通过 `TAVILY_CA_BUNDLE=/path/to/ca.pem` 指定。
+- 仍推荐优先直连：`env -u http_proxy -u https_proxy ...`。关闭校验会有日志警告，谨慎使用。
 - Quick direct check:
 ```bash
 python - <<'PY'

@@ -89,6 +89,28 @@ def _merge_missing_items(market_payload: Dict[str, Any]) -> None:
         market_payload["missing_items"] = unique
 
 
+def _apply_aliases(market_payload: Dict[str, Any], alias_map: Dict[str, str]) -> None:
+    """将旧键名映射为新键名，避免历史数据导致空模板任务。只作用于内存数据，不改原文件。"""
+    if not alias_map:
+        return
+    macro = market_payload.get("macro_indicators", {})
+    for old, new in alias_map.items():
+        if old in macro and new not in macro:
+            macro[new] = macro.pop(old)
+    market_payload["macro_indicators"] = macro
+
+    miss = market_payload.get("missing_items")
+    if isinstance(miss, list):
+        for idx, item in enumerate(miss):
+            if isinstance(item, dict):
+                key = item.get("key")
+                if key in alias_map:
+                    miss[idx]["key"] = alias_map[key]
+            elif item in alias_map:
+                miss[idx] = alias_map[item]
+        market_payload["missing_items"] = miss
+
+
 def _parse_date_str(text: str) -> Optional[datetime]:
     """尝试解析片段中的日期字符串为 UTC 时间，失败返回 None。"""
     if not text:
@@ -195,7 +217,7 @@ def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
         if not domains:
             warnings.append(f"{key}: 缺少 preferred_domains，可能命中词典/非目标站点")
         # 对宏观/货币/资金流向指标建议提供单位/发布机构
-        if key in {"cpi", "ppi", "pmi", "pmi_new_orders", "industrial_output", "industrial", "industrial_sales",
+        if key in {"cpi", "ppi", "pmi", "pmi_new_orders", "industrial", "industrial_sales",
                    "gdp", "m1", "m2", "dr007", "reverse_repo", "rrr", "mlf", "reverse_repo_7d",
                    "northbound", "southbound", "etf"}:
             if not unit:
@@ -485,6 +507,8 @@ async def _execute_tasks(
     queue_maxsize: int = 100,
     queue_retry_limit: int = 1,
     disable_extract: bool = False,
+    auto_disable_extract_on_422: bool = False,
+    extract_422_threshold: int = 3,
     extract_topk: int = 3,
     llm_hard_timeout: Optional[float] = None,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
@@ -506,9 +530,11 @@ async def _execute_tasks(
     stats.setdefault("queue_requeued", 0)
     stats.setdefault("queue_dead_letters", 0)
     stats.setdefault("deepseek_latencies", [])
+    stats.setdefault("extract_auto_disabled", False)
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
+    extract_disabled = disable_extract
 
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
@@ -791,7 +817,7 @@ async def _execute_tasks(
                     # Tavily extract (two-step) for noisy tasks
                     try:
                         if (
-                            not disable_extract
+                            not extract_disabled
                             and (is_fund_flow or is_forex or task["indicator_key"] in {"GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"})
                         ):
                             top_for_extract = snippets[: max(1, extract_topk)]
@@ -808,6 +834,17 @@ async def _execute_tasks(
                                     logger.debug("Tavily extract 422, fallback to search-only")
                                     skip_deepseek_reason = "tavily_extract_422"
                                     await asyncio.sleep(0.5)
+                                    if (
+                                        auto_disable_extract_on_422
+                                        and not extract_disabled
+                                        and stats["tavily_extract_422_count"] >= max(1, extract_422_threshold)
+                                    ):
+                                        extract_disabled = True
+                                        stats["extract_auto_disabled"] = True
+                                        logger.warning(
+                                            "[Stage2] Tavily extract 422 达到阈值(%d)，后续任务自动关闭 extract，仅保留 search+regex",
+                                            extract_422_threshold,
+                                        )
                                 else:
                                     extra_res = extract_resp.get("results") or []
                                     # 将 extract 的内容附加为额外 snippet，供后续抽取/regex 使用
@@ -1180,6 +1217,17 @@ def _parse_args() -> argparse.Namespace:
         "--disable-extract", action="store_true", help="跳过 Tavily extract 二阶段，直接使用 search 结果"
     )
     parser.add_argument(
+        "--auto-disable-extract-on-422",
+        action="store_true",
+        help="Tavily extract 多次返回 422 时自动关闭 extract，后续任务仅 search+regex",
+    )
+    parser.add_argument(
+        "--extract-422-threshold",
+        type=int,
+        default=3,
+        help="触发自动停用 extract 的 Tavily 422 次数阈值（默认3）",
+    )
+    parser.add_argument(
         "--extract-topk", type=int, default=3, help="Tavily extract 使用的搜索结果条数（默认3）"
     )
     parser.add_argument(
@@ -1283,6 +1331,7 @@ async def main() -> int:
         args.disable_extract = True
 
     market_payload = _load_json(market_path)
+    _apply_aliases(market_payload, {"industrial_output": "industrial"})
     _merge_missing_items(market_payload)
 
     # 先校验密钥并加载 .env，避免在初始化 TavilyClient 时 api_key 为空
@@ -1393,6 +1442,8 @@ async def main() -> int:
                 queue_maxsize=args.queue_maxsize,
                 queue_retry_limit=args.queue_retry_limit,
                 disable_extract=args.disable_extract,
+                auto_disable_extract_on_422=args.auto_disable_extract_on_422,
+                extract_422_threshold=args.extract_422_threshold,
                 extract_topk=args.extract_topk,
                 llm_hard_timeout=args.llm_hard_timeout,
             )
@@ -1492,6 +1543,7 @@ async def main() -> int:
         "extract_calls": exec_stats.get("extract_calls", 0),
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),
         "tavily_extract_422_count": exec_stats.get("tavily_extract_422_count", 0),
+        "extract_auto_disabled": exec_stats.get("extract_auto_disabled", False),
         "deepseek_p50_ms": p50_llm,
         "deepseek_p95_ms": p95_llm,
         "queue_requeued": exec_stats.get("queue_requeued", 0),
@@ -1509,7 +1561,12 @@ async def main() -> int:
     print(f"  gap_monitor: {gap_monitor_path}")
     print(f"  平均耗时: {summary['avg_elapsed_ms']:.1f} ms; 缓存命中率: {summary['cache_hit_rate']*100:.1f}%")
     print(f"  过滤/兜底: 域名过滤丢弃 {summary['domain_filtered_drop']} 条；score 过滤 {summary['score_filtered_drop']} 条；regex 命中 {summary['regex_hits']} 次")
-    print(f"  LLM: extract {summary['extract_calls']} 次；timeout {summary['timeout_count']} 次；retry {summary['retry_count']} 次; tavily_extract {summary['tavily_extract_calls']} 次; queue_requeued {summary.get('queue_requeued',0)} dead {summary.get('queue_dead_letters',0)}")
+    auto_flag = "已自动关闭extract" if summary.get("extract_auto_disabled") else "extract保持开启"
+    print(
+        f"  LLM: extract {summary['extract_calls']} 次；timeout {summary['timeout_count']} 次；retry {summary['retry_count']} 次; "
+        f"tavily_extract {summary['tavily_extract_calls']} 次 (422={summary['tavily_extract_422_count']}, {auto_flag}); "
+        f"queue_requeued {summary.get('queue_requeued',0)} dead {summary.get('queue_dead_letters',0)}"
+    )
     if summary.get("success_by_category"):
         print(f"  分类型成功: {summary['success_by_category']} / {summary['total_by_category']}")
     if pending_manual or summary["task_failed"] > 0:

@@ -9,6 +9,7 @@ Stage 1: Market Data Collector (V3.1 解耦架构)
 import asyncio
 import json
 import argparse
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -460,6 +461,7 @@ class MarketDataCollector:
     async def _fallback_index_from_tushare(self, symbol: str, name: str, start_date: str, end_date: str) -> Optional[StockIndexData]:
         """
         当 DataSourceManager 获取失败时，直接调用 TuShare index_daily 兜底一次，尽量补齐 000016 等指数。
+        追加逻辑：若当日 index_daily 为空，则尝试 pro_bar(1min) 获取当日最新价；再不行回退最近交易日。
         """
         try:
             import pandas as pd
@@ -468,10 +470,84 @@ class MarketDataCollector:
             pro = ts.pro_api(token) if token else ts.pro_api()
             ts_code = f"{symbol}.SH" if symbol.startswith("0") else f"{symbol}.SZ"
             last_error = None
+            today = end_date.replace("-", "")
+
+            def _latest_from_bar():
+                """使用分钟线获取当天最新价"""
+                try:
+                    bar = pro.pro_bar(ts_code=ts_code, freq="1min", asset="I", start_date=today, end_date=today)
+                    if bar is None or bar.empty:
+                        return None
+                    bar = bar.sort_values("trade_time")
+                    bar["close"] = pd.to_numeric(bar["close"], errors="coerce")
+                    bar = bar.dropna(subset=["close"])
+                    if bar.empty:
+                        return None
+                    last_row = bar.iloc[-1]
+                    return float(last_row["close"]), str(last_row.get("trade_time"))
+                except Exception:
+                    return None
+
+            def _previous_trade_dates(limit: int = 5):
+                """获取最近 limit 个交易日（不含 today），用于 index_daily 回退"""
+                try:
+                    cal = pro.trade_cal(end_date=today, is_open=1)
+                    if cal is None or cal.empty:
+                        return []
+                    cal = cal.sort_values("cal_date")
+                    prev = cal[cal["cal_date"] < today].tail(limit)
+                    return [str(x) for x in prev["cal_date"].tolist()[::-1]]  # 近→远
+                except Exception:
+                    return []
+
             for attempt in range(3):
                 try:
                     df = pro.index_daily(ts_code=ts_code, start_date=start_date.replace("-", ""), end_date=end_date.replace("-", ""))
                     if df is None or df.empty:
+                        # 尝试分钟线作为当天最新值
+                        bar_latest = _latest_from_bar()
+                        if bar_latest:
+                            current, trade_time = bar_latest
+                            return StockIndexData(
+                                symbol=symbol,
+                                name=name,
+                                current_price=current,
+                                change_5d=0.0,
+                                change_120d=0.0,
+                                above_ma50=False,
+                                above_ma200=False,
+                                ma50_slope=0.0,
+                                volatility_30d=0.0,
+                                trend_score=50,
+                                trend_label="中性",
+                                source=f"TuShare pro_bar(1min)@{trade_time}",
+                            )
+                        # 回退上一交易日
+                        for prev_trade in _previous_trade_dates(limit=5):
+                            df_prev = pro.index_daily(ts_code=ts_code, start_date=prev_trade, end_date=prev_trade)
+                            if df_prev is None or df_prev.empty:
+                                continue
+                            df_prev = df_prev.sort_values("trade_date")
+                            df_prev["close"] = pd.to_numeric(df_prev["close"], errors="coerce")
+                            df_prev = df_prev.dropna(subset=["close"])
+                            if df_prev.empty:
+                                continue
+                            current = float(df_prev["close"].iloc[-1])
+                            return StockIndexData(
+                                symbol=symbol,
+                                name=name,
+                                current_price=current,
+                                change_5d=0.0,
+                                change_120d=0.0,
+                                above_ma50=False,
+                                above_ma200=False,
+                                ma50_slope=0.0,
+                                volatility_30d=0.0,
+                                trend_score=50,
+                                trend_label="中性",
+                                source=f"TuShare index_daily(asof {prev_trade})",
+                                note=f"asof {prev_trade}",
+                            )
                         raise ValueError("empty dataframe")
                     df = df.sort_values("trade_date")
                     df["close"] = pd.to_numeric(df["close"], errors="coerce")
@@ -738,32 +814,51 @@ class MarketDataCollector:
 
     async def _fetch_fx_from_tushare(self, symbol: str, name: str) -> Optional[ForexData]:
         """尝试用 TuShare fx_daily 获取在岸/离岸汇率"""
-        if symbol not in {"USDCNY", "USDCNH"}:
-            return None
         try:
             import tushare as ts
-            pro = ts.pro_api()
-            open_dates = self._get_recent_open_dates(count=5)
-            for trade_date in open_dates[::-1]:  # 最近 5 个开市日尝试
-                df = pro.fx_daily(ts_code=symbol, start_date=trade_date, end_date=trade_date)
-                if df is None or df.empty:
-                    continue
-                row = df.iloc[-1]
-                rate = row.get("bid_close") or row.get("ask_close") or row.get("bid_open")
-                if rate is None:
-                    continue
-                return ForexData(
-                    pair=symbol,
-                    name=name,
-                    current_rate=float(rate),
-                    daily_change=None,
-                    change_120d=None,
-                    trend='平稳',
-                    source='TuShare fx_daily',
-                    timestamp=trade_date,
-                    note='TuShare fx_daily 最近开市日'
-                )
-            return None
+            token = os.getenv("TUSHARE_TOKEN")
+            pro = ts.pro_api(token) if token else ts.pro_api()
+
+            if symbol not in {"USDCNY", "USDCNH"}:
+                return None
+
+            start = self.start_date.replace("-", "")
+            end = self.end_date.replace("-", "")
+            df = pro.fx_daily(ts_code=symbol, start_date=start, end_date=end)
+            if df is None or df.empty:
+                return None
+
+            df = df.sort_values("trade_date")
+            def _pick_rate(row):
+                return row.get("bid_close") or row.get("ask_close") or row.get("bid_open") or row.get("ask_open")
+
+            latest_row = df.iloc[-1]
+            latest_rate = _pick_rate(latest_row)
+            if latest_rate is None:
+                return None
+
+            prev_rate = None
+            if len(df) >= 2:
+                prev_rate = _pick_rate(df.iloc[-2])
+
+            def _pct_change(cur, prev):
+                if prev in (None, 0):
+                    return 0.0
+                return (float(cur) / float(prev) - 1.0) * 100.0
+
+            daily_change = _pct_change(latest_rate, prev_rate)
+            change_120d = _pct_change(latest_rate, _pick_rate(df.iloc[0]))
+            trend = "贬值" if change_120d > 0 else "升值" if change_120d < 0 else "平稳"
+
+            return ForexData(
+                pair=symbol,
+                name=name,
+                current_rate=float(latest_rate),
+                daily_change=float(daily_change),
+                change_120d=float(change_120d),
+                trend=trend,
+                source="TuShare fx_daily",
+            )
         except Exception:
             return None
 
@@ -772,15 +867,19 @@ class MarketDataCollector:
         """获取最近的开市日列表（默认 5 个），用于 T+1 数据回退。"""
         try:
             import tushare as ts
-            pro = ts.pro_api()
+            token = os.getenv("TUSHARE_TOKEN")
+            pro = ts.pro_api(token) if token else ts.pro_api()
             end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
             cal = pro.trade_cal(
                 exchange='',
                 start_date=(end_dt - timedelta(days=30)).strftime("%Y%m%d"),
                 end_date=end_dt.strftime("%Y%m%d")
             )
-            open_dates = [d for d in cal[cal.is_open == 1].cal_date]
-            return open_dates[-count:] if open_dates else []
+            open_dates = [str(d) for d in cal[cal.is_open == 1].cal_date]
+            if not open_dates:
+                return []
+            open_dates = sorted(open_dates)
+            return open_dates[-count:]
         except Exception:
             return []
 
@@ -1765,7 +1864,8 @@ async def main():
         try:
             import tushare as ts
 
-            pro = ts.pro_api()
+            token = os.getenv("TUSHARE_TOKEN")
+            pro = ts.pro_api(token) if token else ts.pro_api()
             end_dt = datetime.strptime(target_date, "%Y-%m-%d")
             start_dt = end_dt - timedelta(days=15)  # 向前最多回溯两周
 
@@ -1774,10 +1874,11 @@ async def main():
                 start_date=start_dt.strftime("%Y%m%d"),
                 end_date=end_dt.strftime("%Y%m%d"),
             )
-            open_dates = [d for d in cal[cal.is_open == 1].cal_date]
+            open_dates = [str(d) for d in cal[cal.is_open == 1].cal_date]
             if not open_dates:
                 return target_date  # 获取失败时保持原值，避免阻断
-            last_open = open_dates[-1]
+            # TuShare 返回的 trade_cal 顺序可能为倒序，取最大值才是最近交易日
+            last_open = max(open_dates)
             return datetime.strptime(last_open, "%Y%m%d").strftime("%Y-%m-%d")
         except Exception:
             # 若 TuShare 不可用或无权限，保持用户输入日期

@@ -80,7 +80,16 @@
       "Bash(data/20251205_market_data_complete.json)",
       "Bash(data/20251205_pring_result.json )",
       "Bash(reports/20251205背景扫描120.md)",
-      "Bash(powershell.exe -Command \"(Get-Item ''reports/20251205背景扫描120.md'').Length\")"
+      "Bash(powershell.exe -Command \"(Get-Item ''reports/20251205背景扫描120.md'').Length\")",
+      "Bash(for k in TAVILY_API_KEY DEEPSEEK_API_KEY TUSHARE_TOKEN)",
+      "Bash(do v=\"$!k:-\")",
+      "Bash(if [ -n \"$v\" ])",
+      "Bash([ $#v -ge 20 ])",
+      "Bash(then echo \"$k: OK ($#v chars)\")",
+      "Bash(else echo \"$k: MISSING or SHORT\")",
+      "Bash(exit 1)",
+      "Bash(fi)",
+      "Bash(done)"
     ],
     "deny": [],
     "ask": []
