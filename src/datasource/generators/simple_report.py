@@ -38,6 +38,24 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     bonds = _as_list(market_data.get('bonds', []))
     forex_list = _as_list(market_data.get('forex', []))
 
+    def _collect_estimated_items() -> list[str]:
+        items: list[str] = []
+        for bond in bonds:
+            if bond.get('is_estimated'):
+                name = bond.get('name') or bond.get('symbol') or '债券'
+                items.append(f"债券:{name}")
+        for indicator in market_data.get('macro_indicators', {}).values():
+            if indicator.get('is_estimated'):
+                name = indicator.get('indicator_name') or '宏观指标'
+                items.append(f"宏观:{name}")
+        for policy in market_data.get('monetary_policy', {}).values():
+            if policy.get('is_estimated'):
+                name = policy.get('policy_name') or '货币政策'
+                items.append(f"货币政策:{name}")
+        return items
+
+    estimated_items = _collect_estimated_items()
+
     report = f"""# A股背景扫描120日报告
 
 **报告日期**: {report_date}
@@ -330,6 +348,13 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             f"{flow.get('source', '-')} | {flow.get('note', '-') or '-'} |\n"
         )
 
+    estimated_note = ""
+    if estimated_items:
+        estimated_text = "、".join(estimated_items)
+        estimated_note = (
+            f"- **估计值提醒**: 以下指标仍为估计值（is_estimated=True），请谨慎解读：{estimated_text}\n"
+        )
+
     report += f"""
 
 ---
@@ -340,6 +365,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 - **MCP增强**: WebSearch (债券、商品、宏观、货币、资金流向)
 - **数据完整性**: {completeness:.1%}
 - **分析方法**: {pring_result['metadata'].get('analysis_method', 'Pring三层框架')}
+{estimated_note}
 
 ---
 
@@ -355,6 +381,8 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     print(f"  - 数据完整性: {completeness:.1%}")
     print(f"  - Pring阶段: {pring_result['final_stage']}")
     print(f"  - 置信度: {pring_result['confidence']:.1%}")
+    if estimated_items:
+        print(f"[WARN] 报告包含估计值指标: {'、'.join(estimated_items)}")
 
 
 def main(argv: list[str] | None = None) -> None:

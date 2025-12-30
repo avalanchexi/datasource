@@ -55,6 +55,7 @@ class AsyncTavilyClient:
         self.proxies = proxies
         self.verify = self._resolve_verify(verify)
         self._client: Optional[Any] = None
+        self._supports_days: Optional[bool] = None
 
     @staticmethod
     def _resolve_verify(verify: Optional[Any]) -> Any:
@@ -134,6 +135,7 @@ class AsyncTavilyClient:
         exclude_domains: Optional[List[str]] = None,
         time_range: Optional[str] = None,
         max_results: Optional[int] = None,
+        days: Optional[int] = None,
         cache_ttl: Optional[int] = None,
         language: Optional[str] = None,
         chunks_per_source: Optional[int] = None,
@@ -163,6 +165,13 @@ class AsyncTavilyClient:
             payload["time_range"] = time_range
         if max_results:
             payload["max_results"] = max_results
+        if days is not None and self._supports_days is not False:
+            try:
+                days_int = int(days)
+            except Exception:
+                days_int = None
+            if days_int and days_int > 0:
+                payload["days"] = days_int
         if language:
             payload["language"] = language
         if chunks_per_source:
@@ -170,25 +179,56 @@ class AsyncTavilyClient:
         if auto_parameters is not None:
             payload["auto_parameters"] = auto_parameters
 
-        cache_key = self._make_cache_key(payload)
-        if self.cache:
-            cached = self.cache.get(cache_key)
-            if cached:
-                cached["cache_hit"] = True
-                return cached
+        async def _read_cache(payload_key: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            if not self.cache:
+                return None
+            cached = self.cache.get(self._make_cache_key(payload_key))
+            if not cached:
+                return None
+            cached["cache_hit"] = True
+            return cached
 
-        async with self.semaphore:
-            client = await self._ensure_client()
-            logger.debug(f"Tavily request: {query} depth={payload['search_depth']}")
-            resp = await client.post(self.base_url, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            data["cache_hit"] = False
-            data["query"] = query
-            data["search_depth"] = payload["search_depth"]
+        cached = await _read_cache(payload)
+        if cached:
+            return cached
+
+        async def _do_post(payload_post: Dict[str, Any]) -> Dict[str, Any]:
+            async with self.semaphore:
+                client = await self._ensure_client()
+                logger.debug(f"Tavily request: {query} depth={payload_post['search_depth']}")
+                resp = await client.post(self.base_url, json=payload_post)
+                resp.raise_for_status()
+                data = resp.json()
+                data["cache_hit"] = False
+                data["query"] = query
+                data["search_depth"] = payload_post["search_depth"]
+                return data
+
+        try:
+            data = await _do_post(payload)
+        except Exception as exc:
+            # 兼容部分 Tavily 版本/代理层不支持 days 参数：若 400 且报错信息包含 days，自动回退
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if (
+                payload.get("days") is not None
+                and self._supports_days is None
+                and status == 400
+                and "days" in str(getattr(getattr(exc, "response", None), "text", "")).lower()
+            ):
+                self._supports_days = False
+                payload.pop("days", None)
+                cached2 = await _read_cache(payload)
+                if cached2:
+                    return cached2
+                data = await _do_post(payload)
+            else:
+                raise exc
+        else:
+            if payload.get("days") is not None:
+                self._supports_days = True
 
         if self.cache:
-            self.cache.set(cache_key, data, ttl=cache_ttl)
+            self.cache.set(self._make_cache_key(payload), data, ttl=cache_ttl)
         return data
 
     async def extract(

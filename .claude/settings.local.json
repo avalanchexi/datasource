@@ -89,7 +89,9 @@
       "Bash(else echo \"$k: MISSING or SHORT\")",
       "Bash(exit 1)",
       "Bash(fi)",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(ls:*)",
+      "Bash(DATE=20251225)"
     ],
     "deny": [],
     "ask": []

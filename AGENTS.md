@@ -13,6 +13,7 @@
 1) `python -m venv .venv` → activate (`.venv\Scripts\activate` on Win, `source .venv/bin/activate` on *nix).
 2) Install: `pip install -r requirements.txt` → `pip install -e .` → `pip install -e ".[dev]"`.
 3) Defaults: `cp .env.example .env` (contains TuShare token, rate limits, cache toggles).
+   - 可选：配置 `EXA_API_KEY`（已安装 exa-py 时，Tavily 失败任务自动使用 Exa 兜底）
 4) Sanity: `python -c "from datasource import get_manager; print('OK')"`.
 5) **Preflight（在 Stage1 前执行，校验密钥并清空代理）**
    ```bash
@@ -194,7 +195,7 @@
     reports/${DATE}-背景扫描120.md
   ```
 
-- **收尾校验**：确认 `reports/gap_monitor_${DATE_NH}.json` 为空，报告内无 “N/A（待 WebSearch）”。
+- **收尾校验**：确认 `reports/gap_monitor_${DATE_NH}.json` 为空，报告内无 “N/A（待 WebSearch）”，并检查 `is_estimated=True`（宏观/货币政策/债券）。
 
 ### 报告生成时的 Plan 要求
 - 生成日报/背景扫描报告前，先列出 3–5 步的 plan（覆盖 Stage2.5 补数、Stage3 分析、Report 输出等），不得使用单步 plan。
@@ -234,6 +235,26 @@ if comp < 0.8:
 "
 ```
 若完整度不足，需手动补数据后重新注入。
+
+可选检查：估计值与缺口标记
+```bash
+python -c "
+import json
+d = json.load(open('data/${DATE_NH}_market_data_complete.json'))
+est = []
+for sec in ['macro_indicators', 'monetary_policy']:
+    for k, v in d.get(sec, {}).items():
+        if isinstance(v, dict) and v.get('is_estimated'):
+            name = v.get('indicator_name') or v.get('policy_name') or k
+            est.append(f'{sec}.{name}')
+for b in d.get('bonds', []):
+    if isinstance(b, dict) and b.get('is_estimated'):
+        name = b.get('name') or b.get('symbol') or ''
+        est.append('bonds.' + name)
+print('is_estimated:', est)
+print('metadata.missing_items:', d.get('metadata', {}).get('missing_items'))
+"
+```
 
 ## Tavily / MCP Modes (2025-12 update)
 - Fund flow & forex default to Tavily; `fund-flow-backend` default `tavily`. `hybrid` = Tavily fallback from MCP; no automatic MCP channel.

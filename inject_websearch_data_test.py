@@ -83,6 +83,10 @@ def _is_placeholder_numeric(value: Any) -> bool:
     return abs(numeric - 7.13) < 1e-3
 
 
+def _has_valid_value(value: Any) -> bool:
+    return not _is_placeholder_numeric(value)
+
+
 def _remove_missing_item(metadata: Dict[str, Any], category: str, key: str) -> None:
     missing = metadata.get('missing_items')
     if not missing or category not in missing:
@@ -119,6 +123,40 @@ def _remove_top_missing(market_data: Dict[str, Any], key: str) -> None:
     market_data['missing_items'] = filtered
 
 
+def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str) -> bool:
+    if category in ('macro_indicators', 'monetary_policy'):
+        entry = market_data.get(category, {}).get(key)
+        if not isinstance(entry, dict):
+            return False
+        return _has_valid_value(entry.get('current_value'))
+    if category == 'fund_flow':
+        entry = market_data.get('fund_flow', {}).get(key)
+        if not isinstance(entry, dict):
+            return False
+        return _has_valid_value(entry.get('recent_5d')) and _has_valid_value(entry.get('total_120d'))
+    if category == 'commodities':
+        for item in market_data.get('commodities', []):
+            if item.get('symbol') == key:
+                return _has_valid_value(item.get('current_price'))
+        return False
+    if category == 'forex':
+        for item in market_data.get('forex', []):
+            if item.get('pair') == key:
+                return _has_valid_value(item.get('current_rate'))
+        return False
+    if category == 'bonds':
+        for item in market_data.get('bonds', []):
+            if item.get('symbol') == key:
+                return _has_valid_value(item.get('current_yield'))
+        return False
+    if category == 'stock_indices':
+        for item in market_data.get('stock_indices', []):
+            if item.get('symbol') == key:
+                return _has_valid_value(item.get('current_price'))
+        return False
+    return False
+
+
 def _refresh_stage2_gap_monitor(payload: Dict[str, Any]) -> Dict[str, int]:
     commodities = payload.get('commodities', [])
     bonds = payload.get('bonds', [])
@@ -142,12 +180,28 @@ def _refresh_stage2_notes(metadata: Dict[str, Any], gap_summary: Dict[str, int])
     metadata['stage2_notes'] = filtered
 
 
-def _cleanup_metadata_missing(metadata: Dict[str, Any]) -> None:
-    """若 metadata.missing_items 已清空，则移除字段，避免 Stage3 误阻断。"""
+def _cleanup_metadata_missing(metadata: Dict[str, Any], market_data: Dict[str, Any]) -> None:
+    """根据实际填充情况清理 metadata.missing_items，避免 Stage3 误阻断。"""
     missing = metadata.get('missing_items')
     if not isinstance(missing, dict):
         return
-    cleaned = {k: [item for item in v if item] for k, v in missing.items() if v}
+    cleaned: Dict[str, list] = {}
+    for category, items in missing.items():
+        if not items:
+            continue
+        kept = []
+        for item in items:
+            key = None
+            if isinstance(item, dict):
+                key = item.get('key') or item.get('indicator_key')
+            elif isinstance(item, str):
+                key = item
+            if key and _is_missing_item_filled(market_data, category, key):
+                continue
+            if item:
+                kept.append(item)
+        if kept:
+            cleaned[category] = kept
     if cleaned:
         metadata['missing_items'] = cleaned
     else:
@@ -494,7 +548,7 @@ def inject_websearch_data(market_data_path, websearch_path, output_path):
     # 同步根据已填充的 stock_indices 清理缺口
     for idx in market_data.get('stock_indices', []):
         _remove_top_missing(market_data, idx.get('symbol'))
-    _cleanup_metadata_missing(metadata)
+    _cleanup_metadata_missing(metadata, market_data)
     if not market_data.get('missing_items'):
         market_data['missing_items'] = []
 

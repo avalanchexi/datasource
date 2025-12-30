@@ -41,6 +41,10 @@ except Exception:  # pragma: no cover
     load_dotenv = None
 
 from datasource.adapters.tavily_client import AsyncTavilyClient
+try:  # pragma: no cover - 可选依赖
+    from datasource.adapters.exa_client import AsyncExaClient
+except Exception:  # noqa: W0703
+    AsyncExaClient = None  # type: ignore
 from datasource.cache.memory_cache import MemoryCache
 from datasource.cache.sqlite_cache import SQLiteCache
 from datasource.engines.deepseek_reasoner import DeepSeekExtractionAgent
@@ -183,6 +187,49 @@ def _prefer_fresh_snippets(snippets: Optional[List[Dict[str, Any]]], max_age_day
         if parsed and (now - parsed) <= timedelta(days=max_age_days):
             fresh.append(snip)
     return fresh or snippets
+
+
+def _is_tavily_quota_error(exc: Exception) -> bool:
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status in {402, 403, 429}:
+        return True
+    msg = str(exc).lower()
+    return any(token in msg for token in ["quota", "rate limit", "payment", "402", "403", "429"])
+
+
+def _exa_search_type(indicator_key: str) -> Optional[str]:
+    keyword_keys = {
+        "GC=F",
+        "CL=F",
+        "BZ=F",
+        "HG=F",
+        "BCOM",
+        "GSG",
+        "USDCNY",
+        "USDCNH",
+        "DXY",
+        "EURUSD",
+        "GBPUSD",
+        "USDJPY",
+        "US10Y",
+        "CN10Y",
+        "CN10Y_CDB",
+        "000001",
+        "000016",
+        "000300",
+        "399001",
+        "399006",
+    }
+    if indicator_key in keyword_keys:
+        return "keyword"
+    return None
+
+
+def _start_date_from_max_age(max_age_days: Optional[int]) -> Optional[str]:
+    if not max_age_days:
+        return None
+    dt = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    return dt.strftime("%Y-%m-%d")
 
 
 def _percentile(values: List[float], pct: float) -> float:
@@ -491,6 +538,7 @@ async def _execute_tasks(
     tasks: List[Dict[str, Any]],
     market_payload: Dict[str, Any],
     client: AsyncTavilyClient,
+    exa_client: Optional["AsyncExaClient"],
     extractor: DeepSeekExtractionAgent,
     task_log_path: Path,
     cache_ttl: Optional[int],
@@ -531,6 +579,9 @@ async def _execute_tasks(
     stats.setdefault("queue_dead_letters", 0)
     stats.setdefault("deepseek_latencies", [])
     stats.setdefault("extract_auto_disabled", False)
+    stats.setdefault("exa_fallback", 0)
+    stats.setdefault("exa_empty", 0)
+    stats.setdefault("exa_error", 0)
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
@@ -620,6 +671,42 @@ async def _execute_tasks(
                         "llm_timeout": is_timeout,
                         "llm_latency_ms": int((time.perf_counter() - start_llm) * 1000),
                     }
+
+    async def _try_exa_fallback(
+        task: Dict[str, Any],
+        reason: str,
+    ) -> (Optional[Dict[str, Any]], Optional[str]):
+        if not exa_client:
+            return None, None
+        if task.get("indicator_key") in {"northbound", "southbound", "etf", "margin"}:
+            return None, None
+        query = task.get("query") or task.get("indicator_key")
+        include_domains = task.get("preferred_domains") or None
+        num_results = task.get("max_results") or None
+        start_published = _start_date_from_max_age(task.get("max_age_days"))
+        search_type = _exa_search_type(task.get("indicator_key") or "")
+        contents = {"text": True, "summary": True, "highlights": True}
+        try:
+            logger.debug(f"Exa fallback: {task.get('indicator_key')} reason={reason}")
+            result = await exa_client.search(
+                query=query,
+                num_results=num_results,
+                include_domains=include_domains,
+                start_published_date=start_published,
+                search_type=search_type,
+                contents=contents,
+                cache_ttl=cache_ttl,
+            )
+        except Exception as exc:  # pragma: no cover
+            stats["exa_error"] += 1
+            logger.warning(f"Exa fallback failed: {exc}")
+            return None, f"exa_error:{exc}"
+        snippets = result.get("results") or []
+        if not snippets:
+            stats["exa_empty"] += 1
+            return None, "exa_empty"
+        stats["exa_fallback"] += 1
+        return result, "exa_fallback"
     queue: asyncio.Queue = asyncio.Queue(maxsize=queue_maxsize) if use_queue else None  # type: ignore
 
     async def consumer():
@@ -699,6 +786,8 @@ async def _execute_tasks(
                         "extraction": extraction,
                         "extraction_backend": extraction_backend,
                         "raw_results": snippets[:3],
+                        "search_backend": task.get("search_backend"),
+                        "note": task.get("search_note"),
                     }
                 )
             except Exception as exc:
@@ -778,6 +867,10 @@ async def _execute_tasks(
             for attempt in count(start=1):
                 started = time.perf_counter()
                 skip_deepseek_reason: Optional[str] = None
+                search_backend = "tavily"
+                search_note: Optional[str] = None
+                task_for_log = task
+                result: Dict[str, Any] = {}
                 # fund_flow_backend=mcp: 跳过实时搜索，直接标记待人工/MCP
                 if is_fund_flow and backend == "mcp":
                     task_record = {
@@ -798,26 +891,76 @@ async def _execute_tasks(
                     _append_task_log(task_log_path, task_record)
                     break
                 try:
-                    result = await client.search(
-                        query=task.get("query") or task["indicator_key"],
-                        search_depth=task.get("search_depth") or ("advanced" if task["stage_phase"] == "assets" else "basic"),
-                        include_domains=task.get("preferred_domains") or None,
-                        time_range=task.get("time_range"),
-                        topic=task.get("topic"),
-                        language=task.get("language"),
-                        max_results=task.get("max_results"),
-                        chunks_per_source=task.get("chunks_per_source"),
-                        auto_parameters=task.get("auto_parameters"),
-                        cache_ttl=cache_ttl,
-                    )
-                    elapsed_ms = int((time.perf_counter() - started) * 1000)
-                    snippets = result.get("results") or []
+                    try:
+                        result = await client.search(
+                            query=task.get("query") or task["indicator_key"],
+                            search_depth=task.get("search_depth")
+                            or ("advanced" if task["stage_phase"] == "assets" else "basic"),
+                            include_domains=task.get("preferred_domains") or None,
+                            time_range=task.get("time_range"),
+                            topic=task.get("topic"),
+                            language=task.get("language"),
+                            max_results=task.get("max_results"),
+                            days=task.get("days"),
+                            chunks_per_source=task.get("chunks_per_source"),
+                            auto_parameters=task.get("auto_parameters"),
+                            cache_ttl=cache_ttl,
+                        )
+                        snippets = result.get("results") or []
+                    except Exception as exc:
+                        exa_result, exa_note = await _try_exa_fallback(task, f"tavily_error:{exc}")
+                        if exa_result:
+                            result = exa_result
+                            snippets = result.get("results") or []
+                            search_backend = "exa"
+                            search_note = exa_note
+                            task_for_log = {**task, "search_backend": "exa"}
+                        else:
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            logger.warning(
+                                f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}"
+                            )
+                            if attempt >= max_retries + 1 or _is_tavily_quota_error(exc):
+                                note = str(exc)
+                                if exa_note:
+                                    note = f"{note} {exa_note}"
+                                task_record = {
+                                    "task_id": task["task_id"],
+                                    "indicator_key": task["indicator_key"],
+                                    "stage_phase": task["stage_phase"],
+                                    "search_backend": task["search_backend"],
+                                    "fund_flow_backend": backend if is_fund_flow else None,
+                                    "error": str(exc),
+                                    "llm_error": str(exc),
+                                    "llm_latency_ms": None,
+                                    "attempt_index": attempt,
+                                    "elapsed_ms": elapsed_ms,
+                                    "manual_required": True,
+                                    "note": note,
+                                    "created_at": task["created_at"],
+                                    "finished_at": int(datetime.now().timestamp()),
+                                }
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                break
+                            continue
+
                     if not snippets:
-                        skip_deepseek_reason = "no_snippets"
+                        if search_backend == "tavily":
+                            exa_result, exa_note = await _try_exa_fallback(task, "no_snippets")
+                            if exa_result:
+                                result = exa_result
+                                snippets = result.get("results") or []
+                                search_backend = "exa"
+                                search_note = exa_note
+                                task_for_log = {**task, "search_backend": "exa"}
+                        if not snippets:
+                            skip_deepseek_reason = search_note or "no_snippets"
                     # Tavily extract (two-step) for noisy tasks
                     try:
                         if (
-                            not extract_disabled
+                            search_backend == "tavily"
+                            and not extract_disabled
                             and (is_fund_flow or is_forex or task["indicator_key"] in {"GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"})
                         ):
                             top_for_extract = snippets[: max(1, extract_topk)]
@@ -873,8 +1016,12 @@ async def _execute_tasks(
                     if before and before != after:
                         stats["domain_filtered_drop"] += before - after
                     snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
+                    elapsed_ms = int((time.perf_counter() - started) * 1000)
+                    task_for_log = {**task, "search_backend": search_backend}
+                    if search_note:
+                        task_for_log["search_note"] = search_note
                     if use_queue:
-                        await queue.put((task, snippets, attempt))  # type: ignore
+                        await queue.put((task_for_log, snippets, attempt))  # type: ignore
                         break
                     else:
                         # 当 Tavily 无结果 / extract 422 / search 异常时，跳过 DeepSeek，直接 regex/人工
@@ -930,12 +1077,14 @@ async def _execute_tasks(
                             if note_append2:
                                 extraction["note"] = ((extraction.get("note") or "") + " " + note_append2).strip()
                             manual_required = manual_required or manual2
+                        if search_note and search_backend == "exa":
+                            extraction["note"] = ((extraction.get("note") or "") + f" {search_note}").strip()
 
                         task_record = {
                             "task_id": task["task_id"],
                             "indicator_key": task["indicator_key"],
                             "stage_phase": task["stage_phase"],
-                            "search_backend": task["search_backend"],
+                            "search_backend": search_backend,
                             "fund_flow_backend": backend if is_fund_flow else None,
                             "extraction_backend": extraction_backend,
                             "confidence": extraction.get("confidence", 0.0),
@@ -948,8 +1097,10 @@ async def _execute_tasks(
                             if isinstance(extraction.get("note"), str)
                             and extraction["note"].startswith("deepseek_error")
                             else None,
-                            "request_id": result.get("response_id") or result.get("request_id"),
-                            "http_status": result.get("status"),
+                            "request_id": result.get("response_id") or result.get("request_id")
+                            if search_backend == "tavily"
+                            else None,
+                            "http_status": result.get("status") if search_backend == "tavily" else None,
                             "cache_hit": result.get("cache_hit", False),
                             "attempt_index": attempt,
                             "elapsed_ms": elapsed_ms,
@@ -968,10 +1119,12 @@ async def _execute_tasks(
                         _append_task_log(task_log_path, task_record)
                         websearch_results.append(
                             {
-                                "task": task,
+                                "task": task_for_log,
                                 "extraction": extraction,
                                 "extraction_backend": extraction_backend,
                                 "raw_results": snippets[:3],  # 仅保留前3条片段便于审计
+                                "search_backend": search_backend,
+                                "note": search_note,
                             }
                         )
                         break
@@ -1391,6 +1544,15 @@ async def main() -> int:
         max_concurrency=4,
         proxies=proxies or None,
     )
+    exa_client = None
+    if AsyncExaClient and os.getenv("EXA_API_KEY"):
+        exa_client = AsyncExaClient(
+            api_key=os.getenv("EXA_API_KEY"),
+            cache=cache,
+            max_concurrency=2,
+        )
+    elif os.getenv("EXA_API_KEY"):
+        logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Exa 兜底将被跳过。")
     extractor = DeepSeekExtractionAgent(
         model=args.deepseek_model,
         base_url=args.deepseek_base_url,
@@ -1427,6 +1589,7 @@ async def main() -> int:
                 tasks,
                 market_payload,
                 tavily,
+                exa_client,
                 extractor,
                 task_log_path,
                 args.cache_ttl,
@@ -1544,6 +1707,9 @@ async def main() -> int:
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),
         "tavily_extract_422_count": exec_stats.get("tavily_extract_422_count", 0),
         "extract_auto_disabled": exec_stats.get("extract_auto_disabled", False),
+        "exa_fallback": exec_stats.get("exa_fallback", 0),
+        "exa_empty": exec_stats.get("exa_empty", 0),
+        "exa_error": exec_stats.get("exa_error", 0),
         "deepseek_p50_ms": p50_llm,
         "deepseek_p95_ms": p95_llm,
         "queue_requeued": exec_stats.get("queue_requeued", 0),
