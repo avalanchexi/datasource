@@ -184,6 +184,27 @@ async def _run_analysis(
     with market_path.open('r', encoding='utf-8') as fp:
         market_payload = json.load(fp)
 
+    # Policy-as-code gating (optional)
+    try:
+        meta_date = (
+            market_payload.get("metadata", {}).get("date")
+            or market_payload.get("metadata", {}).get("end_date")
+            or market_payload.get("metadata", {}).get("start_date")
+        )
+        date_compact = str(meta_date).replace("-", "") if meta_date else None
+        if date_compact:
+            policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
+            if policy_path.exists():
+                policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
+                if policy_payload.get("block_stage3"):
+                    raise RuntimeError(
+                        f"Policy evaluation blocked Stage3: redlist={policy_payload.get('redlist')}"
+                    )
+    except RuntimeError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] policy_evaluation check skipped: {exc}")
+
     fallback_used = False
     try:
         _require_data_completeness(

@@ -70,6 +70,21 @@ def test_apply_fund_flow_entry_marks_zero_anomaly():
     assert "异常: 零值待WebSearch复核" in entry["note"]
 
 
+def test_apply_fund_flow_entry_accepts_current_value_only():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None, "trend": "待获取", "source": "占位", "note": ""}
+    payload = {
+        "current_value": "35.6亿元",
+        "date": "2026-01-12",
+        "source": "每日经济新闻",
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(35.6)
+    assert entry["current_date"] == "2026-01-12"
+    assert "原始当日:35.6亿元" in entry["note"]
+
+
 def test_create_monetary_placeholder_infers_date_from_metadata():
     metadata = {"date": "2025-11-14"}
     placeholder = injector._create_monetary_placeholder("dr007", {"unit": "%"}, metadata)

@@ -7,12 +7,471 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import time
+import re
 from pathlib import Path
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
+
+from datasource.utils.trend_history_store import load_series_values
+
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - 环境缺省时延迟导入
+    OpenAI = None  # type: ignore
 
 NA_TEXT = "N/A（待 WebSearch）"
+DEFAULT_ASSET_CONCLUSION = "资金流转正，汇率偏稳，债券小幅下行，商品分化。"
+MAX_CONCLUSION_CHARS = 50
+QUALITY_REASONS = {
+    "trend_history_missing",
+    "no_previous_value",
+    "source_latest_only",
+    "manual_incomplete",
+}
+QUALITY_REASON_LABELS = {
+    "trend_history_missing": "trend_history缺失",
+    "no_previous_value": "无前值可比",
+    "source_latest_only": "来源仅提供最新值",
+    "manual_incomplete": "补数不完整",
+}
+NON_MACRO_KEYS = {
+    "GC=F", "CL=F", "BZ=F", "HG=F", "GSG", "BCOM",
+    "DXY", "USDCNH", "USDCNY",
+    "US10Y", "CN10Y", "CN10Y_CDB",
+    "000016",
+}
+
+
+def _to_float(value: Any) -> Optional[float]:
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _normalize_trend(trend: Any) -> Optional[str]:
+    if trend is None:
+        return None
+    text = str(trend).strip()
+    if not text or text in {NA_TEXT, "未知", "待 WebSearch", "待MCP获取", "待MCP", "N/A"}:
+        return None
+    return text
+
+
+def _infer_asset_trend(
+    asset_type: str,
+    raw_trend: Any = None,
+    daily_change: Any = None,
+    change_5d: Any = None,
+    change_120d: Any = None,
+    ytd_change: Any = None,
+    bp5: Any = None,
+    bp120: Any = None,
+) -> Optional[str]:
+    trend = _normalize_trend(raw_trend)
+    if trend:
+        return trend
+    if asset_type == "bond":
+        bp_val = _to_float(bp5) if bp5 is not None else None
+        if bp_val is None:
+            bp_val = _to_float(bp120) if bp120 is not None else None
+        if bp_val is None:
+            return None
+        if bp_val > 5:
+            return "上行"
+        if bp_val < -5:
+            return "下行"
+        return "平稳"
+
+    for candidate in (ytd_change, change_120d, change_5d, daily_change):
+        val = _to_float(candidate)
+        if val is None:
+            continue
+        if val > 10:
+            return "强势上涨"
+        if val > 3:
+            return "温和上涨"
+        if val < -10:
+            return "强势下跌"
+        if val < -3:
+            return "温和下跌"
+        return "横盘震荡"
+    return None
+
+
+def _infer_flow_trend(flow: dict) -> Optional[str]:
+    trend = _normalize_trend(flow.get("trend"))
+    if trend:
+        return trend
+    recent = _to_float(flow.get("recent_5d"))
+    total = _to_float(flow.get("total_120d"))
+    val = recent if recent is not None else total
+    if val is None:
+        return None
+    if val > 0:
+        return "流入"
+    if val < 0:
+        return "流出"
+    return "平稳"
+
+
+def _fmt_pct(value: Optional[float], digits: int = 1) -> Optional[str]:
+    if value is None:
+        return None
+    return f"{value:+.{digits}f}%"
+
+
+def _fmt_bp(value: Optional[float], digits: int = 1) -> Optional[str]:
+    if value is None:
+        return None
+    return f"{value:+.{digits}f}bp"
+
+
+def _pick_top(items: list, score_fn, limit: int = 3) -> list:
+    scored = []
+    for item in items:
+        score = score_fn(item)
+        if score is None:
+            continue
+        scored.append((abs(score), item))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    if scored:
+        return [item for _, item in scored[:limit]]
+    return items[:limit]
+
+
+def _build_asset_summary(
+    commodities: list,
+    forex_list: list,
+    bonds: list,
+    fund_flow: dict,
+) -> str:
+    parts: list[str] = []
+    def _is_tushare(item: dict) -> bool:
+        source = str(item.get("source", "")).lower()
+        return "tushare" in source
+
+    def _commodity_score(item: dict) -> Optional[float]:
+        return _to_float(item.get("ytd_change") or item.get("change_120d") or item.get("daily_change"))
+
+    def _forex_score(item: dict) -> Optional[float]:
+        return _to_float(item.get("change_120d") or item.get("daily_change"))
+
+    def _bond_score(item: dict) -> Optional[float]:
+        return _to_float(item.get("change_5d_bp") or item.get("change_120d_bp"))
+
+    def _flow_score(item: dict) -> Optional[float]:
+        return _to_float(item.get("recent_5d") or item.get("total_120d"))
+
+    comm_descs: list[str] = []
+    for comm in _pick_top([c for c in commodities if not _is_tushare(c)], _commodity_score):
+        name = comm.get("name") or comm.get("symbol") or "商品"
+        trend = _infer_asset_trend(
+            "commodity",
+            comm.get("trend"),
+            daily_change=comm.get("daily_change"),
+            change_120d=comm.get("change_120d"),
+            ytd_change=comm.get("ytd_change"),
+        )
+        change_label = None
+        ytd = _to_float(comm.get("ytd_change"))
+        if ytd is not None:
+            change_label = f"年内{_fmt_pct(ytd)}"
+        else:
+            c120 = _to_float(comm.get("change_120d"))
+            if c120 is not None:
+                change_label = f"120日{_fmt_pct(c120)}"
+            else:
+                daily = _to_float(comm.get("daily_change"))
+                if daily is not None:
+                    change_label = f"日{_fmt_pct(daily)}"
+        parts_local = [p for p in (change_label, trend) if p]
+        if parts_local:
+            comm_descs.append(f"{name}({ '，'.join(parts_local) })")
+    if comm_descs:
+        parts.append(f"商品:{'；'.join(comm_descs)}")
+
+    fx_descs: list[str] = []
+    for fx in _pick_top([f for f in forex_list if not _is_tushare(f)], _forex_score):
+        name = fx.get("name") or fx.get("pair") or "外汇"
+        trend = _infer_asset_trend(
+            "forex",
+            fx.get("trend"),
+            daily_change=fx.get("daily_change"),
+            change_120d=fx.get("change_120d"),
+        )
+        change_label = None
+        c120 = _to_float(fx.get("change_120d"))
+        if c120 is not None:
+            change_label = f"120日{_fmt_pct(c120)}"
+        else:
+            daily = _to_float(fx.get("daily_change"))
+            if daily is not None:
+                change_label = f"日{_fmt_pct(daily)}"
+        parts_local = [p for p in (change_label, trend) if p]
+        if parts_local:
+            fx_descs.append(f"{name}({ '，'.join(parts_local) })")
+    if fx_descs:
+        parts.append(f"外汇:{'；'.join(fx_descs)}")
+
+    bond_descs: list[str] = []
+    for bond in _pick_top([b for b in bonds if not _is_tushare(b)], _bond_score):
+        name = bond.get("name") or bond.get("symbol") or "债券"
+        bp5 = _to_float(bond.get("change_5d_bp"))
+        bp120 = _to_float(bond.get("change_120d_bp"))
+        trend = _infer_asset_trend("bond", bond.get("trend"), bp5=bp5, bp120=bp120)
+        change_label = None
+        if bp5 is not None:
+            change_label = f"5日{_fmt_bp(bp5)}"
+        elif bp120 is not None:
+            change_label = f"120日{_fmt_bp(bp120)}"
+        parts_local = [p for p in (change_label, trend) if p]
+        if parts_local:
+            bond_descs.append(f"{name}({ '，'.join(parts_local) })")
+    if bond_descs:
+        parts.append(f"债券:{'；'.join(bond_descs)}")
+
+    flow_descs: list[str] = []
+    flow_items = list(fund_flow.items())
+    flow_items = _pick_top(
+        flow_items,
+        lambda item: _flow_score(item[1]) if isinstance(item, tuple) else _flow_score(item),
+    )
+    for key, flow in flow_items:
+        if flow.get("source") == "异常零值-需核查":
+            continue
+        label = {
+            "northbound": "北向",
+            "southbound": "南向",
+            "etf": "ETF",
+            "margin": "融资融券",
+        }.get(key, str(key))
+        recent = _to_float(flow.get("recent_5d"))
+        total = _to_float(flow.get("total_120d"))
+        trend = _infer_flow_trend(flow)
+        parts_local: list[str] = []
+        if recent is not None:
+            parts_local.append(f"5日{recent:+.1f}亿")
+        if total is not None:
+            parts_local.append(f"120日{total:+.1f}亿")
+        if trend:
+            parts_local.append(trend)
+        if parts_local:
+            flow_descs.append(f"{label}({ '，'.join(parts_local) })")
+    if flow_descs:
+        parts.append(f"资金流:{'；'.join(flow_descs)}")
+
+    return " | ".join(parts)
+
+
+def _limit_text_length(text: str, max_len: int = MAX_CONCLUSION_CHARS) -> str:
+    cleaned = (text or "").replace("\n", " ").replace("\r", " ").strip()
+    if not cleaned:
+        return ""
+    if len(cleaned) > max_len:
+        cleaned = cleaned[:max_len].rstrip()
+    if cleaned and cleaned[-1] not in "。！？.!?":
+        if len(cleaned) >= max_len:
+            cleaned = cleaned[:-1] + "。"
+        else:
+            cleaned += "。"
+    return cleaned
+
+
+def _generate_asset_conclusion(summary: str) -> tuple[str, str, float]:
+    if not summary:
+        return DEFAULT_ASSET_CONCLUSION, "no_summary", 0.0
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key or OpenAI is None:
+        return DEFAULT_ASSET_CONCLUSION, "no_deepseek_key", 0.0
+    model = os.getenv("DEEPSEEK_SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+    base_url = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+    timeout = _to_float(os.getenv("DEEPSEEK_SUMMARY_TIMEOUT")) or 8.0
+
+    prompt = (
+        "你是资产配置简报助手。根据给定的资产变化摘要，"
+        "生成不超过50字的中文结论，仅输出结论，不要列表或标题。"
+    )
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": summary},
+    ]
+    start = time.perf_counter()
+    try:
+        client = OpenAI(api_key=api_key, base_url=base_url)
+        client = client.with_options(timeout=timeout)
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.2,
+            max_tokens=120,
+        )
+        text = (completion.choices[0].message.content or "").strip()
+        text = _limit_text_length(text)
+        if not text:
+            return DEFAULT_ASSET_CONCLUSION, "empty_output", (time.perf_counter() - start) * 1000
+        return text, "success", (time.perf_counter() - start) * 1000
+    except Exception as exc:  # pragma: no cover - 网络异常兜底
+        return DEFAULT_ASSET_CONCLUSION, f"deepseek_error:{exc}", (time.perf_counter() - start) * 1000
+
+
+def _write_report_observability(
+    report_date: str,
+    summary_input: str,
+    summary_output: str,
+    latency_ms: float,
+    status: str,
+) -> None:
+    date_compact = report_date.replace("-", "")
+    output_path = Path("logs") / f"observability_{date_compact}.json"
+    payload: dict = {}
+    if output_path.exists():
+        try:
+            payload = json.loads(output_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    payload.setdefault("report_summaries", [])
+    payload["report_summaries"].append(
+        {
+            "type": "asset_conclusion",
+            "generated_at": datetime.now().isoformat(),
+            "input_summary": summary_input,
+            "output_text": summary_output,
+            "latency_ms": round(latency_ms, 2),
+            "status": status,
+        }
+    )
+    payload.setdefault("generated_at", datetime.now().isoformat())
+    payload.setdefault("items", payload.get("items", []))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _extract_reason(note: Any) -> Optional[str]:
+    if not note:
+        return None
+    match = re.search(r"reason=([a-z_]+)", str(note))
+    if match and match.group(1) in QUALITY_REASONS:
+        return match.group(1)
+    return None
+
+
+def _has_trend_history(category: str, symbol: str) -> bool:
+    try:
+        values = load_series_values(category, symbol)
+    except Exception:
+        return False
+    return len(values) >= 2
+
+
+def _collect_quality_issues(market_data: dict) -> list[dict]:
+    issues: list[dict] = []
+
+    def _issue(category: str, key: str, field: str, reason: str, detail: Optional[str] = None) -> None:
+        if reason not in QUALITY_REASONS:
+            reason = "manual_incomplete"
+        issues.append(
+            {
+                "category": category,
+                "key": key,
+                "field": field,
+                "reason": reason,
+                "detail": detail or "",
+            }
+        )
+
+    def _as_list(section: Any) -> list:
+        if isinstance(section, dict):
+            return list(section.values())
+        return section or []
+
+    # Bonds: change_120d_bp 缺失
+    for bond in _as_list(market_data.get("bonds", [])):
+        symbol = bond.get("symbol") or bond.get("name") or "bond"
+        current = bond.get("current_yield")
+        if current in (None, 0.0):
+            _issue("bonds", symbol, "current_yield", "manual_incomplete")
+            continue
+        change_120d = bond.get("change_120d_bp")
+        if change_120d is None:
+            source = str(bond.get("source", "")).lower()
+            if not _has_trend_history("bonds", str(symbol)):
+                reason = "trend_history_missing"
+            elif "tushare" in source or "us_tycr" in source:
+                reason = "source_latest_only"
+            else:
+                reason = "manual_incomplete"
+            _issue("bonds", str(symbol), "change_120d_bp", reason)
+
+    # Macro indicators: previous_value / change_rate
+    for key, indicator in (market_data.get("macro_indicators", {}) or {}).items():
+        if key in NON_MACRO_KEYS:
+            continue
+        curr = indicator.get("current_value")
+        if curr in (None, "N/A"):
+            _issue("macro_indicators", key, "current_value", "manual_incomplete")
+            continue
+        reason = _extract_reason(indicator.get("note"))
+        if indicator.get("previous_value") is None and indicator.get("change_rate") is None:
+            _issue("macro_indicators", key, "previous_value", reason or "no_previous_value")
+
+    # Monetary policy: change_from_120d
+    for key, policy in (market_data.get("monetary_policy", {}) or {}).items():
+        curr = policy.get("current_value")
+        if curr in (None, "N/A"):
+            _issue("monetary_policy", key, "current_value", "manual_incomplete")
+            continue
+        reason = _extract_reason(policy.get("note"))
+        change = policy.get("change_from_120d")
+        if change is None:
+            _issue("monetary_policy", key, "change_from_120d", reason or "no_previous_value")
+
+    return issues
+
+
+def _write_quality_gate_logs(report_date: str, issues: list[dict]) -> None:
+    date_compact = report_date.replace("-", "")
+
+    gap_path = Path("reports") / f"gap_monitor_{date_compact}.json"
+    gap_payload: dict = {}
+    if gap_path.exists():
+        try:
+            gap_payload = json.loads(gap_path.read_text(encoding="utf-8"))
+        except Exception:
+            gap_payload = {}
+    gap_payload.setdefault("generated_at", datetime.now().isoformat())
+    gap_payload["data_quality_issues"] = []
+    if issues:
+        existing = {(item.get("category"), item.get("key"), item.get("field"), item.get("reason"))
+                    for item in gap_payload.get("data_quality_issues", []) if isinstance(item, dict)}
+        for issue in issues:
+            sig = (issue.get("category"), issue.get("key"), issue.get("field"), issue.get("reason"))
+            if sig not in existing:
+                gap_payload["data_quality_issues"].append(issue)
+    gap_path.parent.mkdir(parents=True, exist_ok=True)
+    gap_path.write_text(json.dumps(gap_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    obs_path = Path("logs") / f"observability_{date_compact}.json"
+    obs_payload: dict = {}
+    if obs_path.exists():
+        try:
+            obs_payload = json.loads(obs_path.read_text(encoding="utf-8"))
+        except Exception:
+            obs_payload = {}
+    obs_payload.setdefault("generated_at", datetime.now().isoformat())
+    obs_payload["data_quality_issues"] = []
+    if issues:
+        existing_obs = {(item.get("category"), item.get("key"), item.get("field"), item.get("reason"))
+                        for item in obs_payload.get("data_quality_issues", []) if isinstance(item, dict)}
+        for issue in issues:
+            sig = (issue.get("category"), issue.get("key"), issue.get("field"), issue.get("reason"))
+            if sig not in existing_obs:
+                obs_payload["data_quality_issues"].append(issue)
+    obs_path.parent.mkdir(parents=True, exist_ok=True)
+    obs_path.write_text(json.dumps(obs_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def generate_report(market_data_path: Path, pring_result_path: Path, output_path: Path) -> None:
@@ -56,6 +515,35 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
     estimated_items = _collect_estimated_items()
 
+    asset_summary = _build_asset_summary(commodities, forex_list, bonds, market_data.get("fund_flow", {}))
+    asset_conclusion, asset_status, asset_latency = _generate_asset_conclusion(asset_summary)
+    try:
+        _write_report_observability(report_date, asset_summary, asset_conclusion, asset_latency, asset_status)
+    except Exception:
+        pass
+
+    quality_issues = _collect_quality_issues(market_data)
+    try:
+        _write_quality_gate_logs(report_date, quality_issues)
+    except Exception:
+        pass
+
+    quality_gate_section = ""
+    if quality_issues:
+        lines = []
+        for issue in quality_issues:
+            reason = QUALITY_REASON_LABELS.get(issue.get("reason"), issue.get("reason"))
+            key = issue.get("key")
+            field = issue.get("field")
+            category = issue.get("category")
+            lines.append(f"- 🔴 {category}.{key} {field} 缺失（{reason}）")
+        joined = "\n".join(lines[:12])
+        quality_gate_section = f"""
+## 0、数据质量闸（需补数）
+
+{joined}
+"""
+
     report = f"""# A股背景扫描120日报告
 
 **报告日期**: {report_date}
@@ -69,8 +557,10 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 **Pring六阶段判定**: {pring_result['final_stage']}
 **置信度**: {pring_result['confidence']:.1%}
 **投资建议**: {pring_result['recommendation']}
+**资产层面结论**: {asset_conclusion}
 
 ---
+{quality_gate_section}
 
 ## 二、股票市场
 
@@ -93,6 +583,20 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 | 品种 | 最新报价 | 日涨跌 | 年内涨跌 | 趋势方向 |
 |------|----------|--------|----------|----------|
 """
+    commodity_name_map = {
+        "GC=F": "COMEX黄金",
+        "CL=F": "WTI原油",
+        "BZ=F": "Brent原油",
+        "HG=F": "COMEX铜",
+        "BCOM": "彭博商品指数",
+        "GSG": "标普GSCI商品ETF",
+    }
+    def _commodity_name(comm: dict) -> str:
+        name = comm.get("name")
+        symbol = comm.get("symbol")
+        if not name or name == symbol:
+            return commodity_name_map.get(symbol, symbol or "未知")
+        return name
     for comm in commodities:
         current_price = comm.get('current_price')
         is_placeholder = current_price in (None, 0.0)
@@ -100,7 +604,11 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         if is_placeholder:
             latest_price = NA_TEXT
         else:
-            latest_price = f"{comm.get('unit', '')} {current_price:.2f}".strip()
+            unit = str(comm.get('unit', '')).strip()
+            if unit:
+                latest_price = f"{current_price:.2f} {unit}"
+            else:
+                latest_price = f"{current_price:.2f}"
 
         daily_change = (
             f"{comm['daily_change']:+.2f}%"
@@ -112,7 +620,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         )
         trend = comm.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
-        report += f"| {comm['name']} | {latest_price} | {daily_change} | {ytd_change} | {trend} |\n"
+        report += f"| {_commodity_name(comm)} | {latest_price} | {daily_change} | {ytd_change} | {trend} |\n"
 
     report += """
 
@@ -164,15 +672,8 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 """
 
     # 仅展示真正的宏观指标；滤除误写入宏观区的商品/外汇/债券/指数键
-    non_macro_keys = {
-        "GC=F", "CL=F", "BZ=F", "HG=F", "GSG", "BCOM",
-        "DXY", "USDCNH", "USDCNY",
-        "US10Y", "CN10Y", "CN10Y_CDB",
-        "000016"
-    }
-
     for key, indicator in market_data['macro_indicators'].items():
-        if key in non_macro_keys:
+        if key in NON_MACRO_KEYS:
             continue
         curr = indicator.get('current_value', 'N/A')
         prev = indicator.get('previous_value', 'N/A')
@@ -383,6 +884,8 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     print(f"  - 置信度: {pring_result['confidence']:.1%}")
     if estimated_items:
         print(f"[WARN] 报告包含估计值指标: {'、'.join(estimated_items)}")
+    if quality_issues:
+        print(f"[WARN] 数据质量闸未通过: {len(quality_issues)} 项需补数")
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -216,24 +216,24 @@ class MCPToolAdapter:
 
         flow_mapping = {
             'northbound': {
-                'query': '北向资金今日流入 最新数据 东方财富网',
+                'query': '北向资金 今日净买入 最新数据 新闻',
                 'source': '东方财富网, 同花顺, 每日经济新闻',
-                'fields': ['recent_5d', 'recent_120d', 'trend', 'note']
+                'fields': ['current_value', 'recent_5d', 'total_120d', 'trend', 'note']
             },
             'southbound': {
                 'query': '南向资金今日流入 最新数据 同花顺',
                 'source': '同花顺, 东方财富网, Wind',
-                'fields': ['recent_5d', 'recent_120d', 'trend', 'note']
+                'fields': ['recent_5d', 'total_120d', 'trend', 'note']
             },
             'etf': {
                 'query': 'ETF资金流向 今日数据 Choice Wind',
                 'source': 'Wind, Choice, 东方财富网',
-                'fields': ['recent_5d', 'recent_120d', 'trend', 'note']
+                'fields': ['recent_5d', 'total_120d', 'trend', 'note']
             },
             'margin': {
                 'query': '融资融券余额 最新数据 交易所',
                 'source': '上交所, 深交所, Wind, 东方财富网',
-                'fields': ['recent_5d', 'recent_120d', 'trend', 'note']
+                'fields': ['recent_5d', 'total_120d', 'trend', 'note']
             }
         }
 

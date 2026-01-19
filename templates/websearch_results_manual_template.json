@@ -1,0 +1,71 @@
+{
+  "metadata": {
+    "date": "YYYY-MM-DD",
+    "note": "Fill numeric fields before injection; avoid 0/None placeholders."
+  },
+  "bonds": [
+    {
+      "symbol": "US10Y",
+      "name": "US 10Y Treasury",
+      "current_yield": null,
+      "change_5d_bp": null,
+      "change_120d_bp": null,
+      "trend": "stable",
+      "source": "MCP WebSearch (source detail)"
+    }
+  ],
+  "commodities": [
+    {
+      "symbol": "GC=F",
+      "name": "Gold",
+      "current_price": null,
+      "unit": "$/oz",
+      "ytd_change": null,
+      "trend": "unknown",
+      "source": "MCP WebSearch (source detail)"
+    }
+  ],
+  "forex": [
+    {
+      "pair": "USDCNY",
+      "name": "USD/CNY",
+      "current_rate": null,
+      "daily_change": null,
+      "change_120d": null,
+      "trend": "unknown",
+      "source": "MCP WebSearch (source detail)"
+    }
+  ],
+  "fund_flow": {
+    "northbound": {
+      "current_value": null,
+      "date": "YYYY-MM-DD",
+      "recent_5d": null,
+      "total_120d": null,
+      "trend": "inflow",
+      "source": "MCP WebSearch",
+      "note": "source detail (news daily value optional)"
+    }
+  },
+  "macro_indicators": {
+    "industrial": {
+      "indicator_name": "Industrial Output",
+      "current_value": null,
+      "previous_value": null,
+      "change_rate": null,
+      "unit": "%",
+      "date": "YYYY-MM-DD",
+      "source": "MCP WebSearch (source detail)"
+    }
+  },
+  "monetary_policy": {
+    "rrr": {
+      "policy_name": "Reserve Requirement Ratio",
+      "current_value": null,
+      "change_from_120d": null,
+      "unit": "%",
+      "date": "YYYY-MM-DD",
+      "source": "MCP WebSearch (source detail)"
+    }
+  }
+}

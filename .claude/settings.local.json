@@ -91,7 +91,11 @@
       "Bash(fi)",
       "Bash(done)",
       "Bash(ls:*)",
-      "Bash(DATE=20251225)"
+      "Bash(DATE=20251225)",
+      "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python:*)",
+      "Bash(do v=$!k-)",
+      "Bash([ -n \"$v\" ])",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

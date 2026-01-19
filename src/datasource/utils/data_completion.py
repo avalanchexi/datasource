@@ -24,6 +24,7 @@ except ImportError:
     logger.error("MCP工具未可用，V2.1严格模式禁止使用模拟数据")
 
 from .yahoo_finance import fetch_price_history, YAHOO_SYMBOL_MAP
+from .trend_history_store import load_series_values
 
 if TYPE_CHECKING:
     from datasource.manager import DataSourceManager
@@ -290,6 +291,18 @@ class DataCompletionChecker:
                         }
 
                         if result["change_5d"] is None or result["change_120d"] is None:
+                            # Try trend_history before Yahoo fallback
+                            trend_values = load_series_values("forex", manager_symbol)
+                            if trend_values:
+                                trend_series = pd.Series(trend_values)
+                                if result["change_5d"] is None:
+                                    result["change_5d"] = self._pct_change(trend_series, 5)
+                                if result["change_120d"] is None:
+                                    result["change_120d"] = self._pct_change(trend_series, 120)
+                                if result["change_5d"] is not None or result["change_120d"] is not None:
+                                    result["data_source"] = f"{result['data_source']}+trend_history"
+
+                        if result["change_5d"] is None or result["change_120d"] is None:
                             yahoo_series = self._fetch_price_series(currency_pair, start_date, end_date)
                             if yahoo_series is not None and not yahoo_series.empty:
                                 yahoo_series = yahoo_series.sort_values("date")
@@ -396,6 +409,17 @@ class DataCompletionChecker:
                             "method": "manager_fallback",
                             "accuracy": None,
                         }
+
+                        if result["change_5d_bp"] is None or result["change_120d_bp"] is None:
+                            trend_values = load_series_values("bonds", symbol)
+                            if trend_values:
+                                trend_series = pd.Series(trend_values)
+                                if result["change_5d_bp"] is None:
+                                    result["change_5d_bp"] = self._bp_change(trend_series, 5)
+                                if result["change_120d_bp"] is None:
+                                    result["change_120d_bp"] = self._bp_change(trend_series, 120)
+                                if result["change_5d_bp"] is not None or result["change_120d_bp"] is not None:
+                                    result["data_source"] = f"{result['data_source']}+trend_history"
 
                         if result["change_120d_bp"] is None and symbol == "US10Y":
                             yahoo_series = self._fetch_price_series("^TNX", start_date, end_date)

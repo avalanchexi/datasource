@@ -53,6 +53,11 @@ try:
 except Exception:  # pragma: no cover - 可选依赖缺失时延迟报错
     run_tasks_lc = None  # type: ignore
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
+from datasource.utils.quality_metrics import write_quality_metrics
+from datasource.utils.observability import build_observability_log, write_observability_log
+from datasource.utils.policy_rules import evaluate_policy, write_policy_evaluation, load_policy_rules
+from datasource.utils.run_snapshot import write_run_snapshot
+from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -250,6 +255,29 @@ def _percentile(values: List[float], pct: float) -> float:
     return d0 + d1
 
 
+def _score_stats(snippets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    scores = []
+    for s in snippets:
+        score = s.get("score")
+        if isinstance(score, (int, float)):
+            scores.append(float(score))
+    if not scores:
+        return {
+            "score_count": 0,
+            "score_min": None,
+            "score_p50": None,
+            "score_p95": None,
+            "score_max": None,
+        }
+    return {
+        "score_count": len(scores),
+        "score_min": min(scores),
+        "score_p50": _percentile(scores, 50),
+        "score_p95": _percentile(scores, 95),
+        "score_max": max(scores),
+    }
+
+
 def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
     """检查任务的查询信息是否完整，返回警告列表"""
     warnings: List[str] = []
@@ -257,9 +285,10 @@ def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
         key = t.get("indicator_key")
         domains = t.get("preferred_domains") or []
         query = t.get("query")
+        queries = t.get("queries") or []
         unit = t.get("unit")
         issuer = t.get("issuer")
-        if not query:
+        if not query and not queries:
             warnings.append(f"{key}: 缺少 query，已回退为 indicator_key")
         if not domains:
             warnings.append(f"{key}: 缺少 preferred_domains，可能命中词典/非目标站点")
@@ -373,16 +402,80 @@ def _safe_number(value: Any) -> Optional[float]:
         return None
 
 
-def _filter_by_domain(snippets: List[Dict[str, Any]], preferred: Optional[List[str]]) -> List[Dict[str, Any]]:
+# 基于经验的合理区间，用于过滤明显离谱的抽取值（仅做人工复核标记）
+_RANGE_RULES: Dict[str, tuple[float, float]] = {
+    "USDCNY": (5.5, 9.5),
+    "USDCNH": (5.5, 10.0),
+    "DXY": (70.0, 140.0),
+    "EURUSD": (0.5, 2.0),
+    "GBPUSD": (0.8, 2.5),
+    "USDJPY": (50.0, 200.0),
+    "US10Y": (0.0, 15.0),
+    "CN10Y": (0.0, 10.0),
+    "CN10Y_CDB": (0.0, 12.0),
+    "GC=F": (800.0, 5000.0),
+    "CL=F": (0.1, 250.0),
+    "BZ=F": (0.1, 250.0),
+    "HG=F": (0.5, 8.0),
+    "BCOM": (30.0, 300.0),
+    "GSG": (10.0, 80.0),
+    "bdi": (200.0, 10000.0),
+    "rrr": (5.0, 20.0),
+    "reverse_repo": (1.0, 5.0),
+    "mlf": (1.5, 5.0),
+}
+
+
+def _filter_by_domain(
+    snippets: List[Dict[str, Any]],
+    preferred: Optional[List[str]],
+    indicator_key: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """过滤掉不在白名单域名中的搜索结果；若过滤后为空则回退原列表。"""
     if not preferred:
         return snippets
+    noisy_path_tokens = {
+        "investing.com": ["/news/"],
+        "marketwatch.com": ["/story/", "/press-release/"],
+    }
+    # 仅对实时类指标启用路径噪音过滤，避免误伤宏观新闻类指标
+    noisy_filter_keys = {
+        "USDCNY",
+        "USDCNH",
+        "DXY",
+        "EURUSD",
+        "GBPUSD",
+        "USDJPY",
+        "US10Y",
+        "CN10Y",
+        "CN10Y_CDB",
+        "GC=F",
+        "CL=F",
+        "BZ=F",
+        "HG=F",
+        "BCOM",
+        "GSG",
+        "bdi",
+    }
+    apply_noisy_filter = indicator_key in noisy_filter_keys if indicator_key else True
     filtered: List[Dict[str, Any]] = []
     for snip in snippets:
         url = snip.get("url") or ""
         try:
-            netloc = urlparse(url).netloc
-            if any(netloc.endswith(d) for d in preferred):
+            parsed = urlparse(url)
+            netloc = parsed.netloc
+            path = parsed.path or ""
+            matched_domain = None
+            for d in preferred:
+                if netloc.endswith(d):
+                    matched_domain = d
+                    break
+            if matched_domain:
+                # drop obvious news pages for numeric indicators
+                if apply_noisy_filter:
+                    blocked_tokens = noisy_path_tokens.get(matched_domain)
+                    if blocked_tokens and any(tok in path for tok in blocked_tokens):
+                        continue
                 filtered.append(snip)
         except Exception:
             continue
@@ -403,10 +496,26 @@ def _regex_fallback(snippets: List[Dict[str, Any]], indicator: str) -> Optional[
     patterns: List[str] = []
     if ind in {"industrial", "industrial_sales"}:
         patterns = [r"([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
-    elif ind in {"mlf", "reverse_repo", "rrr"}:
-        patterns = [r"([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
+    elif ind == "mlf":
+        patterns = [r"(?:mlf|中期借贷便利)[^\\d]*([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
+    elif ind == "reverse_repo":
+        patterns = [r"(?:逆回购|repo)[^\\d]*([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
+    elif ind == "rrr":
+        patterns = [r"(?:存款准备金率|rrr|降准)[^\\d]*([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
     elif ind == "bdi":
-        patterns = [r"BDI[^\\d]*([-+]?\\d{3,5}(?:\\.\\d+)?)", r"([-+]?\\d{3,5}(?:\\.\\d+)?)"]
+        patterns = [r"(?:BDI|波罗的海)[^\\d]*([-+]?\\d{3,5}(?:\\.\\d+)?)"]
+    elif ind == "usdcny":
+        patterns = [r"(?:USDCNY|USD/CNY|美元/人民币|美元人民币)[^\\d]*([0-9]+\\.\\d{2,6})"]
+    elif ind == "usdcnh":
+        patterns = [r"(?:USDCNH|USD/CNH|离岸人民币)[^\\d]*([0-9]+\\.\\d{2,6})"]
+    elif ind == "dxy":
+        patterns = [r"(?:DXY|美元指数|Dollar Index)[^\\d]*([0-9]{2,3}(?:\\.\\d+)?)"]
+    elif ind == "us10y":
+        patterns = [r"(?:US10Y|美国10年|10年期国债|10-year)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?"]
+    elif ind == "cn10y":
+        patterns = [r"(?:中国10年|10年期国债)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?"]
+    elif ind == "cn10y_cdb":
+        patterns = [r"(?:国开|国开债|开发债)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?"]
     else:
         return None
 
@@ -557,7 +666,9 @@ async def _execute_tasks(
     disable_extract: bool = False,
     auto_disable_extract_on_422: bool = False,
     extract_422_threshold: int = 3,
+    extract_422_cooldown_sec: int = 300,
     extract_topk: int = 3,
+    low_score_threshold: float = 0.2,
     llm_hard_timeout: Optional[float] = None,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
     completed: List[Dict[str, Any]] = []
@@ -579,6 +690,7 @@ async def _execute_tasks(
     stats.setdefault("queue_dead_letters", 0)
     stats.setdefault("deepseek_latencies", [])
     stats.setdefault("extract_auto_disabled", False)
+    stats.setdefault("low_score_drop", 0)
     stats.setdefault("exa_fallback", 0)
     stats.setdefault("exa_empty", 0)
     stats.setdefault("exa_error", 0)
@@ -586,6 +698,8 @@ async def _execute_tasks(
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
     extract_disabled = disable_extract
+    extract_disabled_until: Dict[str, float] = {}
+    extract_422_tracker: Dict[str, Dict[str, Any]] = {}
 
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
@@ -610,7 +724,10 @@ async def _execute_tasks(
     async def _do_extract(snips: List[Dict[str, Any]], task: Dict[str, Any]) -> Dict[str, Any]:
         """执行抽取，记录 DeepSeek 延迟与错误；regex 模式直接返回占位。"""
         if extraction_backend == "regex":
-            val, url = extractor._fallback_extract(snips)  # type: ignore
+            val = _regex_fallback(snips, task.get("indicator_key", ""))
+            url = None
+            if val is None:
+                val, url = extractor._fallback_extract(snips)  # type: ignore
             return {
                 "value": val,
                 "unit": task.get("unit"),
@@ -675,12 +792,13 @@ async def _execute_tasks(
     async def _try_exa_fallback(
         task: Dict[str, Any],
         reason: str,
+        query_override: Optional[str] = None,
     ) -> (Optional[Dict[str, Any]], Optional[str]):
         if not exa_client:
             return None, None
         if task.get("indicator_key") in {"northbound", "southbound", "etf", "margin"}:
             return None, None
-        query = task.get("query") or task.get("indicator_key")
+        query = query_override or task.get("query") or task.get("indicator_key")
         include_domains = task.get("preferred_domains") or None
         num_results = task.get("max_results") or None
         start_published = _start_date_from_max_age(task.get("max_age_days"))
@@ -770,6 +888,17 @@ async def _execute_tasks(
                     "created_at": task["created_at"],
                     "finished_at": int(datetime.now().timestamp()),
                     "manual_required": manual_required,
+                    "extraction_skipped_reason": task.get("extraction_skipped_reason"),
+                    "extract_skipped_reason": task.get("extract_skipped_reason"),
+                    "score_min": (task.get("score_stats") or {}).get("score_min"),
+                    "score_p50": (task.get("score_stats") or {}).get("score_p50"),
+                    "score_p95": (task.get("score_stats") or {}).get("score_p95"),
+                    "score_max": (task.get("score_stats") or {}).get("score_max"),
+                    "score_count": (task.get("score_stats") or {}).get("score_count"),
+                    "score_low_threshold": task.get("score_low_threshold"),
+                    "score_low_all": task.get("score_low_all"),
+                    "score_filtered_drop": task.get("score_filtered_drop"),
+                    "domain_filtered_drop": task.get("domain_filtered_drop"),
                 }
                 if manual_required:
                     failures.append(task_record)
@@ -867,6 +996,9 @@ async def _execute_tasks(
             for attempt in count(start=1):
                 started = time.perf_counter()
                 skip_deepseek_reason: Optional[str] = None
+                extract_skipped_reason: Optional[str] = None
+                query_used: Optional[str] = None
+                query_attempts: List[Dict[str, Any]] = []
                 search_backend = "tavily"
                 search_note: Optional[str] = None
                 task_for_log = task
@@ -892,23 +1024,87 @@ async def _execute_tasks(
                     break
                 try:
                     try:
-                        result = await client.search(
-                            query=task.get("query") or task["indicator_key"],
-                            search_depth=task.get("search_depth")
-                            or ("advanced" if task["stage_phase"] == "assets" else "basic"),
-                            include_domains=task.get("preferred_domains") or None,
-                            time_range=task.get("time_range"),
-                            topic=task.get("topic"),
-                            language=task.get("language"),
-                            max_results=task.get("max_results"),
-                            days=task.get("days"),
-                            chunks_per_source=task.get("chunks_per_source"),
-                            auto_parameters=task.get("auto_parameters"),
-                            cache_ttl=cache_ttl,
-                        )
-                        snippets = result.get("results") or []
+                        query_candidates = []
+                        primary_query = task.get("query") or task.get("indicator_key")
+                        if primary_query:
+                            query_candidates.append(primary_query)
+                        for q in task.get("queries") or []:
+                            if q and q not in query_candidates:
+                                query_candidates.append(q)
+                        if not query_candidates:
+                            query_candidates = [task.get("indicator_key")]
+                        best_snippets: List[Dict[str, Any]] = []
+                        best_score_max = -1.0
+                        best_query = None
+                        best_result: Dict[str, Any] = {}
+                        best_score_stats: Dict[str, Any] = {}
+                        query_attempts.clear()
+                        last_exc: Optional[Exception] = None
+                        for q in query_candidates:
+                            try:
+                                result = await client.search(
+                                    query=q,
+                                    search_depth=task.get("search_depth")
+                                    or ("advanced" if task["stage_phase"] == "assets" else "basic"),
+                                    include_domains=task.get("preferred_domains") or None,
+                                    exclude_domains=task.get("exclude_domains") or None,
+                                    time_range=task.get("time_range"),
+                                    topic=task.get("topic"),
+                                    language=task.get("language"),
+                                    max_results=task.get("max_results"),
+                                    days=task.get("days"),
+                                    chunks_per_source=task.get("chunks_per_source"),
+                                    auto_parameters=task.get("auto_parameters"),
+                                    cache_ttl=cache_ttl,
+                                )
+                                snippets = result.get("results") or []
+                                score_stats = _score_stats(snippets)
+                                query_attempts.append(
+                                    {
+                                        "query": q,
+                                        "result_count": len(snippets),
+                                        "score_max": score_stats.get("score_max"),
+                                    }
+                                )
+                                score_max = score_stats.get("score_max")
+                                if snippets:
+                                    if best_score_max < 0 and best_snippets == []:
+                                        best_snippets = snippets
+                                        best_score_max = score_max if isinstance(score_max, (int, float)) else -1.0
+                                        best_query = q
+                                        best_result = result
+                                        best_score_stats = score_stats
+                                    elif isinstance(score_max, (int, float)) and score_max > best_score_max:
+                                        best_snippets = snippets
+                                        best_score_max = score_max
+                                        best_query = q
+                                        best_result = result
+                                        best_score_stats = score_stats
+                                if snippets and low_score_threshold and score_max is not None and score_max >= low_score_threshold:
+                                    break
+                            except Exception as exc:
+                                last_exc = exc
+                                query_attempts.append({"query": q, "error": str(exc)})
+                                continue
+                        if best_snippets:
+                            result = best_result
+                            snippets = best_snippets
+                            score_stats = best_score_stats
+                            query_used = best_query
+                            task_for_log = {
+                                **task,
+                                "query_used": best_query,
+                                "query_attempts": query_attempts,
+                            }
+                        else:
+                            snippets = []
+                            score_stats = _score_stats(snippets)
+                            if last_exc:
+                                raise last_exc
                     except Exception as exc:
-                        exa_result, exa_note = await _try_exa_fallback(task, f"tavily_error:{exc}")
+                        exa_result, exa_note = await _try_exa_fallback(
+                            task, f"tavily_error:{exc}", query_override=task.get("query")
+                        )
                         if exa_result:
                             result = exa_result
                             snippets = result.get("results") or []
@@ -945,6 +1141,7 @@ async def _execute_tasks(
                                 break
                             continue
 
+                    score_stats = _score_stats(snippets)
                     if not snippets:
                         if search_backend == "tavily":
                             exa_result, exa_note = await _try_exa_fallback(task, "no_snippets")
@@ -956,6 +1153,19 @@ async def _execute_tasks(
                                 task_for_log = {**task, "search_backend": "exa"}
                         if not snippets:
                             skip_deepseek_reason = search_note or "no_snippets"
+                        score_stats = _score_stats(snippets)
+                    score_low_all = False
+                    if (
+                        skip_deepseek_reason is None
+                        and score_stats.get("score_count")
+                        and low_score_threshold is not None
+                        and low_score_threshold > 0
+                    ):
+                        score_max = score_stats.get("score_max")
+                        if isinstance(score_max, (int, float)) and score_max < low_score_threshold:
+                            score_low_all = True
+                            skip_deepseek_reason = "low_score_all"
+                            stats["low_score_drop"] += 1
                     # Tavily extract (two-step) for noisy tasks
                     try:
                         if (
@@ -963,45 +1173,62 @@ async def _execute_tasks(
                             and not extract_disabled
                             and (is_fund_flow or is_forex or task["indicator_key"] in {"GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"})
                         ):
-                            top_for_extract = snippets[: max(1, extract_topk)]
-                            if top_for_extract:
-                                stats["tavily_extract_calls"] += 1
-                                extract_resp = await client.extract(
-                                    search_results=top_for_extract,
-                                    extract_depth="advanced" if is_fund_flow or is_forex else "standard",
-                                    include_raw_content=is_fund_flow,
-                                    cache_ttl=cache_ttl,
-                                )
-                                if extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
-                                    stats["tavily_extract_422_count"] += 1
-                                    logger.debug("Tavily extract 422, fallback to search-only")
-                                    skip_deepseek_reason = "tavily_extract_422"
-                                    await asyncio.sleep(0.5)
-                                    if (
-                                        auto_disable_extract_on_422
-                                        and not extract_disabled
-                                        and stats["tavily_extract_422_count"] >= max(1, extract_422_threshold)
-                                    ):
-                                        extract_disabled = True
-                                        stats["extract_auto_disabled"] = True
-                                        logger.warning(
-                                            "[Stage2] Tavily extract 422 达到阈值(%d)，后续任务自动关闭 extract，仅保留 search+regex",
-                                            extract_422_threshold,
-                                        )
-                                else:
-                                    extra_res = extract_resp.get("results") or []
-                                    # 将 extract 的内容附加为额外 snippet，供后续抽取/regex 使用
-                                    for ex in extra_res:
-                                        content = ex.get("content") or ex.get("raw_content")
-                                        if content:
-                                            snippets.append(
-                                                {
-                                                    "content": content,
-                                                    "snippet": ex.get("snippet") or "",
-                                                    "url": ex.get("url") or ex.get("source_url"),
-                                                    "score": ex.get("score"),
-                                                }
-                                            )
+                            if extract_422_cooldown_sec > 0:
+                                cooldown_until = extract_disabled_until.get(task["indicator_key"])
+                                if cooldown_until and time.time() < cooldown_until:
+                                    extract_skipped_reason = "extract_cooldown"
+                            if extract_skipped_reason is None:
+                                top_for_extract = snippets[: max(1, extract_topk)]
+                                if top_for_extract:
+                                    stats["tavily_extract_calls"] += 1
+                                    extract_resp = await client.extract(
+                                        search_results=top_for_extract,
+                                        extract_depth="advanced" if is_fund_flow or is_forex else "standard",
+                                        include_raw_content=is_fund_flow,
+                                        cache_ttl=cache_ttl,
+                                    )
+                                    if extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
+                                        stats["tavily_extract_422_count"] += 1
+                                        logger.debug("Tavily extract 422, 降级到 DeepSeek 直接从 snippets 抽取")
+                                        stats.setdefault("extract_fallback_to_deepseek", 0)
+                                        stats["extract_fallback_to_deepseek"] += 1
+                                        # 不设置 skip_deepseek_reason，让 DeepSeek 从原始 snippets 抽取
+                                        await asyncio.sleep(0.5)
+                                        if auto_disable_extract_on_422 and extract_422_cooldown_sec > 0:
+                                            now_ts = time.time()
+                                            tracker = extract_422_tracker.get(task["indicator_key"])
+                                            if (
+                                                not tracker
+                                                or now_ts - tracker.get("window_start", 0) > extract_422_cooldown_sec
+                                            ):
+                                                tracker = {"count": 0, "window_start": now_ts}
+                                            tracker["count"] = tracker.get("count", 0) + 1
+                                            extract_422_tracker[task["indicator_key"]] = tracker
+                                            if tracker["count"] >= max(1, extract_422_threshold):
+                                                extract_disabled_until[task["indicator_key"]] = (
+                                                    now_ts + extract_422_cooldown_sec
+                                                )
+                                                stats["extract_auto_disabled"] = True
+                                                logger.warning(
+                                                    "[Stage2] Tavily extract 422 达到阈值(%d)，%s 进入冷却 %ss",
+                                                    extract_422_threshold,
+                                                    task["indicator_key"],
+                                                    extract_422_cooldown_sec,
+                                                )
+                                    else:
+                                        extra_res = extract_resp.get("results") or []
+                                        # 将 extract 的内容附加为额外 snippet，供后续抽取/regex 使用
+                                        for ex in extra_res:
+                                            content = ex.get("content") or ex.get("raw_content")
+                                            if content:
+                                                snippets.append(
+                                                    {
+                                                        "content": content,
+                                                        "snippet": ex.get("snippet") or "",
+                                                        "url": ex.get("url") or ex.get("source_url"),
+                                                        "score": ex.get("score"),
+                                                    }
+                                                )
                     except Exception as exc:  # pragma: no cover
                         logger.debug(f"Tavily extract skipped/failed: {exc}")
                     # score 过滤
@@ -1010,17 +1237,99 @@ async def _execute_tasks(
                     if high_score:
                         snippets = high_score
                         stats["score_filtered_drop"] += max(0, before_score - len(snippets))
+                    score_filtered_drop_local = max(0, before_score - len(snippets)) if high_score else 0
                     before = len(snippets)
-                    snippets = _filter_by_domain(snippets, task.get("preferred_domains"))
+                    snippets = _filter_by_domain(
+                        snippets,
+                        task.get("preferred_domains"),
+                        indicator_key=task.get("indicator_key"),
+                    )
                     after = len(snippets)
                     if before and before != after:
                         stats["domain_filtered_drop"] += before - after
+                    domain_filtered_drop_local = max(0, before - after) if before and before != after else 0
                     snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
-                    task_for_log = {**task, "search_backend": search_backend}
+                    task_for_log = {
+                        **task,
+                        "search_backend": search_backend,
+                        "query_used": query_used,
+                        "query_attempts": query_attempts,
+                        "score_stats": score_stats,
+                        "score_low_all": score_low_all,
+                        "score_low_threshold": low_score_threshold,
+                        "score_filtered_drop": score_filtered_drop_local,
+                        "domain_filtered_drop": domain_filtered_drop_local,
+                        "extraction_skipped_reason": skip_deepseek_reason,
+                        "extract_skipped_reason": extract_skipped_reason,
+                    }
                     if search_note:
                         task_for_log["search_note"] = search_note
                     if use_queue:
+                        if skip_deepseek_reason:
+                            extraction = {
+                                "value": None,
+                                "unit": task.get("unit"),
+                                "note": f"skipped_deepseek:{skip_deepseek_reason}",
+                                "source_url": None,
+                                "confidence": 0.0,
+                                "llm_error": f"skipped_deepseek:{skip_deepseek_reason}",
+                                "llm_timeout": False,
+                                "llm_latency_ms": 0,
+                            }
+                            task_record = {
+                                "task_id": task["task_id"],
+                                "indicator_key": task["indicator_key"],
+                                "stage_phase": task["stage_phase"],
+                                "search_backend": task_for_log.get("search_backend"),
+                                "fund_flow_backend": backend if is_fund_flow else None,
+                                "extraction_backend": extraction_backend,
+                                "confidence": extraction.get("confidence", 0.0),
+                                "source_url": extraction.get("source_url"),
+                                "note": extraction.get("note"),
+                                "llm_latency_ms": extraction.get("llm_latency_ms"),
+                                "llm_error": extraction.get("llm_error"),
+                                "deepseek_error": extraction.get("note")
+                                if isinstance(extraction.get("note"), str)
+                                and extraction["note"]
+                                and extraction["note"].startswith("deepseek_error")
+                                else None,
+                                "request_id": result.get("response_id") or result.get("request_id")
+                                if search_backend == "tavily"
+                                else None,
+                                "http_status": result.get("status") if search_backend == "tavily" else None,
+                                "cache_hit": result.get("cache_hit", False),
+                                "attempt_index": attempt,
+                                "elapsed_ms": elapsed_ms,
+                                "created_at": task["created_at"],
+                                "finished_at": int(datetime.now().timestamp()),
+                                "manual_required": True,
+                                "extraction_skipped_reason": skip_deepseek_reason,
+                                "extract_skipped_reason": extract_skipped_reason,
+                                "score_min": score_stats.get("score_min"),
+                                "score_p50": score_stats.get("score_p50"),
+                                "score_p95": score_stats.get("score_p95"),
+                                "score_max": score_stats.get("score_max"),
+                                "score_count": score_stats.get("score_count"),
+                                "score_low_threshold": low_score_threshold,
+                                "score_low_all": score_low_all,
+                                "score_filtered_drop": task_for_log.get("score_filtered_drop"),
+                                "domain_filtered_drop": task_for_log.get("domain_filtered_drop"),
+                            }
+                            failures.append(task_record)
+                            manual_required_keys.append(task_record["indicator_key"])
+                            _append_task_log(task_log_path, task_record)
+                            websearch_results.append(
+                                {
+                                    "task": task_for_log,
+                                    "extraction": extraction,
+                                    "extraction_backend": extraction_backend,
+                                    "raw_results": snippets[:3],
+                                    "search_backend": task_for_log.get("search_backend"),
+                                    "note": task_for_log.get("search_note"),
+                                }
+                            )
+                            break
                         await queue.put((task_for_log, snippets, attempt))  # type: ignore
                         break
                     else:
@@ -1039,8 +1348,8 @@ async def _execute_tasks(
                         else:
                             stats["extract_calls"] += 1
                             extraction = await _do_extract(snippets, task)
-                        # regex 兜底：关键指标无值时尝试直接提取数字
-                        if extraction.get("value") is None:
+                        # regex 兜底：关键指标无值时尝试直接提取数字（低相关时跳过）
+                        if extraction.get("value") is None and skip_deepseek_reason != "low_score_all":
                             regex_val = _regex_fallback(snippets, task["indicator_key"])
                             if regex_val is not None:
                                 extraction["value"] = regex_val
@@ -1079,6 +1388,8 @@ async def _execute_tasks(
                             manual_required = manual_required or manual2
                         if search_note and search_backend == "exa":
                             extraction["note"] = ((extraction.get("note") or "") + f" {search_note}").strip()
+                        if skip_deepseek_reason == "low_score_all":
+                            manual_required = True
 
                         task_record = {
                             "task_id": task["task_id"],
@@ -1107,6 +1418,17 @@ async def _execute_tasks(
                             "created_at": task["created_at"],
                             "finished_at": int(datetime.now().timestamp()),
                             "manual_required": manual_required,
+                            "extraction_skipped_reason": skip_deepseek_reason,
+                            "extract_skipped_reason": extract_skipped_reason,
+                            "score_min": score_stats.get("score_min"),
+                            "score_p50": score_stats.get("score_p50"),
+                            "score_p95": score_stats.get("score_p95"),
+                            "score_max": score_stats.get("score_max"),
+                            "score_count": score_stats.get("score_count"),
+                            "score_low_threshold": low_score_threshold,
+                            "score_low_all": score_low_all,
+                            "score_filtered_drop": task_for_log.get("score_filtered_drop"),
+                            "domain_filtered_drop": task_for_log.get("domain_filtered_drop"),
                         }
                         if manual_required:
                             failures.append(task_record)
@@ -1257,8 +1579,16 @@ def _validate_general_extraction(
     domains = task.get("preferred_domains") or []
     issuer_hint = task.get("issuer")
     issuer_aliases = task.get("issuer_aliases") or []
+    indicator_key = task.get("indicator_key")
     manual = False
     note_append = ""
+    note_flag = extraction.get("note") or ""
+    snippets_text = " ".join(
+        [
+            str(s.get("content", "")) or str(s.get("snippet", "")) or ""
+            for s in (snippets or [])
+        ]
+    ).lower()
 
     # unit 校验（允许点/points 互通）
     if unit_hint:
@@ -1278,6 +1608,16 @@ def _validate_general_extraction(
             if not any(netloc.endswith(d) for d in domains):
                 manual = True
                 note_append = (note_append + " 域名不在白名单").strip()
+            # regex_only 时 URL 过于泛（如首页）时标记人工
+            strict_regex_keys = {"USDCNY", "USDCNH", "DXY", "bdi"}
+            if (
+                indicator_key in strict_regex_keys
+                and isinstance(note_flag, str)
+                and note_flag.startswith("regex")
+                and urlparse(src).path in {"", "/"}
+            ):
+                manual = True
+                note_append = (note_append + " regex_only来源过泛").strip()
         except Exception:
             manual = True
             note_append = (note_append + " source_url解析失败").strip()
@@ -1285,24 +1625,70 @@ def _validate_general_extraction(
     # 发布机构校验：若提供 issuer_hint，需要在抽取或片段中出现
     if issuer_hint:
         issuer_match_flag = extraction.get("issuer_match")
-        snippets_text = " ".join(
-            [
-                str(s.get("content", "")) or str(s.get("snippet", "")) or ""
-                for s in (snippets or [])
-            ]
-        ).lower()
         alias_hit = any(alias.lower() in snippets_text for alias in issuer_aliases)
         if not issuer_match_flag and issuer_hint.lower() not in snippets_text and not alias_hit:
             # 若已有有效数值但缺发行人，则仅提示不强制人工；无值则仍需人工
             if val is None:
                 manual = True
             note_append = (note_append + f" 缺少发布机构({issuer_hint})").strip()
+        # regex_only/regex_fallback 情况下，对关键指标要求发布机构命中
+        strict_issuer_keys = {
+            "USDCNY",
+            "USDCNH",
+            "DXY",
+            "bdi",
+            "rrr",
+            "mlf",
+            "reverse_repo",
+        }
+        if (
+            indicator_key in strict_issuer_keys
+            and isinstance(note_flag, str)
+            and note_flag.startswith("regex")
+            and not issuer_match_flag
+            and issuer_hint.lower() not in snippets_text
+            and not alias_hit
+        ):
+            if val is None:
+                manual = True
+            note_append = (note_append + f" regex_only缺少发布机构({issuer_hint})").strip()
+
+    # regex_only 时要求命中指标关键词，避免抓取无关数字
+    if isinstance(note_flag, str) and note_flag.startswith("regex") and indicator_key:
+        keyword_rules = {
+            "USDCNY": ["usdcny", "usd/cny", "美元", "人民币"],
+            "USDCNH": ["usdcnh", "usd/cnh", "离岸人民币"],
+            "DXY": ["dxy", "美元指数", "dollar index"],
+            "bdi": ["bdi", "波罗的海", "baltic"],
+            "rrr": ["存款准备金率", "rrr", "降准"],
+            "mlf": ["mlf", "中期借贷便利"],
+            "reverse_repo": ["逆回购", "repo"],
+            "US10Y": ["10年", "10-year", "us10y", "treasury"],
+            "CN10Y": ["10年", "国债"],
+            "CN10Y_CDB": ["国开", "开发债", "cdb"],
+        }
+        keywords = keyword_rules.get(indicator_key)
+        if keywords and not any(k.lower() in snippets_text for k in keywords):
+            manual = True
+            note_append = (note_append + " regex_only缺少指标关键词").strip()
 
     # 时效性校验：若所有可解析日期均超过设定阈值，则标记人工复核
     max_age = task.get("max_age_days")
     if max_age and _is_stale(snippets, max_age):
         manual = True
         note_append = (note_append + f" 数据超过{max_age}天需更新").strip()
+
+    # 合理区间校验：对易被新闻数字干扰的指标做基本范围限制
+    if indicator_key in _RANGE_RULES:
+        numeric_val = _safe_number(val)
+        if numeric_val is not None:
+            low, high = _RANGE_RULES[indicator_key]
+            if numeric_val < low or numeric_val > high:
+                manual = True
+                note_append = (note_append + f" 数值超出合理区间({low}-{high})").strip()
+        elif val is not None:
+            manual = True
+            note_append = (note_append + " 数值不可解析").strip()
 
     return val, manual, note_append
 
@@ -1381,6 +1767,18 @@ def _parse_args() -> argparse.Namespace:
         help="触发自动停用 extract 的 Tavily 422 次数阈值（默认3）",
     )
     parser.add_argument(
+        "--extract-422-cooldown-sec",
+        type=int,
+        default=300,
+        help="Tavily extract 422 冷却窗口（秒），按指标短窗降级",
+    )
+    parser.add_argument(
+        "--low-score-threshold",
+        type=float,
+        default=0.2,
+        help="Tavily 搜索结果全部低于该分数时跳过抽取并标记人工",
+    )
+    parser.add_argument(
         "--extract-topk", type=int, default=3, help="Tavily extract 使用的搜索结果条数（默认3）"
     )
     parser.add_argument(
@@ -1453,6 +1851,19 @@ def _parse_task_filter(arg: Optional[str]) -> (List[str], List[str]):
 
 async def main() -> int:
     args = _parse_args()
+    # Apply policy_rules defaults (if present)
+    try:
+        policy_rules = load_policy_rules()
+        if not args.auto_disable_extract_on_422:
+            args.auto_disable_extract_on_422 = True
+        if policy_rules.get("extract_422_threshold"):
+            args.extract_422_threshold = int(policy_rules.get("extract_422_threshold"))
+        if policy_rules.get("extract_422_cooldown_sec") is not None:
+            args.extract_422_cooldown_sec = int(policy_rules.get("extract_422_cooldown_sec"))
+        if policy_rules.get("low_score_threshold") is not None:
+            args.low_score_threshold = float(policy_rules.get("low_score_threshold"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] policy_rules load failed: {exc}")
     if args.extraction_backend == "langchain" and not args.allow_langchain:
         print(
             "[ERROR] langchain 模式已默认禁用。如需使用，请添加 --allow-langchain（需安装依赖）或改用 deepseek/regex。",
@@ -1607,24 +2018,68 @@ async def main() -> int:
                 disable_extract=args.disable_extract,
                 auto_disable_extract_on_422=args.auto_disable_extract_on_422,
                 extract_422_threshold=args.extract_422_threshold,
+                extract_422_cooldown_sec=args.extract_422_cooldown_sec,
                 extract_topk=args.extract_topk,
+                low_score_threshold=args.low_score_threshold,
                 llm_hard_timeout=args.llm_hard_timeout,
             )
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
+    # Second WebSearch pass for fund_flow anomalies (zero/None)
+    if flagged_fund_flow and args.execute_search and args.fund_flow_backend in {"tavily", "hybrid"}:
+        retry_tasks = [t for t in tasks if t.get("indicator_key") in flagged_fund_flow]
+        if retry_tasks:
+            logger.info(f"[Stage2] fund_flow anomalies detected, retrying: {flagged_fund_flow}")
+            retry_completed, retry_failures, retry_results = await _execute_tasks(
+                retry_tasks,
+                market_payload,
+                tavily,
+                exa_client,
+                extractor,
+                task_log_path,
+                args.cache_ttl,
+                max_retries=0,
+                fund_flow_backend=args.fund_flow_backend,
+                forex_backend="hybrid",
+                deepseek_timeout=args.deepseek_timeout,
+                extraction_backend="regex",
+                deepseek_max_concurrency=1,
+                stats=exec_stats,
+                use_queue=False,
+                queue_concurrency=1,
+                queue_maxsize=args.queue_maxsize,
+                queue_retry_limit=0,
+                disable_extract=True,
+                auto_disable_extract_on_422=args.auto_disable_extract_on_422,
+                extract_422_threshold=args.extract_422_threshold,
+                extract_422_cooldown_sec=args.extract_422_cooldown_sec,
+                extract_topk=args.extract_topk,
+                low_score_threshold=args.low_score_threshold,
+                llm_hard_timeout=args.llm_hard_timeout,
+            )
+            completed_tasks.extend(retry_completed)
+            failures.extend(retry_failures)
+            websearch_results.extend(retry_results)
+            flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
     if websearch_results:
-        # 按 indicator_key 去重，保留最新记录
-        dedup: Dict[str, Dict[str, Any]] = {}
-        for item in websearch_results:
-            key = item.get("task", {}).get("indicator_key")
-            dedup[key] = item
-        websearch_results = list(dedup.values())
+        websearch_results, conflicts_payload = resolve_websearch_results(websearch_results)
         _dump_json({"results": websearch_results}, websearch_results_path)
         split_dir = websearch_results_path.parent / "websearch_results"
         split_dir.mkdir(parents=True, exist_ok=True)
         for item in websearch_results:
             tid = item["task"]["task_id"]
             _dump_json(item, split_dir / f"{tid}.json")
+        try:
+            date_val = (
+                market_payload.get("metadata", {}).get("date")
+                or market_payload.get("metadata", {}).get("end_date")
+                or market_payload.get("metadata", {}).get("start_date")
+            )
+            date_compact_local = str(date_val).replace("-", "") if date_val else datetime.now().strftime("%Y%m%d")
+            conflicts_path = Path("reports") / f"source_conflicts_{date_compact_local}.json"
+            write_source_conflicts(conflicts_payload, conflicts_path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[Stage2] source_conflicts write failed: {exc}")
 
     _compute_derived_metrics(market_payload)
     metadata = market_payload.setdefault("metadata", {})
@@ -1642,6 +2097,26 @@ async def main() -> int:
         if t["indicator_key"] not in success_keys and t["indicator_key"] not in failure_keys
     ]
     _gap_monitor(pending_keys, gap_monitor_path, manual_required=pending_manual)
+
+    # quality metrics & observability logs
+    date_val = (
+        market_payload.get("metadata", {}).get("date")
+        or market_payload.get("metadata", {}).get("end_date")
+        or market_payload.get("metadata", {}).get("start_date")
+    )
+    date_compact = str(date_val).replace("-", "") if date_val else datetime.now().strftime("%Y%m%d")
+    try:
+        quality_path = Path("reports") / f"quality_metrics_{date_compact}.json"
+        write_quality_metrics(market_payload, quality_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] quality_metrics write failed: {exc}")
+
+    try:
+        observability_payload = build_observability_log(tasks, completed_tasks, failures, pending_keys)
+        observability_path = Path("logs") / f"observability_{date_compact}.json"
+        write_observability_log(observability_payload, observability_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] observability log write failed: {exc}")
 
     avg_elapsed = 0
     p50_elapsed = 0
@@ -1700,12 +2175,14 @@ async def main() -> int:
         "domain_filtered_drop": exec_stats.get("domain_filtered_drop", 0),
         "regex_hits": exec_stats.get("regex_hits", 0),
         "score_filtered_drop": exec_stats.get("score_filtered_drop", 0),
+        "low_score_drop": exec_stats.get("low_score_drop", 0),
         "timeout_count": exec_stats.get("timeout_count", 0),
         "deepseek_timeouts": exec_stats.get("deepseek_timeouts", 0),
         "retry_count": exec_stats.get("retry_count", 0),
         "extract_calls": exec_stats.get("extract_calls", 0),
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),
         "tavily_extract_422_count": exec_stats.get("tavily_extract_422_count", 0),
+        "extract_fallback_to_deepseek": exec_stats.get("extract_fallback_to_deepseek", 0),
         "extract_auto_disabled": exec_stats.get("extract_auto_disabled", False),
         "exa_fallback": exec_stats.get("exa_fallback", 0),
         "exa_empty": exec_stats.get("exa_empty", 0),
@@ -1719,6 +2196,20 @@ async def main() -> int:
     }
     _dump_json(summary, log_output)
 
+    try:
+        policy_payload = evaluate_policy(market_payload, stage2_summary=summary)
+        policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
+        write_policy_evaluation(policy_payload, policy_path)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] policy evaluation write failed: {exc}")
+
+    try:
+        snapshot_path = Path("reports") / f"run_snapshot_{date_compact}.json"
+        write_run_snapshot(snapshot_path, " ".join(sys.argv[1:]))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] run_snapshot write failed: {exc}")
+
+
     print("\n[Stage2 Summary]")
     print(f"  任务总数: {summary['task_total']}, 成功: {summary['task_completed']}, 失败: {summary['task_failed']}, 待人工: {len(pending_manual)}")
     if summary["proxy"]["http"] or summary["proxy"]["https"]:
@@ -1726,11 +2217,15 @@ async def main() -> int:
     print(f"  输出: {output_path}")
     print(f"  gap_monitor: {gap_monitor_path}")
     print(f"  平均耗时: {summary['avg_elapsed_ms']:.1f} ms; 缓存命中率: {summary['cache_hit_rate']*100:.1f}%")
-    print(f"  过滤/兜底: 域名过滤丢弃 {summary['domain_filtered_drop']} 条；score 过滤 {summary['score_filtered_drop']} 条；regex 命中 {summary['regex_hits']} 次")
+    print(
+        f"  过滤/兜底: 域名过滤丢弃 {summary['domain_filtered_drop']} 条；score 过滤 {summary['score_filtered_drop']} 条；"
+        f"低分跳过 {summary['low_score_drop']} 次；regex 命中 {summary['regex_hits']} 次"
+    )
     auto_flag = "已自动关闭extract" if summary.get("extract_auto_disabled") else "extract保持开启"
+    fallback_ds = summary.get("extract_fallback_to_deepseek", 0)
     print(
         f"  LLM: extract {summary['extract_calls']} 次；timeout {summary['timeout_count']} 次；retry {summary['retry_count']} 次; "
-        f"tavily_extract {summary['tavily_extract_calls']} 次 (422={summary['tavily_extract_422_count']}, {auto_flag}); "
+        f"tavily_extract {summary['tavily_extract_calls']} 次 (422={summary['tavily_extract_422_count']}, 降级DS={fallback_ds}, {auto_flag}); "
         f"queue_requeued {summary.get('queue_requeued',0)} dead {summary.get('queue_dead_letters',0)}"
     )
     if summary.get("success_by_category"):

@@ -18,6 +18,27 @@ from typing import Dict, List
 
 SearchProfile = Dict[str, object]
 
+# ========== 键名别名映射 ==========
+# 解决 Stage2 输出键名与注入脚本/search_profiles 不一致的问题
+# 规范化方向：注入脚本中的键名 → Stage2/search_profiles 中的键名
+KEY_ALIASES: Dict[str, str] = {
+    # 宏观指标
+    "industrial_production": "industrial",  # 注入脚本 → Stage2
+    "industrial": "industrial",             # 自身映射（规范键名）
+    # 货币政策
+    "rrr": "reserve_ratio",
+    "reserve_ratio": "reserve_ratio",
+    "reverse_repo_7d": "reverse_repo",
+    "reverse_repo": "reverse_repo",
+    "mlf": "mlf_rate",
+    "mlf_rate": "mlf_rate",
+}
+
+
+def get_canonical_key(key: str) -> str:
+    """获取规范化的键名，用于跨模块一致性"""
+    return KEY_ALIASES.get(key, key)
+
 
 def _profile(
     query: str,
@@ -26,6 +47,8 @@ def _profile(
     unit: str = "",
     issuer: str = "",
     issuer_aliases: List[str] | None = None,
+    queries: List[str] | None = None,
+    exclude_domains: List[str] | None = None,
     max_age_days: int | None = None,
     language: str = "chinese",
     topic: str = "news",
@@ -37,7 +60,9 @@ def _profile(
 ) -> SearchProfile:
     return {
         "query": query,
+        "queries": queries or [],
         "preferred_domains": domains,
+        "exclude_domains": exclude_domains or [],
         "time_range": time_range,
         "unit": unit,
         "issuer": issuer,
@@ -66,6 +91,18 @@ _REALTIME_DEFAULTS = {
     "auto_parameters": True,
 }
 
+_REALTIME_GENERAL_5D = {
+    **_REALTIME_DEFAULTS,
+    "topic": "general",
+    "days": 5,
+}
+
+_REALTIME_GENERAL_3D = {
+    **_REALTIME_DEFAULTS,
+    "topic": "general",
+    "days": 3,
+}
+
 # ========== 宏观类数据通用配置 ==========
 _MACRO_DEFAULTS = {
     "time_range": "month",
@@ -79,64 +116,99 @@ _MACRO_DEFAULTS = {
 SEARCH_PROFILES: Dict[str, SearchProfile] = {
     # ==================== 大宗商品（实时） ====================
     "GC=F": _profile(
-        query="COMEX黄金期货 最新价格 今日收盘 美元/盎司",
-        domains=["investing.com", "jin10.com", "eastmoney.com", "reuters.com"],
+        query="COMEX黄金期货 价格 今日收盘 美元/盎司 GC=F gold futures price",
+        domains=["investing.com", "cmegroup.com", "tradingeconomics.com", "jin10.com", "eastmoney.com"],
+        exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="$/oz",
         issuer="COMEX/CME",
         issuer_aliases=["CME", "COMEX", "芝商所"],
-        max_age_days=3,
-        **_REALTIME_DEFAULTS,
+        queries=[
+            "GC=F gold futures price",
+            "COMEX黄金期货 最新价格 美元/盎司",
+            "gold futures price per ounce",
+        ],
+        max_age_days=5,
+        **_REALTIME_GENERAL_5D,
     ),
     "CL=F": _profile(
-        query="WTI原油期货 最新价格 今日收盘 美元/桶",
-        domains=["investing.com", "jin10.com", "eastmoney.com", "reuters.com"],
+        query="WTI原油期货 价格 今日收盘 美元/桶 CL=F WTI crude futures price",
+        domains=["investing.com", "cmegroup.com", "tradingeconomics.com", "jin10.com", "eastmoney.com"],
+        exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="$/barrel",
         issuer="NYMEX/CME",
         issuer_aliases=["NYMEX", "CME", "纽约商品交易所"],
-        max_age_days=3,
-        **_REALTIME_DEFAULTS,
+        queries=[
+            "CL=F WTI crude futures price",
+            "WTI原油期货 最新价格 美元/桶",
+            "WTI crude futures quote",
+        ],
+        max_age_days=5,
+        **_REALTIME_GENERAL_5D,
     ),
     "BZ=F": _profile(
-        query="布伦特原油期货 最新价格 今日收盘 美元/桶",
-        domains=["investing.com", "jin10.com", "eastmoney.com", "reuters.com"],
+        query="布伦特原油期货 价格 今日收盘 美元/桶 BZ=F Brent crude futures price",
+        domains=["investing.com", "ice.com", "tradingeconomics.com", "jin10.com", "eastmoney.com"],
+        exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="$/barrel",
         issuer="ICE",
         issuer_aliases=["ICE", "洲际交易所"],
-        max_age_days=3,
-        **_REALTIME_DEFAULTS,
+        queries=[
+            "BZ=F Brent crude futures price",
+            "布伦特原油期货 最新价格 美元/桶",
+            "Brent crude futures quote",
+        ],
+        max_age_days=5,
+        **_REALTIME_GENERAL_5D,
     ),
     "HG=F": _profile(
-        query="COMEX铜期货 最新价格 今日收盘 美元/磅",
-        domains=["investing.com", "jin10.com", "eastmoney.com", "reuters.com"],
+        query="COMEX铜期货 价格 今日收盘 美元/磅 HG=F copper futures price",
+        domains=["investing.com", "cmegroup.com", "tradingeconomics.com", "jin10.com", "eastmoney.com"],
+        exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="$/lb",
         issuer="COMEX/CME",
         issuer_aliases=["COMEX", "CME", "芝商所"],
-        max_age_days=3,
-        **_REALTIME_DEFAULTS,
+        queries=[
+            "HG=F copper futures price",
+            "COMEX铜期货 最新价格 美元/磅",
+            "copper futures quote",
+        ],
+        max_age_days=5,
+        **_REALTIME_GENERAL_5D,
     ),
     "BCOM": _profile(
-        query="彭博商品指数 BCOM 最新点位 今日",
-        domains=["bloomberg.com", "tradingeconomics.com", "investing.com"],
+        query="彭博商品指数 BCOM 最新点位 BCOM Index level Bloomberg Commodity Index",
+        domains=["bloomberg.com", "tradingeconomics.com", "investing.com", "stockcharts.com"],
         unit="点",
         issuer="Bloomberg",
         issuer_aliases=["彭博"],
-        max_age_days=3,
-        **_REALTIME_DEFAULTS,
+        queries=[
+            "BCOM index level",
+            "Bloomberg Commodity Index level",
+            "彭博商品指数 BCOM 点位",
+        ],
+        max_age_days=7,
+        **_REALTIME_GENERAL_5D,
     ),
     "GSG": _profile(
-        query="iShares GSG商品ETF 最新价格 今日",
-        domains=["ishares.com", "investing.com", "finance.yahoo.com"],
+        query="GSG ETF 价格 iShares S&P GSCI Commodity-Indexed Trust quote",
+        domains=["ishares.com", "blackrock.com", "finance.yahoo.com", "investing.com"],
+        exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="USD",
         issuer="iShares/BlackRock",
-        issuer_aliases=["BlackRock", "贝莱德"],
-        max_age_days=3,
-        **_REALTIME_DEFAULTS,
+        issuer_aliases=["BlackRock", "贝莱德", "iShares"],
+        queries=[
+            "GSG ETF price",
+            "iShares GSG quote",
+            "GSG ETF 价格",
+        ],
+        max_age_days=7,
+        **_REALTIME_GENERAL_5D,
     ),
 
     # ==================== 汇率（实时） ====================
     "USDCNY": _profile(
-        query="美元人民币 在岸汇率 USDCNY 今日 最新报价 中间价",
-        domains=["eastmoney.com", "investing.com", "chinamoney.com.cn", "cfets.com.cn"],
+        query="CFETS 在岸美元人民币 即期汇率 USDCNY 最新报价",
+        domains=["eastmoney.com", "chinamoney.com.cn", "cfets.com.cn"],
         unit="CNY",
         issuer="中国外汇交易中心",
         issuer_aliases=["CFETS", "外汇交易中心", "SAFE"],
@@ -144,17 +216,23 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         **_REALTIME_DEFAULTS,
     ),
     "USDCNH": _profile(
-        query="美元离岸人民币 汇率 USDCNH 今日 最新报价",
-        domains=["eastmoney.com", "investing.com", "hkex.com.hk", "reuters.com"],
+        query="USD/CNH 离岸人民币 汇率 最新报价 即期 USDCNH offshore yuan rate",
+        domains=["investing.com", "tradingeconomics.com", "eastmoney.com", "reuters.com"],
+        exclude_domains=["marketwatch.com", "news.yahoo.com"],
         unit="CNH",
         issuer="离岸市场",
-        issuer_aliases=["HKEX", "港交所"],
-        max_age_days=1,
-        **_REALTIME_DEFAULTS,
+        issuer_aliases=["HKEX", "港交所", "CNH", "离岸人民币", "offshore"],
+        queries=[
+            "USD/CNH offshore yuan rate",
+            "USDCNH quote",
+            "离岸人民币 USDCNH 即期 汇率",
+        ],
+        max_age_days=3,
+        **_REALTIME_GENERAL_3D,
     ),
     "DXY": _profile(
-        query="美元指数 DXY 今日 最新点位",
-        domains=["investing.com", "tradingeconomics.com", "marketwatch.com", "eastmoney.com", "jin10.com"],
+        query="ICE 美元指数 DXY 最新点位",
+        domains=["investing.com", "tradingeconomics.com", "eastmoney.com", "jin10.com"],
         unit="点",
         issuer="ICE",
         issuer_aliases=["Intercontinental Exchange", "洲际交易所"],
@@ -363,14 +441,18 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         auto_parameters=True,
     ),
     "bdi": _profile(
-        query="波罗的海干散货指数 BDI 最新点位",
-        domains=["tradingeconomics.com", "investing.com", "eastmoney.com", "balticexchange.com"],
+        query="波罗的海干散货指数 BDI 最新点位 Baltic Exchange",
+        domains=["balticexchange.com", "tradingeconomics.com", "eastmoney.com"],
         unit="点",
         issuer="波罗的海交易所",
         issuer_aliases=["Baltic Exchange"],
         max_age_days=7,
+        time_range="day",
+        max_results=6,
+        search_depth="basic",
+        language="chinese",
+        topic="news",
         auto_parameters=False,
-        **_MACRO_DEFAULTS,
     ),
     "gdp": _profile(
         query="中国GDP 季度增速 最新公布 国家统计局",
@@ -388,7 +470,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
 
     # ==================== 货币政策指标 ====================
     "rrr": _profile(
-        query="中国央行存款准备金率 最新调整 降准 人民银行公告",
+        query="中国人民银行 存款准备金率 最新调整 降准 公告",
         domains=["pbc.gov.cn", "eastmoney.com", "cls.cn", "xinhuanet.com"],
         unit="%",
         issuer="中国人民银行",
@@ -402,17 +484,17 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         domains=["pbc.gov.cn", "chinamoney.com.cn", "eastmoney.com", "cls.cn"],
         unit="%",
         issuer="中国人民银行",
-        issuer_aliases=["央行", "PBOC", "人行"],
+        issuer_aliases=["央行", "PBOC", "人行", "公开市场操作", "中标利率", "7天逆回购"],
         max_age_days=7,
         auto_parameters=False,
         **_MACRO_DEFAULTS,
     ),
     "mlf": _profile(
-        query="中国央行MLF 中期借贷便利 1年期利率 最新 人民银行公告",
+        query="中国人民银行 MLF 中期借贷便利 1年期利率 最新 公告",
         domains=["pbc.gov.cn", "chinamoney.com.cn", "eastmoney.com", "cls.cn"],
         unit="%",
         issuer="中国人民银行",
-        issuer_aliases=["央行", "PBOC", "人行"],
+        issuer_aliases=["央行", "PBOC", "人行", "中期借贷便利", "中标利率", "MLF"],
         max_age_days=45,
         auto_parameters=False,
         **_MACRO_DEFAULTS,

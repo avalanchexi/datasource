@@ -33,6 +33,7 @@ from datasource.models.market_data_contract import (
     MacroIndicatorData,
     MonetaryPolicyData
 )
+from datasource.utils.trend_history_store import scan_trend_history, write_from_market_data, load_series_values
 
 
 class MarketDataCollector:
@@ -1835,6 +1836,140 @@ class MarketDataCollector:
         )
 
 
+def _calc_change_from_trend_history(
+    category: str,
+    symbol: str,
+    current_value: Optional[float],
+) -> Dict[str, Optional[float]]:
+    """从 trend_history 回读计算 change_5d / change_120d（或 bp）"""
+    result = {"change_5d": None, "change_120d": None, "change_5d_bp": None, "change_120d_bp": None}
+    if current_value in (None, 0):
+        return result
+    try:
+        values = load_series_values(category, symbol)
+    except Exception:
+        return result
+    if not values:
+        return result
+
+    historical_values = values[:]
+    if len(historical_values) > 1:
+        if abs(historical_values[-1] - current_value) < 0.01:
+            historical_values = historical_values[:-1]
+    if not historical_values:
+        return result
+
+    def _pct(cur: float, prev: float) -> Optional[float]:
+        if prev == 0:
+            return None
+        return (cur / prev - 1.0) * 100.0
+
+    def _bp(cur: float, prev: float) -> Optional[float]:
+        return (cur - prev) * 100.0
+
+    # 5d
+    base_5d = historical_values[-5] if len(historical_values) >= 5 else historical_values[-1]
+    if category == "bonds":
+        if base_5d <= 10:
+            result["change_5d_bp"] = _bp(float(current_value), float(base_5d))
+    else:
+        pct = _pct(float(current_value), float(base_5d))
+        if pct is not None:
+            result["change_5d"] = pct
+
+    # 120d
+    base_120d = historical_values[0]
+    if category == "bonds":
+        if base_120d <= 10:
+            result["change_120d_bp"] = _bp(float(current_value), float(base_120d))
+    else:
+        pct = _pct(float(current_value), float(base_120d))
+        if pct is not None:
+            result["change_120d"] = pct
+
+    return result
+
+
+def _is_missing_change(value: Optional[float]) -> bool:
+    if value is None:
+        return True
+    try:
+        return abs(float(value)) < 1e-9
+    except Exception:
+        return True
+
+
+def _backfill_stage1_trend(market_payload: Dict[str, Any]) -> int:
+    """回读 trend_history，为 Stage1 补充缺失的 120 日变化值。"""
+    backfilled = 0
+
+    for bond in market_payload.get("bonds", []) or []:
+        current = bond.get("current_yield")
+        symbol = bond.get("symbol")
+        if not symbol or current is None:
+            continue
+        if _is_missing_change(bond.get("change_120d_bp")):
+            changes = _calc_change_from_trend_history("bonds", symbol, float(current))
+            if changes.get("change_120d_bp") is not None:
+                bond["change_120d_bp"] = changes["change_120d_bp"]
+                backfilled += 1
+        if bond.get("change_5d_bp") is None:
+            changes = _calc_change_from_trend_history("bonds", symbol, float(current))
+            if changes.get("change_5d_bp") is not None:
+                bond["change_5d_bp"] = changes["change_5d_bp"]
+                backfilled += 1
+
+    for fx in market_payload.get("forex", []) or []:
+        current = fx.get("current_rate")
+        symbol = fx.get("pair")
+        if not symbol or current is None:
+            continue
+        if _is_missing_change(fx.get("change_120d")):
+            changes = _calc_change_from_trend_history("forex", symbol, float(current))
+            if changes.get("change_120d") is not None:
+                fx["change_120d"] = changes["change_120d"]
+                backfilled += 1
+        if fx.get("daily_change") is None:
+            changes = _calc_change_from_trend_history("forex", symbol, float(current))
+            if changes.get("change_5d") is not None:
+                fx["daily_change"] = changes["change_5d"]
+                backfilled += 1
+
+    for comm in market_payload.get("commodities", []) or []:
+        current = comm.get("current_price")
+        symbol = comm.get("symbol")
+        if not symbol or current is None:
+            continue
+        if _is_missing_change(comm.get("ytd_change")):
+            changes = _calc_change_from_trend_history("commodities", symbol, float(current))
+            if changes.get("change_120d") is not None:
+                comm["ytd_change"] = changes["change_120d"]
+                backfilled += 1
+        if comm.get("daily_change") is None:
+            changes = _calc_change_from_trend_history("commodities", symbol, float(current))
+            if changes.get("change_5d") is not None:
+                comm["daily_change"] = changes["change_5d"]
+                backfilled += 1
+
+    for idx in market_payload.get("stock_indices", []) or []:
+        current = idx.get("current_price")
+        symbol = idx.get("symbol")
+        if not symbol or current is None:
+            continue
+        if _is_missing_change(idx.get("change_120d")):
+            changes = _calc_change_from_trend_history("stock_indices", symbol, float(current))
+            if changes.get("change_120d") is not None:
+                idx["change_120d"] = changes["change_120d"]
+                backfilled += 1
+        if idx.get("change_5d") is None:
+            changes = _calc_change_from_trend_history("stock_indices", symbol, float(current))
+            if changes.get("change_5d") is not None:
+                idx["change_5d"] = changes["change_5d"]
+                backfilled += 1
+
+    return backfilled
+
+
 async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='Stage 1: 市场数据收集器')
@@ -1906,6 +2041,18 @@ async def main():
     else:
         print(f"[INFO] 使用交易日: {trading_date}")
 
+    # Pre-scan trend_history gaps before Stage1 collection
+    try:
+        date_compact = trading_date.replace("-", "")
+        gap_output = Path("reports") / f"trend_history_gap_{date_compact}.json"
+        gap_output.parent.mkdir(parents=True, exist_ok=True)
+        gap_report = scan_trend_history(trading_date)
+        with gap_output.open("w", encoding="utf-8") as f:
+            json.dump(gap_report, f, ensure_ascii=False, indent=2)
+        print(f"[INFO] trend_history scan saved: {gap_output}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] trend_history scan failed: {exc}")
+
     # 创建收集器
     collector = MarketDataCollector(
         end_date=trading_date
@@ -1913,6 +2060,15 @@ async def main():
 
     # 收集数据
     contract = await collector.collect_all_data()
+    market_payload = contract.model_dump()
+
+    # 回读 trend_history 补充缺失变化值（避免 120d 为 N/A）
+    try:
+        backfilled = _backfill_stage1_trend(market_payload)
+        if backfilled:
+            print(f"[INFO] trend_history backfill applied: {backfilled} fields")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] trend_history backfill failed: {exc}")
 
     # 保存JSON
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1920,11 +2076,18 @@ async def main():
         backup = output_path.with_suffix(output_path.suffix + ".bak")
         shutil.copy2(output_path, backup)
     with open(output_path.with_suffix(output_path.suffix + ".tmp"), 'w', encoding='utf-8') as f:
-        json.dump(contract.model_dump(), f, ensure_ascii=False, indent=2)
+        json.dump(market_payload, f, ensure_ascii=False, indent=2)
     Path(output_path.with_suffix(output_path.suffix + ".tmp")).replace(output_path)
 
     print(f"[OK] 数据已保存到: {output_path}")
     print(f"   文件大小: {output_path.stat().st_size / 1024:.1f} KB")
+
+    # Partial write to trend_history (TuShare-available daily values)
+    try:
+        write_count = write_from_market_data(market_payload, is_partial=True, source_path=output_path)
+        print(f"[INFO] trend_history partial write: {write_count} items")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[WARN] trend_history partial write failed: {exc}")
 
 
 if __name__ == '__main__':

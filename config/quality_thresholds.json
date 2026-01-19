@@ -1,0 +1,17 @@
+{
+  "volatility_pct": {
+    "commodities": 10.0,
+    "forex": 2.0,
+    "stock_indices": 8.0
+  },
+  "bond_bp": {
+    "bonds": 50
+  },
+  "staleness_hours": {
+    "commodities": 1,
+    "forex": 1,
+    "bonds": 6,
+    "macro_indicators": 720,
+    "monetary_policy": 720
+  }
+}
