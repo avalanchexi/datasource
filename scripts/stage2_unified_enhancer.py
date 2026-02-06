@@ -27,7 +27,7 @@ import re
 import shutil
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 try:  # pragma: no cover - 可选依赖
@@ -192,6 +192,66 @@ def _prefer_fresh_snippets(snippets: Optional[List[Dict[str, Any]]], max_age_day
         if parsed and (now - parsed) <= timedelta(days=max_age_days):
             fresh.append(snip)
     return fresh or snippets
+
+
+_REPORT_MONTH_KEYS = {"industrial", "industrial_sales"}
+
+
+def _extract_report_month(text: str) -> Optional[Tuple[int, int]]:
+    """从文本中提取报告月份(年,月)，优先识别'YYYY年1-XX月'再识别'YYYY年MM月'。"""
+    if not text:
+        return None
+    candidates: List[Tuple[int, int]] = []
+    # 例如：2025年1-11月 / 2025年1—11月 / 2025年1至11月
+    range_pat = re.compile(r"(20\d{2})\s*年\s*1\s*(?:-|—|~|至|到)\s*(\d{1,2})\s*月")
+    for y, m in range_pat.findall(text):
+        try:
+            year = int(y)
+            month = int(m)
+            if 1 <= month <= 12:
+                candidates.append((year, month))
+        except Exception:
+            continue
+    # 例如：2025年12月 / 2025年12月份
+    month_pat = re.compile(r"(20\d{2})\s*年\s*(\d{1,2})\s*月")
+    for y, m in month_pat.findall(text):
+        try:
+            year = int(y)
+            month = int(m)
+            if 1 <= month <= 12:
+                candidates.append((year, month))
+        except Exception:
+            continue
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _prefer_latest_report_snippets(
+    snippets: Optional[List[Dict[str, Any]]], indicator_key: Optional[str]
+) -> List[Dict[str, Any]]:
+    """对月度宏观指标优先保留最新报告月份的片段。"""
+    if not snippets:
+        return []
+    if not indicator_key or indicator_key not in _REPORT_MONTH_KEYS:
+        return snippets
+    tagged: List[Tuple[Tuple[int, int], Dict[str, Any]]] = []
+    for snip in snippets:
+        text = " ".join(
+            [
+                str(snip.get("title") or ""),
+                str(snip.get("snippet") or ""),
+                str(snip.get("content") or ""),
+            ]
+        )
+        rep = _extract_report_month(text)
+        if rep:
+            tagged.append((rep, snip))
+    if not tagged:
+        return snippets
+    latest = max(rep for rep, _ in tagged)
+    filtered = [snip for rep, snip in tagged if rep == latest]
+    return filtered or snippets
 
 
 def _is_tavily_quota_error(exc: Exception) -> bool:
@@ -425,6 +485,30 @@ _RANGE_RULES: Dict[str, tuple[float, float]] = {
     "mlf": (1.5, 5.0),
 }
 
+_FOREX_UPSERT_META: Dict[str, str] = {
+    "USDCNY": "USD/CNY在岸",
+    "USDCNH": "USD/CNH离岸",
+    "DXY": "DXY美元指数",
+    "EURUSD": "EUR/USD",
+    "GBPUSD": "GBP/USD",
+    "USDJPY": "USD/JPY",
+}
+
+_COMMODITY_UPSERT_META: Dict[str, tuple[str, str]] = {
+    "GC=F": ("COMEX黄金", "$/oz"),
+    "CL=F": ("WTI原油", "$/barrel"),
+    "BZ=F": ("Brent原油", "$/barrel"),
+    "HG=F": ("COMEX铜", "$/lb"),
+    "BCOM": ("BCOM指数", "点"),
+    "GSG": ("GSG ETF", "USD"),
+}
+
+_BOND_UPSERT_META: Dict[str, str] = {
+    "US10Y": "美国10年期国债",
+    "CN10Y": "中国10年期国债",
+    "CN10Y_CDB": "中国10年期国开债",
+}
+
 
 def _filter_by_domain(
     snippets: List[Dict[str, Any]],
@@ -494,10 +578,16 @@ def _regex_fallback(snippets: List[Dict[str, Any]], indicator: str) -> Optional[
     )
     ind = indicator.lower()
     patterns: List[str] = []
-    if ind in {"industrial", "industrial_sales"}:
-        patterns = [r"([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
+    if ind == "industrial":
+        patterns = [
+            r"(?:规模以上)?工业增加值[^\\d]{0,20}(?:同比|增长)[^\\d]{0,10}([-+]?\\d+(?:\\.\\d+)?)\\s*%",
+        ]
+    elif ind == "industrial_sales":
+        patterns = [
+            r"(?:规模以上)?工业企业[^\\d]{0,20}(?:营业收入|营收)[^\\d]{0,20}(?:同比|增长)[^\\d]{0,10}([-+]?\\d+(?:\\.\\d+)?)\\s*%",
+        ]
     elif ind == "mlf":
-        patterns = [r"(?:mlf|中期借贷便利)[^\\d]*([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
+        patterns = [r"(?:mlf|中期借贷便利)[^\\d]*([-+]?\\d+(?:\\.\\d+)?)\\s*[%％]"]
     elif ind == "reverse_repo":
         patterns = [r"(?:逆回购|repo)[^\\d]*([-+]?\\d+(?:\\.\\d+)?)\\s*%"]
     elif ind == "rrr":
@@ -505,15 +595,27 @@ def _regex_fallback(snippets: List[Dict[str, Any]], indicator: str) -> Optional[
     elif ind == "bdi":
         patterns = [r"(?:BDI|波罗的海)[^\\d]*([-+]?\\d{3,5}(?:\\.\\d+)?)"]
     elif ind == "usdcny":
-        patterns = [r"(?:USDCNY|USD/CNY|美元/人民币|美元人民币)[^\\d]*([0-9]+\\.\\d{2,6})"]
+        patterns = [
+            r"(?:USDCNY|USD/CNY|USD CNY|美元/人民币|美元人民币)[^\\d]*([0-9]+\\.\\d{2,6})",
+            r"1(?:\\.0+)?\\s*USD\\s*=\\s*([0-9]+\\.\\d{2,6})\\s*CNY",
+        ]
     elif ind == "usdcnh":
-        patterns = [r"(?:USDCNH|USD/CNH|离岸人民币)[^\\d]*([0-9]+\\.\\d{2,6})"]
+        patterns = [
+            r"(?:USDCNH|USD/CNH|USD CNH|离岸人民币)[^\\d]*([0-9]+\\.\\d{2,6})",
+            r"1(?:\\.0+)?\\s*USD\\s*=\\s*([0-9]+\\.\\d{2,6})\\s*CNH",
+        ]
     elif ind == "dxy":
-        patterns = [r"(?:DXY|美元指数|Dollar Index)[^\\d]*([0-9]{2,3}(?:\\.\\d+)?)"]
+        patterns = [
+            r"(?:DXY|美元指数|Dollar Index|US Dollar Index)[^\\d]*([0-9]{2,3}(?:\\.\\d+)?)",
+            r"([0-9]{2,3}(?:\\.\\d+)?)\\s*(?:DXY|美元指数|Dollar Index)",
+        ]
     elif ind == "us10y":
         patterns = [r"(?:US10Y|美国10年|10年期国债|10-year)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?"]
     elif ind == "cn10y":
-        patterns = [r"(?:中国10年|10年期国债)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?"]
+        patterns = [
+            r"(?:中国10年|10年期国债|China\\s*10\\s*Y|10[- ]?year|10y)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?",
+            r"([0-9]+\\.\\d{2,3})\\s*%?[^\\d]*(?:China\\s*10\\s*Y|10[- ]?year|10y)",
+        ]
     elif ind == "cn10y_cdb":
         patterns = [r"(?:国开|国开债|开发债)[^\\d]*([0-9]+\\.\\d{2,3})\\s*%?"]
     else:
@@ -529,53 +631,392 @@ def _regex_fallback(snippets: List[Dict[str, Any]], indicator: str) -> Optional[
     return None
 
 
-def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extraction: Dict[str, Any]) -> None:
+def _collect_snippet_text(snippets: List[Dict[str, Any]]) -> str:
+    return " ".join(
+        str(s.get("content") or s.get("snippet") or "") for s in snippets
+    )
+
+
+def _find_number_by_patterns(
+    text: str,
+    patterns: List[str],
+    low: Optional[float] = None,
+    high: Optional[float] = None,
+    min_decimals: Optional[int] = None,
+    require_nonzero_decimal: bool = False,
+) -> Optional[float]:
+    for pat in patterns:
+        for m in re.finditer(pat, text, flags=re.IGNORECASE | re.DOTALL):
+            num = m.group(1)
+            if "." in num:
+                decimals = num.split(".", 1)[1]
+                if min_decimals is not None and len(decimals) < min_decimals:
+                    continue
+                if require_nonzero_decimal and set(decimals) <= {"0"}:
+                    continue
+            elif min_decimals is not None:
+                continue
+            try:
+                val = float(num)
+            except Exception:
+                continue
+            if low is not None and val < low:
+                continue
+            if high is not None and val > high:
+                continue
+            return val
+    return None
+
+
+def _extract_structured_value(snippets: List[Dict[str, Any]], indicator: str) -> Optional[float]:
+    if not snippets:
+        return None
+    text = _collect_snippet_text(snippets)
+    ind = indicator.lower()
+    if ind == "usdcny":
+        patterns = [
+            r"(?:USDCNY|USD/CNY|USD CNY|美元/人民币|美元人民币|在岸人民币)[^\\d]{0,12}([0-9]+\\.\\d{2,6})",
+            r"1(?:\\.0+)?\\s*USD\\s*=\\s*([0-9]+\\.\\d{2,6})\\s*CNY",
+        ]
+        return _find_number_by_patterns(text, patterns, 5.5, 9.5, min_decimals=2, require_nonzero_decimal=True)
+    if ind == "usdcnh":
+        patterns = [
+            r"(?:USDCNH|USD/CNH|USD CNH|离岸人民币|offshore)[^\\d]{0,12}([0-9]+\\.\\d{2,6})",
+            r"1(?:\\.0+)?\\s*USD\\s*=\\s*([0-9]+\\.\\d{2,6})\\s*CNH",
+        ]
+        return _find_number_by_patterns(text, patterns, 5.5, 10.0, min_decimals=2, require_nonzero_decimal=True)
+    if ind == "dxy":
+        patterns = [
+            r"(?:DXY|美元指数|Dollar Index|US Dollar Index)[^\\d]{0,12}([0-9]{2,3}\\.\\d{1,3})",
+            r"([0-9]{2,3}\\.\\d{1,3})[^\\d]{0,12}(?:DXY|美元指数|Dollar Index|US Dollar Index)",
+        ]
+        return _find_number_by_patterns(text, patterns, 70.0, 140.0, min_decimals=1)
+    if ind == "cn10y":
+        patterns = [
+            r"(?:China\\s*10\\s*Y|10[- ]?year|10y|10年|国债收益率)[^\\d]{0,12}([0-9]+\\.\\d{2,3})",
+            r"([0-9]+\\.\\d{2,3})[^\\d]{0,12}(?:China\\s*10\\s*Y|10[- ]?year|10y|10年)",
+        ]
+        return _find_number_by_patterns(text, patterns, 0.0, 10.0, min_decimals=2)
+    if ind == "rrr":
+        patterns = [
+            r"(?:存款准备金率|RRR|reserve requirement)[^\\d]{0,12}([0-9]+\\.\\d+)\\s*%?",
+        ]
+        return _find_number_by_patterns(text, patterns, 5.0, 20.0, min_decimals=1)
+    if ind == "mlf":
+        patterns = [
+            r"(?:MLF|中期借贷便利|medium-term lending facility)[^\\d]{0,12}([0-9]+\\.\\d+)\\s*%?",
+        ]
+        return _find_number_by_patterns(text, patterns, 1.5, 5.0, min_decimals=1)
+    if ind == "reverse_repo":
+        patterns = [
+            r"(?:逆回购|reverse repo|repo)[^\\d]{0,12}([0-9]+\\.\\d+)\\s*%?",
+        ]
+        return _find_number_by_patterns(text, patterns, 1.0, 5.0, min_decimals=1)
+    return None
+
+
+def _extract_flow_value(snippets: List[Dict[str, Any]], indicator: str) -> (Optional[float], Optional[str]):
+    if not snippets:
+        return None, None
+    text = _collect_snippet_text(snippets)
+    flow_patterns = [
+        r"(?:北向资金|northbound|南向资金|southbound)[^\\d]{0,80}(?:净流入|净流出|净买入|net inflow|net outflow|net buy)[^\\d+\\-]{0,12}([+-]?\\d+(?:\\.\\d+)?)\\s*(亿元|亿港元|billion|bn)",
+        r"(?:net inflow|net outflow|净流入|净流出|净买入)[^\\d+\\-]{0,12}([+-]?\\d+(?:\\.\\d+)?)\\s*(亿元|亿港元|billion|bn)",
+    ]
+    for pat in flow_patterns:
+        m = re.search(pat, text, flags=re.IGNORECASE | re.DOTALL)
+        if not m:
+            continue
+        try:
+            val = float(m.group(1))
+        except Exception:
+            continue
+        seg = m.group(0).lower()
+        direction = None
+        if any(tok in seg for tok in ["净流出", "net outflow", "outflow", "卖出"]):
+            direction = "outflow"
+        elif any(tok in seg for tok in ["净流入", "net inflow", "net buy", "买入", "流入"]):
+            direction = "inflow"
+        if direction == "outflow" and val > 0:
+            val = -abs(val)
+        if direction == "inflow" and val < 0:
+            val = abs(val)
+        return val, direction
+    unit_matches = re.findall(r"([+-]?\\d+(?:\\.\\d+)?)\\s*(亿元|亿港元|billion|bn)", text, flags=re.IGNORECASE)
+    if unit_matches:
+        try:
+            vals = [float(v[0]) for v in unit_matches]
+        except Exception:
+            vals = []
+        if vals:
+            val = max(vals, key=lambda x: abs(x))
+            return val, None
+    return None, None
+
+
+def _refine_extraction_value(
+    extraction: Dict[str, Any], task: Dict[str, Any], snippets: Optional[List[Dict[str, Any]]]
+) -> None:
+    if not snippets:
+        return
+    indicator = (task.get("indicator_key") or "").lower()
+    note = extraction.get("note") or ""
+    confidence = extraction.get("confidence", 0.0) or 0.0
+    if not (isinstance(note, str) and note.startswith("regex")) and confidence >= 0.6:
+        return
+    if indicator in {"northbound", "southbound"}:
+        flow_val, direction = _extract_flow_value(snippets, indicator)
+        if flow_val is not None:
+            extraction["value"] = flow_val
+            if direction:
+                dir_cn = "流出" if direction == "outflow" else "流入"
+                extraction["note"] = ((extraction.get("note") or "") + f" structured_dir:{direction} {dir_cn}").strip()
+            else:
+                extraction["note"] = ((extraction.get("note") or "") + " structured_value").strip()
+        return
+    refined = _extract_structured_value(snippets, indicator)
+    if refined is not None:
+        extraction["value"] = refined
+        extraction["note"] = ((extraction.get("note") or "") + " structured_refine").strip()
+
+
+def _contains_ytd_marker(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower()
+    if any(tok in lowered for tok in ["累计", "年初至今", "ytd", "year-to-date"]):
+        return True
+    return bool(re.search(r"1\\s*(?:-|—|~|至|到)\\s*\\d{1,2}\\s*月", lowered))
+
+
+def _infer_rrr_type(text: str) -> Optional[str]:
+    if not text:
+        return None
+    if "加权" in text or "weighted" in text.lower():
+        return "weighted"
+    if "法定" in text or "statutory" in text.lower():
+        return "statutory"
+    return None
+
+
+def _infer_report_period(text: str) -> Optional[str]:
+    rep = _extract_report_month(text)
+    if not rep:
+        return None
+    year, month = rep
+    return f"{year}-{month:02d}"
+
+
+def _infer_as_of_date(snippets: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    if not snippets:
+        return None
+    dates: List[datetime] = []
+    for snip in snippets:
+        for field in ("published_date", "date"):
+            parsed = _parse_date_str(snip.get(field) or "")
+            if parsed:
+                dates.append(parsed)
+                break
+        if not parsed:
+            parsed = _parse_date_str(snip.get("content") or snip.get("snippet") or "")
+            if parsed:
+                dates.append(parsed)
+    if not dates:
+        return None
+    latest = max(dates)
+    return latest.date().isoformat()
+
+
+def _augment_extraction_metadata(
+    extraction: Dict[str, Any],
+    task: Dict[str, Any],
+    snippets: Optional[List[Dict[str, Any]]],
+) -> None:
+    if not extraction or not snippets:
+        return
+    indicator_key = task.get("indicator_key")
+    text = " ".join(
+        [
+            str(s.get("title") or "")
+            + " "
+            + str(s.get("snippet") or "")
+            + " "
+            + str(s.get("content") or "")
+            for s in (snippets or [])
+        ]
+    )
+    if indicator_key == "industrial":
+        value_type = "yoy_ytd" if _contains_ytd_marker(text) else "yoy_month"
+        if value_type:
+            extraction.setdefault("value_type", value_type)
+        report_period = _infer_report_period(text)
+        if report_period:
+            extraction.setdefault("report_period", report_period)
+            extraction.setdefault("as_of_date", report_period)
+    if indicator_key in {"rrr", "reserve_ratio"}:
+        rrr_type = _infer_rrr_type(text)
+        if rrr_type:
+            extraction.setdefault("rrr_type", rrr_type)
+    as_of_date = _infer_as_of_date(snippets)
+    if as_of_date:
+        extraction.setdefault("as_of_date", as_of_date)
+
+
+def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extraction: Dict[str, Any]) -> str:
     value = extraction.get("value")
     if value is None:
-        return
+        return "skip_no_value"
 
     indicator_key = task["indicator_key"]
     note = extraction.get("note")
     source_url = extraction.get("source_url")
     source_label = "tavily+deepseek" if source_url else "tavily_regex"
+    as_of_date = extraction.get("as_of_date")
+    report_period = extraction.get("report_period")
+
+    def _write_common_fields(entry: Dict[str, Any], value_key: str) -> None:
+        entry[value_key] = value
+        entry["source"] = source_label
+        entry["stage_task_id"] = task["task_id"]
+        entry["note"] = note
 
     macro = market_payload.setdefault("macro_indicators", {})
     if indicator_key in macro:
-        macro[indicator_key]["current_value"] = value
-        macro[indicator_key]["source"] = source_label
-        macro[indicator_key]["stage_task_id"] = task["task_id"]
-        macro[indicator_key]["note"] = note
-        return
+        entry = macro[indicator_key]
+        _write_common_fields(entry, "current_value")
+        if report_period and not entry.get("report_period"):
+            entry["report_period"] = report_period
+        if as_of_date and not entry.get("as_of_date"):
+            entry["as_of_date"] = as_of_date
+        if not entry.get("date"):
+            entry["date"] = as_of_date or report_period or entry.get("date") or ""
+        return "macro_indicators"
 
     monetary = market_payload.setdefault("monetary_policy", {})
     if indicator_key in monetary:
-        monetary[indicator_key]["current_value"] = value
-        monetary[indicator_key]["source"] = source_label
-        monetary[indicator_key]["stage_task_id"] = task["task_id"]
-        monetary[indicator_key]["note"] = note
-        return
+        entry = monetary[indicator_key]
+        _write_common_fields(entry, "current_value")
+        if report_period and not entry.get("report_period"):
+            entry["report_period"] = report_period
+        if as_of_date and not entry.get("as_of_date"):
+            entry["as_of_date"] = as_of_date
+        if not entry.get("date"):
+            entry["date"] = as_of_date or report_period or entry.get("date") or ""
+        return "monetary_policy"
 
     # fund_flow 回写（简化：将抽取值写 recent_5d，total_120d 同值）
     fund_flow = market_payload.get("fund_flow", {})
     if indicator_key in fund_flow:
         flow = fund_flow[indicator_key]
-        flow["recent_5d"] = value
-        flow["total_120d"] = flow.get("total_120d") or value
+        recent_5d = _safe_number(extraction.get("recent_5d"))
+        total_120d = _safe_number(extraction.get("total_120d"))
+        if recent_5d is not None and total_120d is not None:
+            flow["recent_5d"] = recent_5d
+            flow["total_120d"] = total_120d
+        else:
+            flow["current_value"] = _safe_number(extraction.get("current_value")) or _safe_number(value)
+            flow["current_date"] = as_of_date or report_period or market_payload.get("metadata", {}).get("date", "")
+            point_note = "single_point_only"
+            note = f"{note} {point_note}".strip() if note else point_note
         flow["source"] = source_label
         flow["stage_task_id"] = task["task_id"]
         flow["note"] = note
-        return
+        return "fund_flow"
+
+    # forex 回写（按 pair/symbol 匹配）
+    for item in market_payload.get("forex", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("pair") == indicator_key or item.get("symbol") == indicator_key:
+            _write_common_fields(item, "current_rate")
+            if not item.get("date"):
+                item["date"] = as_of_date or report_period or item.get("date") or ""
+            return "forex"
+
+    # commodities 回写（按 symbol 匹配）
+    for item in market_payload.get("commodities", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("symbol") == indicator_key:
+            _write_common_fields(item, "current_price")
+            if not item.get("date"):
+                item["date"] = as_of_date or report_period or item.get("date") or ""
+            return "commodities"
+
+    # bonds 回写（按 symbol 匹配）
+    for item in market_payload.get("bonds", []):
+        if not isinstance(item, dict):
+            continue
+        if item.get("symbol") == indicator_key:
+            _write_common_fields(item, "current_yield")
+            if not item.get("date"):
+                item["date"] = as_of_date or report_period or item.get("date") or ""
+            return "bonds"
+
+    if indicator_key in _FOREX_UPSERT_META:
+        entry = {
+            "pair": indicator_key,
+            "name": _FOREX_UPSERT_META[indicator_key],
+            "current_rate": value,
+            "daily_change": None,
+            "change_120d": None,
+            "trend": "待校验",
+            "source": source_label,
+            "stage_task_id": task["task_id"],
+            "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),
+        }
+        market_payload.setdefault("forex", []).append(entry)
+        return "forex_upsert"
+
+    if indicator_key in _COMMODITY_UPSERT_META:
+        name, default_unit = _COMMODITY_UPSERT_META[indicator_key]
+        entry = {
+            "symbol": indicator_key,
+            "name": name,
+            "current_price": value,
+            "unit": extraction.get("unit") or default_unit,
+            "daily_change": None,
+            "ytd_change": None,
+            "trend": "待校验",
+            "source": source_label,
+            "timestamp": market_payload.get("metadata", {}).get("date", ""),
+            "stage_task_id": task["task_id"],
+            "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),
+        }
+        market_payload.setdefault("commodities", []).append(entry)
+        return "commodities_upsert"
+
+    if indicator_key in _BOND_UPSERT_META:
+        entry = {
+            "symbol": indicator_key,
+            "name": _BOND_UPSERT_META[indicator_key],
+            "current_yield": value,
+            "change_5d_bp": None,
+            "change_120d_bp": None,
+            "trend": "待校验",
+            "source": source_label,
+            "is_estimated": False,
+            "stage_task_id": task["task_id"],
+            "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),
+        }
+        market_payload.setdefault("bonds", []).append(entry)
+        return "bonds_upsert"
 
     # 若不存在，则落到 macro_indicators 以便后续 Stage3 检查
     macro[indicator_key] = {
         "indicator_name": indicator_key.upper(),
         "current_value": value,
         "unit": extraction.get("unit") or "%",
-        "date": market_payload.get("metadata", {}).get("date", ""),
+        "date": extraction.get("as_of_date")
+        or extraction.get("report_period")
+        or market_payload.get("metadata", {}).get("date", ""),
+        "report_period": extraction.get("report_period"),
+        "as_of_date": extraction.get("as_of_date"),
         "source": source_label,
         "stage_task_id": task["task_id"],
         "note": note,
     }
+    return "fallback_macro"
 
 
 def _update_missing_items(market_payload: Dict[str, Any], indicator_key: str) -> None:
@@ -658,14 +1099,14 @@ async def _execute_tasks(
     extraction_backend: str = "deepseek",
     deepseek_max_concurrency: int = 3,
     deepseek_serial_keys: Optional[List[str]] = None,
-    stats: Optional[Dict[str, int]] = None,
+    stats: Optional[Dict[str, Any]] = None,
     use_queue: bool = False,
     queue_concurrency: int = 3,
     queue_maxsize: int = 100,
     queue_retry_limit: int = 1,
     disable_extract: bool = False,
     auto_disable_extract_on_422: bool = False,
-    extract_422_threshold: int = 3,
+    extract_422_threshold: int = 1,
     extract_422_cooldown_sec: int = 300,
     extract_topk: int = 3,
     low_score_threshold: float = 0.2,
@@ -691,9 +1132,18 @@ async def _execute_tasks(
     stats.setdefault("deepseek_latencies", [])
     stats.setdefault("extract_auto_disabled", False)
     stats.setdefault("low_score_drop", 0)
+    stats.setdefault("low_score_allow", 0)
     stats.setdefault("exa_fallback", 0)
     stats.setdefault("exa_empty", 0)
     stats.setdefault("exa_error", 0)
+    stats.setdefault("extract_globally_disabled", bool(disable_extract))
+    stats.setdefault(
+        "extract_global_disable_reason",
+        "cli_disable_extract" if disable_extract else None,
+    )
+    stats.setdefault("write_back_by_category", {})
+    stats.setdefault("write_back_fallback_count", 0)
+    stats.setdefault("write_back_miss_count", 0)
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
@@ -721,13 +1171,39 @@ async def _execute_tasks(
             return await asyncio.wait_for(coro, timeout=llm_hard_timeout)
         return await coro
 
+    def _call_fallback_extract(snips: List[Dict[str, Any]], task: Dict[str, Any]) -> Tuple[Optional[float], Optional[str]]:
+        """兼容旧/新签名的 fallback 提取器。"""
+        fallback_fn = getattr(extractor, "_fallback_extract", None)
+        if not callable(fallback_fn):
+            return None, snips[0].get("url") if snips else None
+        try:
+            return fallback_fn(  # type: ignore[misc]
+                snips,
+                indicator=task.get("indicator_key"),
+                unit_hint=task.get("unit"),
+            )
+        except TypeError:
+            # 兼容旧签名: _fallback_extract(snips)
+            return fallback_fn(snips)  # type: ignore[misc]
+
     async def _do_extract(snips: List[Dict[str, Any]], task: Dict[str, Any]) -> Dict[str, Any]:
         """执行抽取，记录 DeepSeek 延迟与错误；regex 模式直接返回占位。"""
         if extraction_backend == "regex":
             val = _regex_fallback(snips, task.get("indicator_key", ""))
             url = None
             if val is None:
-                val, url = extractor._fallback_extract(snips)  # type: ignore
+                strict_keys = {"industrial", "industrial_sales", "reverse_repo", "mlf"}
+                if task.get("indicator_key") in strict_keys:
+                    return {
+                        "value": None,
+                        "unit": task.get("unit"),
+                        "source_url": snips[0].get("url") if snips else None,
+                        "confidence": 0.0,
+                        "note": "regex_only_no_match",
+                        "llm_latency_ms": 0,
+                        "llm_error": None,
+                    }
+                val, url = _call_fallback_extract(snips, task)
             return {
                 "value": val,
                 "unit": task.get("unit"),
@@ -777,7 +1253,7 @@ async def _execute_tasks(
                 is_timeout = isinstance(exc, asyncio.TimeoutError) or "Timeout" in str(exc)
                 if attempts >= 2:
                     logger.warning(f"DeepSeek 请求失败，将使用 regex 兜底: {exc}")
-                    val, url = extractor._fallback_extract(snips)  # type: ignore
+                    val, url = _call_fallback_extract(snips, task)
                     return {
                         "value": val,
                         "unit": task.get("unit"),
@@ -844,12 +1320,16 @@ async def _execute_tasks(
                         extraction["value"] = regex_val
                         extraction.setdefault("note", "regex_fallback")
                         stats["regex_hits"] += 1
+                _augment_extraction_metadata(extraction, task, snippets)
+                _refine_extraction_value(extraction, task, snippets)
                 is_fund_flow = task["indicator_key"] in {"northbound", "southbound", "etf", "margin"}
                 manual_required = False
                 if is_fund_flow and (extraction.get("confidence", 0.0) < 0.5 or extraction.get("value") is None):
                     manual_required = True
                 if is_fund_flow:
-                    adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(extraction)
+                    adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(
+                        extraction, indicator_key=task["indicator_key"]
+                    )
                     extraction["value"] = adjusted_value
                     combined_note = " ".join(
                         s for s in [extraction.get("note", ""), note_append] if s
@@ -905,7 +1385,14 @@ async def _execute_tasks(
                     if extraction.get("value") is None:
                         manual_required_keys.append(task_record["indicator_key"])
                 else:
-                    _apply_extraction(market_payload, task, extraction)
+                    write_target = _apply_extraction(market_payload, task, extraction)
+                    write_stats = stats.setdefault("write_back_by_category", {})
+                    if isinstance(write_stats, dict):
+                        write_stats[write_target] = write_stats.get(write_target, 0) + 1
+                    if write_target == "fallback_macro":
+                        stats["write_back_fallback_count"] += 1
+                    elif write_target == "skip_no_value":
+                        stats["write_back_miss_count"] += 1
                     _update_missing_items(market_payload, task["indicator_key"])
                     completed.append(task_record)
                 _append_task_log(task_log_path, task_record)
@@ -917,6 +1404,7 @@ async def _execute_tasks(
                         "raw_results": snippets[:3],
                         "search_backend": task.get("search_backend"),
                         "note": task.get("search_note"),
+                        "manual_required": manual_required,
                     }
                 )
             except Exception as exc:
@@ -990,6 +1478,7 @@ async def _execute_tasks(
                         },
                         "extraction_backend": extraction_backend,
                         "raw_results": [],
+                        "manual_required": False,
                     }
                 )
                 continue
@@ -1155,17 +1644,24 @@ async def _execute_tasks(
                             skip_deepseek_reason = search_note or "no_snippets"
                         score_stats = _score_stats(snippets)
                     score_low_all = False
+                    effective_low_score = task.get("low_score_threshold")
+                    if effective_low_score is None:
+                        effective_low_score = low_score_threshold
+                    allow_low_score_extract = bool(task.get("allow_low_score_extract"))
                     if (
                         skip_deepseek_reason is None
                         and score_stats.get("score_count")
-                        and low_score_threshold is not None
-                        and low_score_threshold > 0
+                        and effective_low_score is not None
+                        and effective_low_score > 0
                     ):
                         score_max = score_stats.get("score_max")
-                        if isinstance(score_max, (int, float)) and score_max < low_score_threshold:
+                        if isinstance(score_max, (int, float)) and score_max < effective_low_score:
                             score_low_all = True
-                            skip_deepseek_reason = "low_score_all"
-                            stats["low_score_drop"] += 1
+                            if allow_low_score_extract:
+                                stats["low_score_allow"] += 1
+                            else:
+                                skip_deepseek_reason = "low_score_all"
+                                stats["low_score_drop"] += 1
                     # Tavily extract (two-step) for noisy tasks
                     try:
                         if (
@@ -1194,7 +1690,7 @@ async def _execute_tasks(
                                         stats["extract_fallback_to_deepseek"] += 1
                                         # 不设置 skip_deepseek_reason，让 DeepSeek 从原始 snippets 抽取
                                         await asyncio.sleep(0.5)
-                                        if auto_disable_extract_on_422 and extract_422_cooldown_sec > 0:
+                                        if auto_disable_extract_on_422:
                                             now_ts = time.time()
                                             tracker = extract_422_tracker.get(task["indicator_key"])
                                             if (
@@ -1205,12 +1701,20 @@ async def _execute_tasks(
                                             tracker["count"] = tracker.get("count", 0) + 1
                                             extract_422_tracker[task["indicator_key"]] = tracker
                                             if tracker["count"] >= max(1, extract_422_threshold):
-                                                extract_disabled_until[task["indicator_key"]] = (
-                                                    now_ts + extract_422_cooldown_sec
-                                                )
+                                                if extract_422_cooldown_sec > 0:
+                                                    extract_disabled_until[task["indicator_key"]] = (
+                                                        now_ts + extract_422_cooldown_sec
+                                                    )
+                                                # 一旦触发阈值，全局停用 extract，避免后续任务继续浪费时间
+                                                extract_disabled = True
                                                 stats["extract_auto_disabled"] = True
+                                                stats["extract_globally_disabled"] = True
+                                                stats["extract_global_disable_reason"] = (
+                                                    f"tavily_extract_422:{task['indicator_key']}"
+                                                )
                                                 logger.warning(
-                                                    "[Stage2] Tavily extract 422 达到阈值(%d)，%s 进入冷却 %ss",
+                                                    "[Stage2] Tavily extract 422 达到阈值(%d)，已全局停用 extract；"
+                                                    "%s 冷却 %ss",
                                                     extract_422_threshold,
                                                     task["indicator_key"],
                                                     extract_422_cooldown_sec,
@@ -1231,6 +1735,8 @@ async def _execute_tasks(
                                                 )
                     except Exception as exc:  # pragma: no cover
                         logger.debug(f"Tavily extract skipped/failed: {exc}")
+                    if search_backend == "tavily" and extract_disabled and extract_skipped_reason is None:
+                        extract_skipped_reason = "extract_globally_disabled"
                     # score 过滤
                     before_score = len(snippets)
                     high_score = [s for s in snippets if s.get("score") is None or s.get("score", 0) >= 0.5]
@@ -1249,6 +1755,7 @@ async def _execute_tasks(
                         stats["domain_filtered_drop"] += before - after
                     domain_filtered_drop_local = max(0, before - after) if before and before != after else 0
                     snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
+                    snippets = _prefer_latest_report_snippets(snippets, task.get("indicator_key"))
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     task_for_log = {
                         **task,
@@ -1257,7 +1764,7 @@ async def _execute_tasks(
                         "query_attempts": query_attempts,
                         "score_stats": score_stats,
                         "score_low_all": score_low_all,
-                        "score_low_threshold": low_score_threshold,
+                        "score_low_threshold": effective_low_score,
                         "score_filtered_drop": score_filtered_drop_local,
                         "domain_filtered_drop": domain_filtered_drop_local,
                         "extraction_skipped_reason": skip_deepseek_reason,
@@ -1327,6 +1834,7 @@ async def _execute_tasks(
                                     "raw_results": snippets[:3],
                                     "search_backend": task_for_log.get("search_backend"),
                                     "note": task_for_log.get("search_note"),
+                                    "manual_required": True,
                                 }
                             )
                             break
@@ -1355,6 +1863,8 @@ async def _execute_tasks(
                                 extraction["value"] = regex_val
                                 extraction.setdefault("note", "regex_fallback")
                                 stats["regex_hits"] += 1
+                        _augment_extraction_metadata(extraction, task, snippets)
+                        _refine_extraction_value(extraction, task, snippets)
                         # 对资金流再尝试基于片段推断方向，补充 note，减少 manual_required
                         if is_fund_flow and extraction.get("value") is not None:
                             inferred_dir = _infer_flow_direction(snippets)
@@ -1372,7 +1882,9 @@ async def _execute_tasks(
                         if is_fund_flow and (extraction.get("confidence", 0.0) < 0.5 or extraction.get("value") is None):
                             manual_required = True
                         if is_fund_flow:
-                            adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(extraction)
+                            adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(
+                                extraction, indicator_key=task["indicator_key"]
+                            )
                             extraction["value"] = adjusted_value
                             combined_note = " ".join(
                                 s for s in [extraction.get("note", ""), note_append] if s
@@ -1435,7 +1947,14 @@ async def _execute_tasks(
                             if attempt >= max_retries + 1 and extraction.get("value") is None:
                                 manual_required_keys.append(task_record["indicator_key"])
                         else:
-                            _apply_extraction(market_payload, task, extraction)
+                            write_target = _apply_extraction(market_payload, task, extraction)
+                            write_stats = stats.setdefault("write_back_by_category", {})
+                            if isinstance(write_stats, dict):
+                                write_stats[write_target] = write_stats.get(write_target, 0) + 1
+                            if write_target == "fallback_macro":
+                                stats["write_back_fallback_count"] += 1
+                            elif write_target == "skip_no_value":
+                                stats["write_back_miss_count"] += 1
                             _update_missing_items(market_payload, task["indicator_key"])
                             completed.append(task_record)
                         _append_task_log(task_log_path, task_record)
@@ -1447,6 +1966,7 @@ async def _execute_tasks(
                                 "raw_results": snippets[:3],  # 仅保留前3条片段便于审计
                                 "search_backend": search_backend,
                                 "note": search_note,
+                                "manual_required": manual_required,
                             }
                         )
                         break
@@ -1501,18 +2021,67 @@ def _gap_monitor(
     _dump_json(payload, output_path)
 
 
+_FUND_FLOW_BOUNDS: Dict[str, Dict[str, Tuple[float, float]]] = {
+    "northbound": {
+        "recent_5d": (-500.0, 500.0),
+        "total_120d": (-8000.0, 8000.0),
+    },
+    "southbound": {
+        "recent_5d": (-500.0, 500.0),
+        "total_120d": (-8000.0, 8000.0),
+    },
+    "etf": {
+        "recent_5d": (-3000.0, 3000.0),
+        "total_120d": (-30000.0, 30000.0),
+    },
+    "margin": {
+        "recent_5d": (-8000.0, 8000.0),
+        "total_120d": (-50000.0, 50000.0),
+    },
+}
+
+
+def _detect_fund_flow_suspicious_reason(
+    key: str,
+    recent: Optional[float],
+    total: Optional[float],
+) -> Optional[str]:
+    if recent is None or total is None:
+        return None
+    if key in {"northbound", "southbound"} and abs(recent - total) < 1e-9:
+        if abs(recent - 100.0) < 1e-9:
+            return "疑似占位值(100/100)"
+        if abs(recent) <= 150.0:
+            return "近5日与120日完全相等且偏小"
+
+    bounds = _FUND_FLOW_BOUNDS.get(key, {})
+    recent_bound = bounds.get("recent_5d")
+    if recent_bound and not (recent_bound[0] <= recent <= recent_bound[1]):
+        return f"recent_5d超出经验区间({recent_bound[0]}~{recent_bound[1]})"
+    total_bound = bounds.get("total_120d")
+    if total_bound and not (total_bound[0] <= total <= total_bound[1]):
+        return f"total_120d超出经验区间({total_bound[0]}~{total_bound[1]})"
+    return None
+
+
 def _flag_fund_flow_anomalies(market_payload: Dict[str, Any]) -> List[str]:
-    """标记资金流向的零值/空值"""
+    """标记资金流向的零值/空值/可疑占位值"""
     flagged: List[str] = []
     fund_flow = market_payload.get("fund_flow", {})
     for key, item in fund_flow.items():
+        if not isinstance(item, dict):
+            continue
         recent = _safe_number(item.get("recent_5d"))
         total = _safe_number(item.get("total_120d"))
-        if (recent is None or abs(recent) < 1e-9) or (total is None or abs(total) < 1e-9):
+        suspicious_reason = _detect_fund_flow_suspicious_reason(key, recent, total)
+        if (recent is None or abs(recent) < 1e-9) or (total is None or abs(total) < 1e-9) or suspicious_reason:
             item["source"] = "异常零值-需核查"
             note = (item.get("note") or "").strip()
-            if "异常零值-需核查" not in note:
-                note = (note + " 异常零值-需核查").strip()
+            anomaly_note = "异常零值-需核查"
+            if suspicious_reason:
+                anomaly_note = f"{anomaly_note} {suspicious_reason}"
+            if anomaly_note not in note:
+                note = (note + f" {anomaly_note}").strip()
             item["note"] = note
             item["manual_required"] = True
             flagged.append(key)
@@ -1523,7 +2092,9 @@ def _flag_fund_flow_anomalies(market_payload: Dict[str, Any]) -> List[str]:
     return flagged
 
 
-def _validate_fund_flow_extraction(extraction: Dict[str, Any]) -> (Optional[float], bool, str):
+def _validate_fund_flow_extraction(
+    extraction: Dict[str, Any], indicator_key: Optional[str] = None
+) -> (Optional[float], bool, str):
     """确保资金流数值有“亿”单位，并基于关键词确定正负；返回 (value, manual_required, note_append)"""
     val = extraction.get("value")
     note_append = ""
@@ -1536,7 +2107,8 @@ def _validate_fund_flow_extraction(extraction: Dict[str, Any]) -> (Optional[floa
         return None, True, "parse_error"
     # 单位校验
     unit = extraction.get("unit") or ""
-    if "亿" not in unit:
+    unit_lower = str(unit).lower()
+    if "亿" not in unit and "bn" not in unit_lower and "billion" not in unit_lower:
         manual = True
         note_append = (note_append + " 单位缺失(需含亿)").strip()
     # 方向校验：根据 note / raw snippet 关键词推断
@@ -1561,6 +2133,17 @@ def _validate_fund_flow_extraction(extraction: Dict[str, Any]) -> (Optional[floa
     if direction_unknown:
         manual = True
         note_append = (note_append + " 未能识别流入/流出方向").strip()
+    key = str(indicator_key or "").lower()
+    if key in {"northbound", "southbound"}:
+        if abs(val - 100.0) < 1e-9:
+            manual = True
+            note_append = (note_append + " 疑似占位值(100)").strip()
+    bounds = _FUND_FLOW_BOUNDS.get(key)
+    if bounds and "recent_5d" in bounds:
+        low, high = bounds["recent_5d"]
+        if not (low <= val <= high):
+            manual = True
+            note_append = (note_append + f" 超出经验区间({low}~{high})").strip()
 
     return val, manual, note_append
 
@@ -1580,6 +2163,7 @@ def _validate_general_extraction(
     issuer_hint = task.get("issuer")
     issuer_aliases = task.get("issuer_aliases") or []
     indicator_key = task.get("indicator_key")
+    indicator_key_l = str(indicator_key or "").lower()
     manual = False
     note_append = ""
     note_flag = extraction.get("note") or ""
@@ -1602,9 +2186,15 @@ def _validate_general_extraction(
 
     # 域名校验
     src = extraction.get("source_url")
+    src_netloc = ""
+    if src:
+        try:
+            src_netloc = urlparse(src).netloc
+        except Exception:
+            src_netloc = ""
     if domains and src:
         try:
-            netloc = urlparse(src).netloc
+            netloc = src_netloc or urlparse(src).netloc
             if not any(netloc.endswith(d) for d in domains):
                 manual = True
                 note_append = (note_append + " 域名不在白名单").strip()
@@ -1624,30 +2214,52 @@ def _validate_general_extraction(
 
     # 发布机构校验：若提供 issuer_hint，需要在抽取或片段中出现
     if issuer_hint:
+        issuer_relax_domains = {
+            "rrr": ["tradingeconomics.com", "ceicdata.com", "chinamoney.com.cn"],
+            "mlf": ["tradingeconomics.com", "chinamoney.com.cn"],
+            "reverse_repo": ["tradingeconomics.com", "chinamoney.com.cn", "cls.cn"],
+            "bcom": ["tradingeconomics.com", "investing.com", "bloomberg.com"],
+            "cn10y": ["tradingeconomics.com", "ceicdata.com", "macromicro.me", "investing.com"],
+            "cn10y_cdb": ["chinamoney.com.cn", "cfets.com.cn", "eastmoney.com", "tradingeconomics.com", "ceicdata.com"],
+            "bdi": ["balticexchange.com", "tradingeconomics.com", "investing.com"],
+        }
+        issuer_relaxed = False
+        if indicator_key_l in issuer_relax_domains and src_netloc:
+            issuer_relaxed = any(
+                src_netloc.endswith(d) for d in issuer_relax_domains[indicator_key_l]
+            )
         issuer_match_flag = extraction.get("issuer_match")
         alias_hit = any(alias.lower() in snippets_text for alias in issuer_aliases)
-        if not issuer_match_flag and issuer_hint.lower() not in snippets_text and not alias_hit:
+        if (
+            not issuer_relaxed
+            and not issuer_match_flag
+            and issuer_hint.lower() not in snippets_text
+            and not alias_hit
+        ):
             # 若已有有效数值但缺发行人，则仅提示不强制人工；无值则仍需人工
             if val is None:
                 manual = True
             note_append = (note_append + f" 缺少发布机构({issuer_hint})").strip()
+        elif issuer_relaxed:
+            note_append = (note_append + " 发布机构校验放宽").strip()
         # regex_only/regex_fallback 情况下，对关键指标要求发布机构命中
         strict_issuer_keys = {
-            "USDCNY",
-            "USDCNH",
-            "DXY",
+            "usdcny",
+            "usdcnh",
+            "dxy",
             "bdi",
             "rrr",
             "mlf",
             "reverse_repo",
         }
         if (
-            indicator_key in strict_issuer_keys
+            indicator_key_l in strict_issuer_keys
             and isinstance(note_flag, str)
             and note_flag.startswith("regex")
             and not issuer_match_flag
             and issuer_hint.lower() not in snippets_text
             and not alias_hit
+            and not issuer_relaxed
         ):
             if val is None:
                 manual = True
@@ -1656,15 +2268,36 @@ def _validate_general_extraction(
     # regex_only 时要求命中指标关键词，避免抓取无关数字
     if isinstance(note_flag, str) and note_flag.startswith("regex") and indicator_key:
         keyword_rules = {
-            "USDCNY": ["usdcny", "usd/cny", "美元", "人民币"],
-            "USDCNH": ["usdcnh", "usd/cnh", "离岸人民币"],
-            "DXY": ["dxy", "美元指数", "dollar index"],
+            "USDCNY": [
+                "usdcny",
+                "usd/cny",
+                "usd cny",
+                "us dollar",
+                "chinese yuan",
+                "cny",
+                "renminbi",
+                "美元",
+                "人民币",
+                "在岸",
+            ],
+            "USDCNH": [
+                "usdcnh",
+                "usd/cnh",
+                "usd cnh",
+                "offshore",
+                "cnh",
+                "renminbi",
+                "离岸人民币",
+            ],
+            "DXY": ["dxy", "美元指数", "dollar index", "us dollar index", "ice dollar index"],
             "bdi": ["bdi", "波罗的海", "baltic"],
-            "rrr": ["存款准备金率", "rrr", "降准"],
-            "mlf": ["mlf", "中期借贷便利"],
-            "reverse_repo": ["逆回购", "repo"],
+            "industrial": ["工业增加值", "规模以上工业增加值", "industrial output"],
+            "industrial_sales": ["工业企业", "营业收入", "营收", "industrial enterprise"],
+            "rrr": ["存款准备金率", "rrr", "降准", "reserve requirement"],
+            "mlf": ["mlf", "中期借贷便利", "medium-term lending facility"],
+            "reverse_repo": ["逆回购", "repo", "reverse repo", "7-day"],
             "US10Y": ["10年", "10-year", "us10y", "treasury"],
-            "CN10Y": ["10年", "国债"],
+            "CN10Y": ["10年", "10-year", "10 year", "10y", "国债", "government bond", "china 10y"],
             "CN10Y_CDB": ["国开", "开发债", "cdb"],
         }
         keywords = keyword_rules.get(indicator_key)
@@ -1689,6 +2322,11 @@ def _validate_general_extraction(
         elif val is not None:
             manual = True
             note_append = (note_append + " 数值不可解析").strip()
+
+    # 工业增加值口径保护：仅累计同比时不作为 current_value 使用
+    if indicator_key == "industrial" and extraction.get("value_type") == "yoy_ytd":
+        manual = True
+        note_append = (note_append + " 仅累计同比需补当月同比").strip()
 
     return val, manual, note_append
 
@@ -1763,8 +2401,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--extract-422-threshold",
         type=int,
-        default=3,
-        help="触发自动停用 extract 的 Tavily 422 次数阈值（默认3）",
+        default=1,
+        help="触发自动停用 extract 的 Tavily 422 次数阈值（默认1）",
     )
     parser.add_argument(
         "--extract-422-cooldown-sec",
@@ -2184,6 +2822,8 @@ async def main() -> int:
         "tavily_extract_422_count": exec_stats.get("tavily_extract_422_count", 0),
         "extract_fallback_to_deepseek": exec_stats.get("extract_fallback_to_deepseek", 0),
         "extract_auto_disabled": exec_stats.get("extract_auto_disabled", False),
+        "extract_globally_disabled": exec_stats.get("extract_globally_disabled", args.disable_extract),
+        "extract_global_disable_reason": exec_stats.get("extract_global_disable_reason"),
         "exa_fallback": exec_stats.get("exa_fallback", 0),
         "exa_empty": exec_stats.get("exa_empty", 0),
         "exa_error": exec_stats.get("exa_error", 0),
@@ -2191,6 +2831,9 @@ async def main() -> int:
         "deepseek_p95_ms": p95_llm,
         "queue_requeued": exec_stats.get("queue_requeued", 0),
         "queue_dead_letters": exec_stats.get("queue_dead_letters", 0),
+        "write_back_by_category": exec_stats.get("write_back_by_category", {}),
+        "write_back_fallback_count": exec_stats.get("write_back_fallback_count", 0),
+        "write_back_miss_count": exec_stats.get("write_back_miss_count", 0),
         "success_by_category": success_by_cat,
         "total_by_category": total_by_cat,
     }
@@ -2227,6 +2870,14 @@ async def main() -> int:
         f"  LLM: extract {summary['extract_calls']} 次；timeout {summary['timeout_count']} 次；retry {summary['retry_count']} 次; "
         f"tavily_extract {summary['tavily_extract_calls']} 次 (422={summary['tavily_extract_422_count']}, 降级DS={fallback_ds}, {auto_flag}); "
         f"queue_requeued {summary.get('queue_requeued',0)} dead {summary.get('queue_dead_letters',0)}"
+    )
+    if summary.get("extract_globally_disabled"):
+        print(
+            f"  extract全局停用: True (reason={summary.get('extract_global_disable_reason') or 'unknown'})"
+        )
+    print(
+        f"  回写统计: {summary.get('write_back_by_category', {})} "
+        f"(fallback={summary.get('write_back_fallback_count', 0)}, miss={summary.get('write_back_miss_count', 0)})"
     )
     if summary.get("success_by_category"):
         print(f"  分类型成功: {summary['success_by_category']} / {summary['total_by_category']}")

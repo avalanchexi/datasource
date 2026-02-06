@@ -421,20 +421,28 @@ class PringAnalyzer:
 
         for key, field in mapping.items():
             policy = self.preloaded_market_data.monetary_policy.get(key)
-            if policy and policy.current_value is not None:
-                if policy.is_estimated and not self.allow_estimated:
-                    continue
-                value = policy.current_value
-                if field == 'rrr_change' and policy.change_from_120d is not None:
-                    value = policy.change_from_120d
-                data[field] = value
-                raw_values[field] = {
-                    "value": policy.current_value,
-                    "change_from_120d": policy.change_from_120d,
-                    "unit": policy.unit,
-                    "date": policy.date,
-                    "source": policy.source
-                }
+            if policy is None and key == "rrr":
+                policy = self.preloaded_market_data.monetary_policy.get("reserve_ratio")
+            if not policy:
+                continue
+            if policy.is_estimated and not self.allow_estimated:
+                continue
+            has_value = policy.current_value is not None
+            if field == 'rrr_change' and policy.change_from_120d is not None:
+                has_value = True
+            if not has_value:
+                continue
+            value = policy.current_value
+            if field == 'rrr_change' and policy.change_from_120d is not None:
+                value = policy.change_from_120d
+            data[field] = value
+            raw_values[field] = {
+                "value": policy.current_value,
+                "change_from_120d": policy.change_from_120d,
+                "unit": policy.unit,
+                "date": policy.date,
+                "source": policy.source
+            }
 
         if data:
             if data.get("m1_growth") is not None and data.get("m2_growth") is not None:

@@ -7,7 +7,7 @@ from scripts.stage2_unified_enhancer import _execute_tasks
 
 class FakeClient422:
     def __init__(self):
-        self.extract_called = False
+        self.extract_calls = 0
 
     async def search(self, **kwargs):
         # 返回一条高分 snippet，触发 extract 分支
@@ -22,7 +22,7 @@ class FakeClient422:
         }
 
     async def extract(self, **kwargs):
-        self.extract_called = True
+        self.extract_calls += 1
         return {"status": 422}
 
 
@@ -40,27 +40,41 @@ class FakeExtractorTimeout:
 
 
 @pytest.mark.anyio("asyncio")
-async def test_skip_deepseek_on_extract_422(tmp_path):
+async def test_extract_422_triggers_global_disable(tmp_path):
     client = FakeClient422()
     extractor = FakeExtractorTimeout()
     stats = {}
-    market_payload = {"fund_flow": {"etf": {"type": "etf"}}}
-    task = {
-        "task_id": "test-etf-422",
-        "indicator_key": "etf",
-        "stage_phase": "assets",
-        "search_backend": "tavily",
-        "fund_flow_backend": "tavily",
-        "extraction_backend": "deepseek",
-        "query": "A股 ETF 资金流 申购赎回 近5日 120日",
-        "created_at": 1700000000,
-        "preferred_domains": [],
-    }
+    market_payload = {"fund_flow": {"etf": {"type": "etf"}, "northbound": {"type": "northbound"}}}
+    tasks = [
+        {
+            "task_id": "test-etf-422",
+            "indicator_key": "etf",
+            "stage_phase": "assets",
+            "search_backend": "tavily",
+            "fund_flow_backend": "tavily",
+            "extraction_backend": "deepseek",
+            "query": "A股 ETF 资金流 申购赎回 近5日 120日",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "test-northbound-422",
+            "indicator_key": "northbound",
+            "stage_phase": "assets",
+            "search_backend": "tavily",
+            "fund_flow_backend": "tavily",
+            "extraction_backend": "deepseek",
+            "query": "北向资金 近5日 120日",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+    ]
 
     completed, failures, websearch_results = await _execute_tasks(
-        [task],
+        tasks,
         market_payload,
         client,
+        None,
         extractor,
         task_log_path=tmp_path / "task_log.jsonl",
         cache_ttl=None,
@@ -76,17 +90,23 @@ async def test_skip_deepseek_on_extract_422(tmp_path):
         queue_maxsize=10,
         queue_retry_limit=0,
         disable_extract=False,
+        auto_disable_extract_on_422=True,
+        extract_422_threshold=1,
         extract_topk=1,
         llm_hard_timeout=10,
     )
 
-    assert not completed
-    assert len(failures) == 1
-    record = failures[0]
-    assert "skipped_deepseek" in (record.get("llm_error") or "")
-    assert stats.get("tavily_extract_422_count", 0) == 1
-    assert client.extract_called is True
-    assert websearch_results and websearch_results[0]["extraction"].get("note", "").startswith("skipped_deepseek")
+    assert len(completed) + len(failures) == 2
+    assert stats.get("tavily_extract_422_count", 0) >= 1
+    assert stats.get("extract_globally_disabled") is True
+    assert stats.get("extract_global_disable_reason") is not None
+    # 第二个任务应走全局禁用后路径，不再触发 client.extract
+    assert client.extract_calls == 1
+    assert websearch_results
+    assert any(
+        result.get("task", {}).get("extract_skipped_reason") == "extract_globally_disabled"
+        for result in websearch_results
+    )
 
 
 @pytest.mark.anyio("asyncio")
@@ -126,6 +146,7 @@ async def test_deepseek_timeout_records_error(tmp_path):
         [task],
         market_payload,
         client,
+        None,
         extractor,
         task_log_path=tmp_path / "task_log.jsonl",
         cache_ttl=None,

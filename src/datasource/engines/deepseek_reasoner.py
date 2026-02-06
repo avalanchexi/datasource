@@ -45,19 +45,189 @@ class DeepSeekExtractionAgent:
         return self._client
 
     @staticmethod
-    def _fallback_extract(snippets: List[Dict[str, Any]]) -> (Optional[float], Optional[str]):
-        """无模型时的兜底提取：扫描 snippet 里的首个数值并返回对应 URL"""
+    def _find_number_by_patterns(
+        text: str,
+        patterns: List[str],
+        low: Optional[float] = None,
+        high: Optional[float] = None,
+        min_decimals: int = 1,
+    ) -> Optional[float]:
+        for pattern in patterns:
+            for match in re.finditer(pattern, text, flags=re.IGNORECASE | re.DOTALL):
+                num_text = match.group(1)
+                if "." not in num_text:
+                    continue
+                decimals = num_text.split(".", 1)[1]
+                if len(decimals) < min_decimals:
+                    continue
+                try:
+                    value = float(num_text)
+                except Exception:
+                    continue
+                if low is not None and value < low:
+                    continue
+                if high is not None and value > high:
+                    continue
+                return value
+        return None
+
+    @classmethod
+    def _fallback_extract(
+        cls,
+        snippets: List[Dict[str, Any]],
+        indicator: Optional[str] = None,
+        unit_hint: Optional[str] = None,
+    ) -> (Optional[float], Optional[str]):
+        """无模型时的保守兜底提取：优先指标关键词+范围匹配，避免首数字误提取。"""
+        indicator_key = (indicator or "").lower()
+        pattern_rules: Dict[str, Dict[str, Any]] = {
+            "usdcny": {
+                "patterns": [
+                    r"(?:USDCNY|USD/CNY|USD CNY|美元/人民币|美元人民币|在岸人民币)[^\d]{0,12}([0-9]+\.[0-9]{2,6})",
+                    r"1(?:\.0+)?\s*USD\s*=\s*([0-9]+\.[0-9]{2,6})\s*CNY",
+                ],
+                "range": (5.5, 9.5),
+            },
+            "usdcnh": {
+                "patterns": [
+                    r"(?:USDCNH|USD/CNH|USD CNH|离岸人民币|offshore)[^\d]{0,12}([0-9]+\.[0-9]{2,6})",
+                    r"1(?:\.0+)?\s*USD\s*=\s*([0-9]+\.[0-9]{2,6})\s*CNH",
+                ],
+                "range": (5.5, 10.0),
+            },
+            "dxy": {
+                "patterns": [
+                    r"(?:DXY|美元指数|Dollar Index|US Dollar Index)[^\d]{0,12}([0-9]{2,3}\.[0-9]{1,3})",
+                    r"([0-9]{2,3}\.[0-9]{1,3})[^\d]{0,12}(?:DXY|美元指数|Dollar Index|US Dollar Index)",
+                ],
+                "range": (70.0, 140.0),
+            },
+            "cn10y": {
+                "patterns": [
+                    r"(?:China\s*10\s*Y|10[- ]?year|10y|10年|国债收益率)[^\d]{0,12}([0-9]+\.[0-9]{2,3})",
+                    r"([0-9]+\.[0-9]{2,3})[^\d]{0,12}(?:China\s*10\s*Y|10[- ]?year|10y|10年)",
+                ],
+                "range": (0.0, 10.0),
+            },
+            "cn10y_cdb": {
+                "patterns": [
+                    r"(?:国开|国开债|开发债|CDB)[^\d]{0,16}([0-9]+\.[0-9]{2,3})",
+                ],
+                "range": (0.0, 12.0),
+            },
+            "us10y": {
+                "patterns": [
+                    r"(?:US10Y|美国10年|10年期美债|10-year treasury)[^\d]{0,12}([0-9]+\.[0-9]{2,3})",
+                ],
+                "range": (0.0, 15.0),
+            },
+            "gc=f": {
+                "patterns": [
+                    r"(?:GC=F|gold futures|COMEX黄金)[^\d]{0,20}([0-9]{3,5}\.[0-9]{1,2})",
+                    r"([0-9]{3,5}\.[0-9]{1,2})\s*(?:美元/盎司|\$/oz)",
+                ],
+                "range": (800.0, 5000.0),
+            },
+            "cl=f": {
+                "patterns": [
+                    r"(?:CL=F|WTI原油|WTI crude)[^\d]{0,20}([0-9]{2,3}\.[0-9]{1,2})",
+                    r"([0-9]{2,3}\.[0-9]{1,2})\s*(?:美元/桶|\$/barrel)",
+                ],
+                "range": (0.1, 250.0),
+            },
+            "bz=f": {
+                "patterns": [
+                    r"(?:BZ=F|Brent原油|Brent crude)[^\d]{0,20}([0-9]{2,3}\.[0-9]{1,2})",
+                    r"([0-9]{2,3}\.[0-9]{1,2})\s*(?:美元/桶|\$/barrel)",
+                ],
+                "range": (0.1, 250.0),
+            },
+            "hg=f": {
+                "patterns": [
+                    r"(?:HG=F|COMEX铜|copper futures)[^\d]{0,20}([0-9]+\.[0-9]{2,3})",
+                    r"([0-9]+\.[0-9]{2,3})\s*(?:美元/磅|\$/lb)",
+                ],
+                "range": (0.5, 8.0),
+            },
+            "bcom": {
+                "patterns": [
+                    r"(?:BCOM|彭博商品指数)[^\d]{0,12}([0-9]{2,3}\.[0-9]{1,3})",
+                ],
+                "range": (30.0, 300.0),
+            },
+            "gsg": {
+                "patterns": [
+                    r"(?:GSG|GSG ETF)[^\d]{0,12}([0-9]{1,3}\.[0-9]{1,3})",
+                ],
+                "range": (10.0, 80.0),
+            },
+            "bdi": {
+                "patterns": [
+                    r"(?:BDI|波罗的海)[^\d]{0,20}([0-9]{3,5}\.[0-9]{1,2})",
+                    r"(?:BDI|波罗的海)[^\d]{0,20}([0-9]{3,5})",
+                ],
+                "range": (200.0, 10000.0),
+                "min_decimals": 0,
+            },
+            "rrr": {
+                "patterns": [
+                    r"(?:存款准备金率|RRR)[^\d]{0,12}([0-9]+\.[0-9]+)",
+                ],
+                "range": (5.0, 20.0),
+            },
+            "reverse_repo": {
+                "patterns": [
+                    r"(?:逆回购|reverse repo|repo)[^\d]{0,12}([0-9]+\.[0-9]+)",
+                ],
+                "range": (1.0, 5.0),
+            },
+            "mlf": {
+                "patterns": [
+                    r"(?:MLF|中期借贷便利)[^\d]{0,12}([0-9]+\.[0-9]+)",
+                ],
+                "range": (1.5, 5.0),
+            },
+        }
+
+        rule = pattern_rules.get(indicator_key)
+        if rule:
+            patterns = rule.get("patterns", [])
+            low, high = rule.get("range", (None, None))
+            min_decimals = int(rule.get("min_decimals", 1))
+            for item in snippets:
+                text = " ".join(
+                    str(item.get("content", "")) or str(item.get("snippet", "")) or ""
+                )
+                value = cls._find_number_by_patterns(
+                    text,
+                    patterns=patterns,
+                    low=low,
+                    high=high,
+                    min_decimals=min_decimals,
+                )
+                if value is not None:
+                    return value, item.get("url")
+            # 指标已知但未命中，宁可返回空值，不退回首数字误提取
+            return None, snippets[0].get("url") if snippets else None
+
+        # 非白名单指标：保守策略，只提取带小数且带单位的数值
+        unit_tokens = ["%", "bp", "亿元", "点", "yield", "price", "rate", "usd", "cny", "cnh"]
         for item in snippets:
             text = " ".join(
                 str(item.get("content", "")) or str(item.get("snippet", "")) or ""
             )
-            match = re.search(r"[-+]?\d+(?:\.\d+)?", text)
-            if match:
+            lowered = text.lower()
+            if not any(tok in lowered for tok in unit_tokens):
+                continue
+            for match in re.finditer(r"([-+]?\d+\.\d+)", text):
                 try:
-                    return float(match.group()), item.get("url")
-                except ValueError:
+                    value = float(match.group(1))
+                except Exception:
                     continue
-        return None, None
+                if unit_hint and unit_hint == "%" and not (-100.0 <= value <= 100.0):
+                    continue
+                return value, item.get("url")
+        return None, snippets[0].get("url") if snippets else None
 
     @staticmethod
     def _combine_text(snippets: List[Dict[str, Any]]) -> str:
@@ -88,7 +258,11 @@ class DeepSeekExtractionAgent:
 
         # 兜底：无密钥或无法导入时直接返回简单提取
         if client is None:
-            fallback_value, url = self._fallback_extract(snippets)
+            fallback_value, url = self._fallback_extract(
+                snippets,
+                indicator=indicator,
+                unit_hint=unit_hint,
+            )
             return {
                 "value": fallback_value,
                 "unit": unit_hint,
@@ -153,7 +327,11 @@ class DeepSeekExtractionAgent:
             }
         except Exception as exc:  # pragma: no cover - 网络异常兜底
             logger.warning(f"DeepSeek 请求失败，使用 regex 兜底: {exc}")
-            fallback_value, url = self._fallback_extract(snippets)
+            fallback_value, url = self._fallback_extract(
+                snippets,
+                indicator=indicator,
+                unit_hint=unit_hint,
+            )
             return {
                 "value": fallback_value,
                 "unit": unit_hint,

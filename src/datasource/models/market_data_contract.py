@@ -133,10 +133,14 @@ class MacroIndicatorData(BaseModel):
     """宏观经济指标数据 - Pring第一层(库存周期)"""
     indicator_name: str  # PPI/PMI/工业增加值/BDI/CPI
     current_value: Optional[float] = None
+    yoy_month: Optional[float] = None  # 当月同比（如工业增加值）
+    yoy_ytd: Optional[float] = None    # 累计同比（如1-12月）
     previous_value: Optional[float] = None
     change_rate: Optional[float] = None  # 同比/环比增速
     unit: str  # %/点
     date: str  # 数据日期
+    as_of_date: Optional[str] = None    # 数据口径日期/报告期
+    value_type: Optional[str] = None    # 口径标记: yoy_month/yoy_ytd 等
     source: str
     is_estimated: bool = False
     stage_task_id: Optional[str] = None
@@ -150,6 +154,8 @@ class MonetaryPolicyData(BaseModel):
     change_from_120d: Optional[float] = None  # 120日变化
     unit: str  # %/bp
     date: str
+    as_of_date: Optional[str] = None    # 数据口径日期/报告期
+    rrr_type: Optional[str] = None      # 存准率口径: weighted/statutory 等
     source: str
     is_estimated: bool = False
     note: Optional[str] = None

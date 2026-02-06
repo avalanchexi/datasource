@@ -1,5 +1,5 @@
 # Policy rules for Stage2/Stage3 gating
-extract_422_threshold: 3
+extract_422_threshold: 1
 extract_422_cooldown_sec: 300
 low_score_threshold: 0.2
 critical_missing_keys:

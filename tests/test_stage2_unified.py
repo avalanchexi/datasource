@@ -7,6 +7,7 @@ from datasource.engines.stage2_task_planner import Stage2TaskPlanner
 import asyncio
 
 from scripts.stage2_unified_enhancer import (
+    _apply_extraction,
     _flag_fund_flow_anomalies,
     _compute_derived_metrics,
     _gap_monitor,
@@ -78,7 +79,7 @@ def test_compute_derived_metrics_spread_and_trend():
 
 def test_validate_fund_flow_direction_outflow():
     extraction = {"value": 12.0, "unit": "亿元", "note": "近5日净流出，总览"}
-    val, manual, note = _validate_fund_flow_extraction(extraction)
+    val, manual, note = _validate_fund_flow_extraction(extraction, indicator_key="northbound")
     assert val == -12.0
     assert manual is False
     assert "方向" not in (note or "")
@@ -86,10 +87,76 @@ def test_validate_fund_flow_direction_outflow():
 
 def test_validate_fund_flow_missing_unit_marks_manual():
     extraction = {"value": 5, "unit": "", "note": "净流入"}
-    val, manual, note = _validate_fund_flow_extraction(extraction)
+    val, manual, note = _validate_fund_flow_extraction(extraction, indicator_key="northbound")
     assert manual is True
     assert "单位缺失" in (note or "")
     assert val == 5
+
+
+def test_validate_fund_flow_placeholder_100_marks_manual():
+    extraction = {"value": 100.0, "unit": "亿元", "note": "净流入"}
+    val, manual, note = _validate_fund_flow_extraction(extraction, indicator_key="northbound")
+    assert val == 100.0
+    assert manual is True
+    assert "疑似占位值" in (note or "")
+
+
+def test_apply_extraction_writes_to_array_sections():
+    payload = {
+        "metadata": {"date": "2026-02-06"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "forex": [{"pair": "USDCNY", "current_rate": None, "source": ""}],
+        "commodities": [{"symbol": "CL=F", "current_price": None, "source": ""}],
+        "bonds": [{"symbol": "CN10Y", "current_yield": None, "source": ""}],
+    }
+    task_fx = {"indicator_key": "USDCNY", "task_id": "t-fx"}
+    task_cmdty = {"indicator_key": "CL=F", "task_id": "t-cmdty"}
+    task_bond = {"indicator_key": "CN10Y", "task_id": "t-bond"}
+
+    cat_fx = _apply_extraction(payload, task_fx, {"value": 7.12, "note": "ok", "source_url": "https://example.com"})
+    cat_cmdty = _apply_extraction(payload, task_cmdty, {"value": 72.5, "note": "ok", "source_url": "https://example.com"})
+    cat_bond = _apply_extraction(payload, task_bond, {"value": 2.15, "note": "ok", "source_url": "https://example.com"})
+
+    assert cat_fx == "forex"
+    assert cat_cmdty == "commodities"
+    assert cat_bond == "bonds"
+    assert payload["forex"][0]["current_rate"] == pytest.approx(7.12)
+    assert payload["commodities"][0]["current_price"] == pytest.approx(72.5)
+    assert payload["bonds"][0]["current_yield"] == pytest.approx(2.15)
+
+
+def test_apply_extraction_upserts_forex_when_section_missing_item():
+    payload = {
+        "metadata": {"date": "2026-02-06"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "forex": [],
+        "commodities": [],
+        "bonds": [],
+    }
+    task_fx = {"indicator_key": "USDCNY", "task_id": "t-fx-upsert"}
+    category = _apply_extraction(
+        payload,
+        task_fx,
+        {"value": 6.98, "note": "ok", "source_url": "https://example.com"},
+    )
+    assert category == "forex_upsert"
+    assert payload["forex"]
+    assert payload["forex"][0]["pair"] == "USDCNY"
+    assert payload["forex"][0]["current_rate"] == pytest.approx(6.98)
+
+
+def test_flag_fund_flow_anomalies_marks_placeholder_pair():
+    payload = {
+        "fund_flow": {
+            "northbound": {"recent_5d": 100.0, "total_120d": 100.0, "source": "tavily+deepseek"},
+        }
+    }
+    flagged = _flag_fund_flow_anomalies(payload)
+    assert "northbound" in flagged
+    assert payload["fund_flow"]["northbound"]["source"] == "异常零值-需核查"
+    assert "疑似占位值" in payload["fund_flow"]["northbound"]["note"]
 
 
 def test_execute_tasks_mcp_backend_skips_search(tmp_path: Path):
@@ -123,6 +190,7 @@ def test_execute_tasks_mcp_backend_skips_search(tmp_path: Path):
             [task],
             payload,
             DummyClient(),
+            None,
             DummyExtractor(),
             tmp_path / "log.jsonl",
             cache_ttl=10,

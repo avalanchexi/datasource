@@ -11,7 +11,8 @@
       "change_5d_bp": null,
       "change_120d_bp": null,
       "trend": "stable",
-      "source": "MCP WebSearch (source detail)"
+      "source": "MCP WebSearch (source detail)",
+      "source_url": "https://example.com"
     }
   ],
   "commodities": [
@@ -22,7 +23,8 @@
       "unit": "$/oz",
       "ytd_change": null,
       "trend": "unknown",
-      "source": "MCP WebSearch (source detail)"
+      "source": "MCP WebSearch (source detail)",
+      "source_url": "https://example.com"
     }
   ],
   "forex": [
@@ -33,7 +35,8 @@
       "daily_change": null,
       "change_120d": null,
       "trend": "unknown",
-      "source": "MCP WebSearch (source detail)"
+      "source": "MCP WebSearch (source detail)",
+      "source_url": "https://example.com"
     }
   ],
   "fund_flow": {
@@ -44,18 +47,24 @@
       "total_120d": null,
       "trend": "inflow",
       "source": "MCP WebSearch",
-      "note": "source detail (news daily value optional)"
+      "note": "source detail (news daily value optional)",
+      "source_url": "https://example.com"
     }
   },
   "macro_indicators": {
     "industrial": {
       "indicator_name": "Industrial Output",
       "current_value": null,
+      "yoy_month": null,
+      "yoy_ytd": null,
+      "value_type": "yoy_month",
       "previous_value": null,
       "change_rate": null,
       "unit": "%",
       "date": "YYYY-MM-DD",
-      "source": "MCP WebSearch (source detail)"
+      "as_of_date": "YYYY-MM",
+      "source": "MCP WebSearch (source detail)",
+      "source_url": "https://example.com"
     }
   },
   "monetary_policy": {
@@ -65,7 +74,10 @@
       "change_from_120d": null,
       "unit": "%",
       "date": "YYYY-MM-DD",
-      "source": "MCP WebSearch (source detail)"
+      "as_of_date": "YYYY-MM-DD",
+      "rrr_type": "weighted",
+      "source": "MCP WebSearch (source detail)",
+      "source_url": "https://example.com"
     }
   }
 }

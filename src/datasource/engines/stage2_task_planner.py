@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -35,6 +36,53 @@ class Stage2TaskPlanner:
         self.search_backend = search_backend
         self.task_file = task_file
         self.fund_flow_backend = fund_flow_backend
+        self.query_context: Dict[str, object] = {}
+
+    @staticmethod
+    def _parse_date_value(value: Optional[str]) -> Optional[datetime]:
+        if not value:
+            return None
+        for fmt in ("%Y-%m-%d", "%Y%m%d"):
+            try:
+                return datetime.strptime(value, fmt)
+            except Exception:
+                continue
+        try:
+            return datetime.fromisoformat(value)
+        except Exception:
+            return None
+
+    def _build_query_context(self, payload: Dict[str, Any]) -> Dict[str, object]:
+        meta = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+        date_val = meta.get("date") or meta.get("end_date") or meta.get("start_date")
+        dt = self._parse_date_value(str(date_val)) if date_val else None
+        if not dt:
+            dt = datetime.now()
+        ref_year = dt.year
+        ref_month = dt.month
+        # 宏观月度数据通常为上月发布
+        if ref_month == 1:
+            report_year, report_month = ref_year - 1, 12
+        else:
+            report_year, report_month = ref_year, ref_month - 1
+        return {
+            "ref_year": ref_year,
+            "ref_month": ref_month,
+            "ref_month2": f"{ref_month:02d}",
+            "ref_ym": f"{ref_year}{ref_month:02d}",
+            "report_year": report_year,
+            "report_month": report_month,
+            "report_month2": f"{report_month:02d}",
+            "report_ym": f"{report_year}{report_month:02d}",
+        }
+
+    def _apply_query_templates(self, text: Optional[str]) -> Optional[str]:
+        if not text or not self.query_context:
+            return text
+        try:
+            return text.format(**self.query_context)
+        except Exception:
+            return text
 
     @staticmethod
     def _is_placeholder(value: Any) -> bool:
@@ -94,6 +142,9 @@ class Stage2TaskPlanner:
         backend: Optional[str] = None,
     ) -> Dict[str, Any]:
         profile = SEARCH_PROFILES.get(indicator_key, {})
+        query = self._apply_query_templates(profile.get("query"))
+        queries = [self._apply_query_templates(q) for q in (profile.get("queries") or [])]
+        queries = [q for q in queries if q]
         return {
             "task_id": str(uuid.uuid4()),
             "stage_phase": phase,
@@ -105,8 +156,8 @@ class Stage2TaskPlanner:
             "exclude_domains": profile.get("exclude_domains", []),
             "time_range": profile.get("time_range"),
             "max_age_days": profile.get("max_age_days"),
-            "query": profile.get("query"),
-            "queries": profile.get("queries", []),
+            "query": query,
+            "queries": queries,
             "unit": profile.get("unit"),
             "issuer": profile.get("issuer"),
             "issuer_aliases": profile.get("issuer_aliases", []),
@@ -117,12 +168,15 @@ class Stage2TaskPlanner:
             "chunks_per_source": profile.get("chunks_per_source"),
             "auto_parameters": profile.get("auto_parameters"),
             "days": profile.get("days"),
+            "low_score_threshold": profile.get("low_score_threshold"),
+            "allow_low_score_extract": profile.get("allow_low_score_extract", False),
             "source_hint": source_hint,
             "retry_count": 0,
             "created_at": int(time.time()),
         }
 
     def build_tasks(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        self.query_context = self._build_query_context(payload)
         tasks = self._from_missing_items(payload) + self._scan_placeholders(payload)
         # 去重：同一 indicator_key 只保留一条，避免 basic/advanced 双倍调用
         seen = set()

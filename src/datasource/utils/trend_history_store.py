@@ -34,6 +34,8 @@ EVENTS_WINDOWS = {
 
 # Daily macro indicators that should be stored as series as well
 DAILY_MACRO_SERIES = {"bdi"}
+# Daily monetary policy indicators (allow using record_date when date missing)
+DAILY_MONETARY_KEYS = {"dr007"}
 
 
 @dataclass
@@ -103,6 +105,8 @@ def _has_low_quality_marker(source: str) -> bool:
         "数值超出合理区间",
         "异常零值-需核查",
         "异常零值",
+        "数据超过",
+        "需更新",
     )
     return any(marker in source for marker in markers)
 
@@ -426,10 +430,17 @@ def write_from_market_data(
         value = item.get("current_value")
         if not _is_valid_value(value):
             continue
-        release_date = _normalize_date(item.get("date") or record_date)
+        raw_date = item.get("as_of_date") or item.get("report_period") or item.get("date")
+        if not raw_date:
+            # 非日更宏观指标缺少发布日期时，避免写入“当天”占位日期
+            if key in DAILY_MACRO_SERIES:
+                raw_date = record_date
+            else:
+                continue
+        release_date = _normalize_date(raw_date)
         record = EventRecord(
             release_date=release_date,
-            report_period=item.get("date") or release_date,
+            report_period=item.get("report_period") or item.get("as_of_date") or item.get("date") or release_date,
             value=float(value),
             unit=item.get("unit"),
             source=item.get("source"),
@@ -460,10 +471,17 @@ def write_from_market_data(
         value = item.get("current_value")
         if not _is_valid_value(value):
             continue
-        release_date = _normalize_date(item.get("date") or record_date)
+        raw_date = item.get("as_of_date") or item.get("report_period") or item.get("date")
+        if not raw_date:
+            # 非日更政策指标缺少发布日期时，避免写入“当天”占位日期
+            if key in DAILY_MONETARY_KEYS:
+                raw_date = record_date
+            else:
+                continue
+        release_date = _normalize_date(raw_date)
         record = EventRecord(
             release_date=release_date,
-            report_period=item.get("date") or release_date,
+            report_period=item.get("report_period") or item.get("as_of_date") or item.get("date") or release_date,
             value=float(value),
             unit=item.get("unit"),
             source=item.get("source"),

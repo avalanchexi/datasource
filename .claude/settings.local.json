@@ -95,7 +95,9 @@
       "Bash(PYTHONPATH=. PYTHONIOENCODING=utf-8 python:*)",
       "Bash(do v=$!k-)",
       "Bash([ -n \"$v\" ])",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(for f in data/trend_history/min/series/forex/*.json)",
+      "Bash(git show:*)"
     ],
     "deny": [],
     "ask": []

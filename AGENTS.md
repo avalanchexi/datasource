@@ -316,6 +316,16 @@ print('metadata.missing_items:', d.get('metadata', {}).get('missing_items'))
     --output reports/low_score_audit_${DATE_NH}.json
   ```
 
+## Stage2 抽取/校验优化（2026-01-28+）
+- **结构化数值提取**：对 USDCNY/USDCNH/DXY/CN10Y/政策利率（RRR/MLF/逆回购）以及 northbound/southbound 增加结构化抽取，优先抓取带关键字/单位/精度的数值，过滤 1.00/9.0 等非报价数字。
+- **政策利率发布机构校验放宽**：当来源为 `tradingeconomics.com/ceicdata.com/chinamoney.com.cn/cls.cn` 时放宽 issuer 强校验，避免“缺发布机构”导致 manual。
+- **北向/南向月度口径**：查询口径调整为月度/累计，并尝试从 HKEX 月度统计页提取“净流入/净流出 + 单位”。
+- **排噪提醒**：USDCNY/USDCNH 避免 xe/x-rates 类 1 USD 兑换页面导致的 1.00 数值干扰。
+- **regex-only 加强（2026-02-05+）**：工业增加值/工业企业营收改为“关键词 + 同比/增长”模式；regex-only 未命中时，`industrial/industrial_sales/reverse_repo/mlf` 不再走通用 fallback，直接标记 manual_required，避免误数值写入。
+- **日期回填（2026-02-05+）**：抽取结果若包含 `report_period/as_of_date`，Stage2 会写回 `date` 字段，保证 trend_history 事件序列可落盘，减少 “no_previous_value”。
+- **MLF 查询模板优化（2026-02-05+）**：优先中文央行公告式查询（如“人民银行 中期借贷便利 操作公告 1年期 中标利率 最新”），降低主查询 0 结果概率。
+- 相关实现：`scripts/stage2_unified_enhancer.py`（`_extract_structured_value/_extract_flow_value/_refine_extraction_value`），`src/datasource/config/search_profiles.py`（query/domains/issuer_aliases）。
+
 ## Stage2 Performance / Timeout Tips (2025-12-04)
 - Disable bad proxies first: prefix command with `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY` or pass `--http-proxy '' --https-proxy ''`.
 - Trim long tail (fund flow manual/MCP): `--fund-flow-backend mcp` or `--fund-flow-backend hybrid` so northbound/southbound/etf skip live search.

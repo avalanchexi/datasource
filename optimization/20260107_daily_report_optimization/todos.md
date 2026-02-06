@@ -1,178 +1,880 @@
-# 日报复盘优化 TODO（2026-01-07）
+# Trend History 待修复清单
+生成日期: 2026-01-23
 
-## 0. 需求确认
-- [x] 明确质量指标口径（完整度/时效性/波动合理性/来源权威性）
-- [x] 确认输出落库位置与命名规则（reports/logs/data）
-- [x] 明确趋势存储形态（不使用 SQLite 的最小滚动窗口结构）
-- [x] 明确“120日”为交易日还是自然日（默认交易日）
-- [x] 明确最小存储窗口规则（股指200交易日/其余121/资金流120/宏观事件6-12条）
-- [x] 确认是否允许新增依赖（默认不新增）
+说明: 按文件列出异常日期/值/来源，并给出建议替换来源。
+fund_flow 日期异常判定: 以 2026-01-23 为基准，早于 2025-07-27 视为“过旧”。
 
-## 0.5 复盘事实校验（防模板化误报）
-- [x] 定义“复盘事实来源矩阵”（成功率/阻断原因/估计值/缺口均绑定当天文件）→ `optimization/20260107_daily_report_optimization/复盘模板.md`
-- [x] 复盘模板必须输出证据文件路径（如 logs/stage2_unified_log.json、reports/*）→ `optimization/20260107_daily_report_optimization/复盘模板.md`
-- [x] 若当日文件缺失（如 policy_evaluation_${DATE}.json），禁止写“阻断结论”→ 模板强制“文件不存在写未触发”
-- [x] 新增可选脚本：复盘前对照当日日志/数据做一致性校验（`scripts/recap_consistency_check.py`）
+## Stage2 命中率优化任务（2026-01-28）
+- [x] 更新 search_profiles：USDCNY/USDCNH/DXY/CN10Y 增加中英查询与新域名
+- [x] 更新政策类 query：RRR/逆回购/MLF 增加英文缩写并放宽 max_age_days
+- [x] 调整 northbound/southbound 查询为月度/累计口径并新增 HKEX 域名
+- [x] 调整汇率/债券类时效窗口（max_age_days ≥ 3）并采用 topic=general
+- [ ] 复核 Stage2 低分保护/抽取降级日志字段，必要时补充观测字段
 
-## 1. 趋势数据存储（trend_history）
-- [x] 设计目录结构 `data/trend_history/min/{series,events}` 与字段口径（按 symbol 拆文件）
-- [x] 实现写入函数（按 `date+symbol` 幂等覆盖）
-- [x] 实现窗口裁剪（股指200交易日/其余121/资金流120）
-- [x] 实现事件序列存储（宏观/政策最近6-12条）
-- [x] 实现禁止从 `reports/*.md` 反向回填的校验
-- [x] 单位/口径标准化（资金流亿元、收益率%、外汇收盘价）
-- [x] 在 `src/datasource/utils/data_completion.py` 引入 trend_history 补算（change_5d/120d 缺失时优先使用）
-- [x] 写入防护：过滤低质量标记、跳过 CN10Y/CN10Y_CDB ETF 代理
+## data/trend_history/min/series/forex/USDCNY.json
+- 问题: 波动异常(>|2%|)
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=7.33 | source=MCP WebSearch实时获取(CFETS估计) (pct=4.71%, prev=7.0)
+    - 2026-01-12 | value=7.103 | source=MCP WebSearch实时获取(deepseek_structured) (pct=-3.07%, prev=7.328)
+    - 2026-01-13 | value=7.248 | source=MCP WebSearch实时获取(估计值-需核查) (pct=2.04%, prev=7.103)
+    - 2026-01-14 | value=7.012 | source=MCP WebSearch实时获取(中国外汇交易中心(中间价)) (pct=-3.26%, prev=7.248)
+    - 2026-01-20 | value=7.248 | source=MCP WebSearch实时获取(WebSearch 2026-01-20) (pct=3.31%, prev=7.0161)
+    - 2026-01-21 | value=6.9612 | source=MCP WebSearch实时获取(Investing.com WebFetch verified) (pct=-3.96%, prev=7.248)
+- 问题: 估计/需核查来源
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=7.33 | source=MCP WebSearch实时获取(CFETS估计)
+    - 2026-01-13 | value=7.248 | source=MCP WebSearch实时获取(估计值-需核查)
+- 建议替换来源: 中国外汇交易中心(CFETS)官方中间价/权威报价（避免“估计值-需核查”）
 
-## 2. 趋势数据同步与挂载点
-- [x] 新增 `scripts/trend_history_scan.py`（Stage1 前扫描缺口，输出 gap 报告）
-- [x] Stage1 后部分写入（TuShare可得日频，标记 `is_partial=true`）
-- [x] Stage2.5 后最终写入（`inject_websearch_data_test.py` 输出后，标记 `is_partial=false`）
-- [x] 交易日历对齐（TuShare `trade_cal`），缺口阈值处理（<100 交易日）
-- [x] 首次回补策略（TuShare 可批量回补近1年，WebSearch-only 需日同步累积）
+## data/trend_history/min/series/forex/USDCNH.json
+- 问题: 波动异常(>|2%|)
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=7.35 | source=MCP WebSearch实时获取(离岸市场估计) (pct=5.10%, prev=6.99350023269653)
+    - 2026-01-09 | value=6.9811 | source=MCP WebSearch实时获取(Websearch) (pct=-5.02%, prev=7.35)
+    - 2026-01-13 | value=7.265 | source=MCP WebSearch实时获取(估计值-需核查) (pct=4.23%, prev=6.97)
+    - 2026-01-14 | value=6.9838 | source=MCP WebSearch实时获取(Investing.com) (pct=-3.87%, prev=7.265)
+- 问题: 估计/需核查来源
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=7.35 | source=MCP WebSearch实时获取(离岸市场估计)
+    - 2026-01-13 | value=7.265 | source=MCP WebSearch实时获取(估计值-需核查)
+- 建议替换来源: 离岸人民币权威报价源（如香港市场主流报价/路透/彭博/权威金融终端），避免使用 USDCNY 代理
 
-## 1. 数据质量指标体系
-- [x] 定义指标字段与阈值（按品类）
-- [x] 实现质量指标汇总产出 `reports/quality_metrics_${DATE}.json`
-- [x] 可选追加 `reports/quality_trend.csv`（便于时间序列对比）
+## data/trend_history/min/series/bonds/CN10Y.json
+- 问题: 相对波动异常(>|5%|)
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=1.68 | source=MCP WebSearch实时获取(中债估值估计) (pct=-11.67%, prev=1.9019)
+    - 2026-01-09 | value=1.82 | source=MCP WebSearch实时获取(TradingEconomics WebSearch) (pct=8.33%, prev=1.68)
+    - 2026-01-13 | value=1.62 | source=MCP WebSearch实时获取(估计值-需核查) (pct=-14.29%, prev=1.89)
+    - 2026-01-14 | value=1.886 | source=MCP WebSearch实时获取(TradingEconomics/中债估值) (pct=16.42%, prev=1.62)
+- 建议替换来源: 中债估值/中国债券信息网官方收益率（ChinaBond）
 
-## 2. 可观测性日志
-- [x] 设计 observability 事件结构（指标级耗时/来源/失败类型）
-- [x] 在 Stage2/Stage2.5 流程落日志 `logs/observability_${DATE}.json`
-- [x] 关键失败类型枚举（422/timeout/empty/parse_error）
+## data/trend_history/min/series/bonds/CN10Y_CDB.json
+- 问题: 相对波动异常(>|5%|)
+  - 异常日期/值/来源:
+    - 2026-01-12 | value=1.95 | source=MCP WebSearch实时获取(WebSearch手动补充: 国开债收益率略高于国债) (pct=-14.60%, prev=2.2835)
+    - 2026-01-13 | value=1.72 | source=MCP WebSearch实时获取(估计值-需核查) (pct=-11.79%, prev=1.95)
+    - 2026-01-14 | value=1.96 | source=MCP WebSearch实时获取(中国货币网/中债估值) (pct=13.95%, prev=1.72)
+- 问题: 估计值占比高 (117/121)
+  - 异常日期/值/来源:
+    - 主要估计来源: [('ChinaBond commercial bank bond yield curve(AAA) proxy (websearch)', 112), ('MCP WebSearch实时获取(WebSearch手动补充: 国开债收益率略高于国债)', 1), ('MCP WebSearch实时获取(估计值-需核查)', 1)]
+- 建议替换来源: 中债估值-国开债收益率曲线（官方曲线/权威终端），避免“国债+利差估算”
 
-## 3. 策略自动化（Policy-as-Code）
-- [x] 新增规则配置 `config/policy_rules.yaml`
-- [x] 422 自动降级规则（extract → regex）
-- [x] 关键缺口红名单规则（阻断 Stage3）
-- [x] 异常零值二次搜索/标记规则
+## data/trend_history/min/series/commodities/BCOM.json
+- 问题: 波动异常(>|10%|)
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=98.35 | source=MCP WebSearch实时获取(investing.com) (pct=-11.97%, prev=111.72000122070312)
+    - 2026-01-12 | value=85.0 | source=MCP WebSearch实时获取(WebSearch手动补充: 彭博商品指数估算) (pct=-13.71%, prev=98.5)
+    - 2026-01-13 | value=102.5 | source=MCP WebSearch实时获取(估计值-需核查) (pct=20.59%, prev=85.0)
+    - 2026-01-14 | value=114.4728 | source=MCP WebSearch实时获取(Investing.com) (pct=11.68%, prev=102.5)
+    - 2026-01-23 | value=98.5 | source=MCP WebSearch实时获取(https://www.bloomberg.com/quote/BCOM:IND) (pct=-14.35%, prev=115.0)
+- 建议替换来源: Bloomberg Commodity Index 官方指数（Bloomberg BCOM:IND）
 
-## 4. 来源分级与冲突日志
-- [x] 建立来源权重表（官方/主流/其他）
-- [x] 冲突解决逻辑（按权重择优）
-- [x] 输出 `reports/source_conflicts_${DATE}.json`
+## data/trend_history/min/series/commodities/GSG.json
+- 问题: 波动异常(>|10%|)
+  - 异常日期/值/来源:
+    - 2026-01-12 | value=18.5 | source=MCP WebSearch实时获取(WebSearch手动补充: GSG ETF估算) (pct=-15.33%, prev=21.85)
+    - 2026-01-13 | value=22.8 | source=MCP WebSearch实时获取(估计值-需核查) (pct=23.24%, prev=18.5)
+- 建议替换来源: iShares GSG ETF 官方行情/交易所报价（或权威终端）
 
-## 5. 可重复运行与审计
-- [x] 运行快照 `reports/run_snapshot_${DATE}.json`
-- [x] 记录 CLI/环境摘要/Git 状态/依赖版本
-- [x] 屏蔽敏感字段（API keys）
+## data/trend_history/min/series/commodities/HG=F.json
+- 问题: 波动异常(>|10%|)
+  - 异常日期/值/来源:
+    - 2026-01-13 | value=4.25 | source=MCP WebSearch实时获取(估计值-需核查) (pct=-27.47%, prev=5.86)
+    - 2026-01-14 | value=6.035 | source=MCP WebSearch实时获取(Yahoo Finance) (pct=42.00%, prev=4.25)
+- 建议替换来源: CME/COMEX HG 铜期货结算价（官方/权威终端）
 
-## 6. 校验与回归
-- [x] 新增最小单测（字段校验/规则触发/冲突日志/趋势写入与裁剪）
-- [x] 增强搜索抽取校验（域名路径过滤/合理区间/关键词命中）
-- [ ] 小流量回归：Stage2 → Stage2.5 → Stage3 → Report
-- [ ] 复盘一次 422 场景验证自动降级
+## data/trend_history/min/series/commodities/GC=F.json
+- 问题: 估计值占比高 (109/121)
+  - 异常日期/值/来源:
+    - 主要估计来源: [('Stooq XAUUSD spot (proxy for GC=F)', 109)]
+- 建议替换来源: CME/COMEX GC 黄金期货结算价（官方/权威终端）
 
-## 7. WebSearch 待补清单（2026-01-06）
-> 说明：TuShare 无法覆盖或当前抽取不可靠的指标，需 WebSearch/MCP 兜底补齐。
-- [x] 外汇：USDCNY（在岸）（Tavily→Yahoo 429，改用 Stooq CSV 回补 120 交易日）
-- [x] 外汇：USDCNH（离岸）（USDCNY 代理填充，CNH 历史源缺失，标记估计）
-- [x] 外汇：DXY（美元指数）（Yahoo Finance chart API `DX-Y.NYB` 取 120 交易日）
-- [x] 商品：GC=F（黄金）（Stooq XAUUSD 现货代理，120 交易日）
-- [x] 商品：CL=F（WTI）（EIA WTI Spot 日度代理，120 交易日）
-- [x] 商品：BZ=F（布伦特）（EIA Brent Spot 日度代理，120 交易日）
-- [x] 商品：HG=F（铜）（Yahoo Finance chart API `HG=F` 120 交易日）
-- [x] 商品：BCOM（彭博商品指数）（Yahoo Finance chart API `^BCOM` 120 交易日）
-- [x] 商品：GSG（商品ETF）（Stooq `gsg.us` 120 交易日）
-- [x] 债券：CN10Y（中债10Y）（Yahoo 511010.SS ETF 代理，120 交易日，标记估计）
-- [x] 债券：CN10Y_CDB（国开10Y）（Yahoo 511520.SS 政金债ETF 代理，120 交易日，标记估计）
-- [x] 宏观：BDI（波罗的海干散货指数）（Yahoo BDRY ETF 代理，120 交易日，标记估计）
-- [x] 货币政策：RRR（存款准备金率）
-- [x] 货币政策：MLF（1Y）
-- [x] 货币政策：Reverse Repo（7D逆回购）
-- [x] 资金流向：northbound（北向，日度序列回算 + 新闻当日值覆盖）
-- [x] 资金流向：southbound（南向，同花顺日度序列）
-- [ ] 资金流向：etf（A股ETF）
+## data/trend_history/min/series/commodities/CL=F.json
+- 问题: 估计值占比高 (108/121)
+  - 异常日期/值/来源:
+    - 主要估计来源: [('EIA WTI Spot (daily spot, proxy for CL=F)', 108)]
+- 建议替换来源: NYMEX WTI 原油期货结算价（官方/权威终端）
 
-## 8. trend_history 缺口（2026-01-06）
-> 检查规则：目标日需覆盖 2026-01-06，且窗口满足（stock_indices=200，其余=121，fund_flow=120）
-- [ ] macro_indicators/bdi.json：缺少 2026-01-06（last=2026-01-05）
-- [ ] commodities/GC=F.json：len 120 < 121
-- [ ] commodities/GSG.json：len 120 < 121
-- [ ] forex/USDCNY.json：len 120 < 121
-- [ ] forex/USDCNH.json：len 120 < 121
-- [x] fund_flow/margin_recent_5d.json：len 120 OK
-- [x] fund_flow/margin_total_120d.json：len 120 OK
+## data/trend_history/min/series/commodities/BZ=F.json
+- 问题: 估计值占比高 (108/121)
+  - 异常日期/值/来源:
+    - 主要估计来源: [('EIA Brent Spot (daily spot, proxy for BZ=F)', 108)]
+- 建议替换来源: ICE Brent 原油期货结算价（官方/权威终端）
 
-## 9. events 缺口（近 120 日发布）
-> 检查规则：events 文件需包含近 120 日内发布记录
-- [x] gdp.json：已补齐近 8 季度（含 2025-09-30）
+## data/trend_history/min/series/fund_flow/etf_recent_5d.json
+- 问题: 长度异常 (len=11 != 120)
+  - 异常日期/值/来源:
+    - 日期范围: 2026-01-08 -> 2026-01-23
+- 问题: 现有条目(11条，需补齐)
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=120.5 | source=MCP WebSearch实时获取
+    - 2026-01-09 | value=180.5 | source=MCP WebSearch实时获取
+    - 2026-01-12 | value=-162.62 | source=tavily+deepseek
+    - 2026-01-13 | value=125.0 | source=MCP WebSearch实时获取
+    - 2026-01-14 | value=341.1 | source=MCP WebSearch实时获取
+    - 2026-01-15 | value=-62400.0 | source=tavily+deepseek
+    - 2026-01-19 | value=-12800.0 | source=tavily+deepseek
+    - 2026-01-20 | value=-35.43 | source=tavily+deepseek
+    - 2026-01-21 | value=35.43 | source=MCP WebSearch实时获取
+    - 2026-01-22 | value=-2.0 | source=MCP WebSearch实时获取
+    - 2026-01-23 | value=-285.0 | source=MCP WebSearch实时获取
+- 问题: 极端值/单位疑似错误
+  - 异常日期/值/来源:
+    - 2026-01-15 | value=-62400.0 | source=tavily+deepseek
+    - 2026-01-19 | value=-12800.0 | source=tavily+deepseek
+- 建议替换来源: 东方财富/同花顺/港交所等权威资金流数据（单位亿元）
 
-## 10. events 缺口（需补 120 日事件序列）
-> 规则：events 文件少于 120 条且对应 daily series 已存在 → 用 series 回填 events
-- [x] BZ=F.json（已由 series 回填 120 日）
-- [x] CL=F.json（已由 series 回填 120 日）
-- [x] HG=F.json（已由 series 回填 120 日）
-- [x] CN10Y_CDB.json（已由 series 回填 120 日）
+## data/trend_history/min/series/fund_flow/etf_total_120d.json
+- 问题: 长度异常 (len=11 != 120)
+  - 异常日期/值/来源:
+    - 日期范围: 2026-01-08 -> 2026-01-23
+- 问题: 现有条目(11条，需补齐)
+  - 异常日期/值/来源:
+    - 2026-01-08 | value=2800.0 | source=MCP WebSearch实时获取
+    - 2026-01-09 | value=2100.0 | source=MCP WebSearch实时获取
+    - 2026-01-12 | value=-162.62 | source=tavily+deepseek
+    - 2026-01-13 | value=2800.0 | source=MCP WebSearch实时获取
+    - 2026-01-14 | value=2850.0 | source=MCP WebSearch实时获取
+    - 2026-01-15 | value=-62400.0 | source=tavily+deepseek
+    - 2026-01-19 | value=-12800.0 | source=tavily+deepseek
+    - 2026-01-20 | value=-35.43 | source=tavily+deepseek
+    - 2026-01-21 | value=35.43 | source=MCP WebSearch实时获取
+    - 2026-01-22 | value=35.0 | source=MCP WebSearch实时获取
+    - 2026-01-23 | value=-1200.0 | source=MCP WebSearch实时获取
+- 问题: 极端值/单位疑似错误
+  - 异常日期/值/来源:
+    - 2026-01-15 | value=-62400.0 | source=tavily+deepseek
+    - 2026-01-19 | value=-12800.0 | source=tavily+deepseek
+- 建议替换来源: 东方财富/同花顺/港交所等权威资金流数据（单位亿元）
 
-## 11. trend_history 单条记录（需补齐近 120 日内发布）
-> 规则：events/series 仅 1 条记录，需要补齐近 120 日内发布记录
-- [x] series/fund_flow/margin_recent_5d.json（已补齐 120 条）
-- [x] series/fund_flow/margin_total_120d.json（已补齐 120 条）
-- [x] events/cpi.json（已补齐 >1 条）
-- [x] events/dr007.json（已补齐 >1 条）
-- [x] events/gdp.json（已补齐 >1 条）
-- [x] events/industrial.json（已补齐 >1 条）
-- [x] events/industrial_sales.json（已补齐 >1 条）
-- [x] events/m0.json（已补齐 >1 条）
-- [x] events/m1.json（已补齐 >1 条）
-- [x] events/m2.json（已补齐 >1 条）
-- [x] events/pmi.json（已补齐 >1 条）
-- [x] events/pmi_new_orders.json（已补齐 >1 条）
-- [x] events/pmi_production.json（已补齐 >1 条）
-- [x] events/ppi.json（已补齐 >1 条）
-- [x] events/reverse_repo.json（已补齐 >1 条）
-- [x] events/rrr.json（已补齐 >1 条）
-- [x] events/tsf.json（已补齐 >1 条）
+## data/trend_history/min/series/fund_flow/northbound.json
+- 问题: 日期过旧 (<2025-07-27) 共120条
+  - 异常日期/值/来源:
+    - 2023-11-03 | value=71.082856 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-06 | value=52.729955 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-07 | value=-45.875779 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-08 | value=-37.10006 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-09 | value=-0.63361 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-10 | value=-48.641154 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-13 | value=-14.427905 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-14 | value=-21.092949 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-15 | value=36.256441 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-16 | value=-21.904129 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-17 | value=-28.588686 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-20 | value=13.729672 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-21 | value=1.422796 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-22 | value=-35.385454 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-23 | value=50.579713 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-24 | value=-61.959705 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-27 | value=3.340164 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-28 | value=28.344565 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-29 | value=-50.799984 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-30 | value=85.163138 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-01 | value=-49.972721 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-04 | value=-14.408307 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-05 | value=-75.206665 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-06 | value=23.417544 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-07 | value=3.731582 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-08 | value=4.599696 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-11 | value=-32.592699 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-12 | value=-50.239222 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-13 | value=-95.898076 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-14 | value=34.627584 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-15 | value=-41.655506 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-18 | value=27.269831 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-19 | value=-21.12676 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-20 | value=-15.421744 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-21 | value=12.028087 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-22 | value=-25.109854 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-27 | value=56.779443 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-28 | value=135.584348 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-29 | value=-5.661937 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-02 | value=-52.693904 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-03 | value=16.890368 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-04 | value=-39.363597 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-05 | value=19.917552 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-08 | value=-43.465326 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-09 | value=0.187523 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-10 | value=6.896439 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-11 | value=42.30512 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-12 | value=-30.317723 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-15 | value=-3.547563 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-16 | value=-41.331319 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-17 | value=-130.566384 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-18 | value=-7.411193 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-19 | value=-52.086058 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-22 | value=10.473914 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-23 | value=37.899768 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-24 | value=-5.389464 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-25 | value=62.935317 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-26 | value=15.100381 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-29 | value=-5.923799 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-30 | value=17.423663 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-31 | value=37.011044 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-01 | value=27.263243 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-02 | value=23.601866 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-05 | value=12.110105 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-06 | value=126.045794 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-07 | value=16.838328 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-08 | value=5.830028 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-19 | value=-63.724236 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-20 | value=-1.231191 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-21 | value=135.949052 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-22 | value=36.895166 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-23 | value=-0.92427 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-26 | value=-13.125857 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-27 | value=122.482318 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-28 | value=13.397022 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-29 | value=166.033766 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-01 | value=-53.332278 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-04 | value=-70.606855 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-05 | value=15.535592 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-06 | value=-14.596597 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-07 | value=-21.405078 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-08 | value=60.002427 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-11 | value=102.612368 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-12 | value=42.440738 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-13 | value=15.66655 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-14 | value=64.221915 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-15 | value=103.257695 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-18 | value=28.250695 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-19 | value=-70.110109 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-20 | value=55.683641 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-21 | value=-60.202782 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-22 | value=-31.38468 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-25 | value=55.711158 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-26 | value=47.250522 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-27 | value=-72.493188 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-28 | value=23.345474 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-02 | value=-16.17863 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-03 | value=-22.749685 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-08 | value=-30.446816 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-09 | value=10.550278 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-10 | value=-41.141086 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-11 | value=20.215371 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-12 | value=-73.853298 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-15 | value=81.084124 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-16 | value=-27.927449 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-17 | value=-2.315301 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-18 | value=-52.848772 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-19 | value=-64.899661 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-22 | value=13.886412 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-23 | value=-29.965177 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-24 | value=46.056868 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-25 | value=3.490209 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-26 | value=224.489905 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-29 | value=108.924061 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-30 | value=-86.166578 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-06 | value=93.156591 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-07 | value=-21.399021 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-08 | value=-40.44246 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-09 | value=80.142402 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-10 | value=-63.03529 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+- 建议替换来源: 东方财富/同花顺/港交所最新 120 交易日北向日度净流入（单位亿元）
 
-## 12. 复盘一致性改进（2025-12-22 经验）
-- [x] 注入后清理 `metadata.missing_items`，避免“补齐但仍显示缺口”
-- [x] 报告附录输出 `is_estimated=True` 提醒（宏观/货币政策/债券）
-- [ ] 复盘生成自动化：从当日日志/数据抽取成功率、阻断原因与估计值清单
+## data/trend_history/min/series/fund_flow/southbound.json
+- 问题: 日期过旧 (<2025-07-27) 共120条
+  - 异常日期/值/来源:
+    - 2024-02-20 | value=34.714835 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-21 | value=10.822131 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-22 | value=47.768085 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-23 | value=64.449975 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-26 | value=17.580058 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-27 | value=13.291479 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-28 | value=14.003808 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-29 | value=13.67 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-01 | value=33.339637 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-04 | value=36.64 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-05 | value=59.29 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-06 | value=11.553291 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-07 | value=44.978904 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-08 | value=18.78085 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-11 | value=30.02 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-12 | value=1.948849 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-13 | value=114.190662 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-14 | value=26.015044 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-15 | value=41.662303 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-18 | value=29.31919 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-19 | value=69.23033 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-20 | value=63.96 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-21 | value=47.716776 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-22 | value=145.385763 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-25 | value=-63.437206 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-26 | value=45.262782 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-27 | value=65.633973 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-28 | value=38.017845 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-02 | value=36.959755 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-03 | value=51.239148 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-08 | value=47.493752 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-09 | value=27.334458 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-10 | value=23.247904 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-11 | value=71.498606 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-12 | value=61.449902 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-15 | value=70.547775 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-16 | value=98.78 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-17 | value=11.466715 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-18 | value=66.38 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-19 | value=74.3153 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-22 | value=29.005701 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-23 | value=23.395344 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-24 | value=19.946013 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-25 | value=18.80195 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-26 | value=11.736797 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-29 | value=27.530302 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-30 | value=32.493979 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-06 | value=50.860406 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-07 | value=21.420115 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-08 | value=17.903433 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-09 | value=-41.700439 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-10 | value=65.05 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-13 | value=88.070278 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-14 | value=-1.146172 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-16 | value=39.725204 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-17 | value=59.57 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-20 | value=24.9 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-21 | value=4.729805 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-22 | value=16.525166 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-23 | value=35.107401 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-24 | value=25.15511 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-27 | value=44.24906 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-28 | value=41.658068 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-29 | value=67.748706 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-30 | value=44.02 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-31 | value=99.06 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-03 | value=34.00034 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-04 | value=88.235067 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-05 | value=77.378441 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-06 | value=36.684482 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-07 | value=36.072677 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-11 | value=102.806108 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-12 | value=68.712399 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-13 | value=39.97 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-14 | value=58.078982 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-17 | value=37.798273 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-18 | value=58.613013 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-19 | value=23.682869 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-20 | value=75.3 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-21 | value=45.78361 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-24 | value=-21.18 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-25 | value=3.227508 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-26 | value=38.085495 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-27 | value=36.587687 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-28 | value=36.623046 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-02 | value=59.529024 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-03 | value=36.42631 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-04 | value=9.454207 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-05 | value=3.499751 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-08 | value=21.753304 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-09 | value=36.507105 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-10 | value=8.648033 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-11 | value=4.73725 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-12 | value=1.713044 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-15 | value=48.708165 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-16 | value=61.262558 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-17 | value=-3.162298 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-18 | value=23.960568 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-19 | value=61.235213 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-22 | value=36.916987 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-23 | value=0.935564 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-24 | value=-0.75833 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-25 | value=-46.604805 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-26 | value=87.734209 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-29 | value=7.454281 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-30 | value=-3.408359 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-31 | value=22.910934 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-01 | value=83.769092 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-02 | value=-18.958741 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-05 | value=13.875478 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-06 | value=59.866024 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-07 | value=116.729622 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-08 | value=-60.865743 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-09 | value=22.775509 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-12 | value=43.47 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-13 | value=19.177579 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-14 | value=-10.4 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-15 | value=66.347573 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-16 | value=47.254841 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-19 | value=-61.77 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+- 建议替换来源: 东方财富/同花顺/港交所最新 120 交易日南向日度净流入（单位亿元）
 
-## 13. 资产层面 50 字结论（DeepSeek）
-- [x] 明确输入摘要字段与优先级（非 TuShare：commodities/forex/bonds/fund_flow）
-- [x] 实现趋势推断与结构化摘要生成（缺字段可降级）
-- [x] 接入 DeepSeek 生成 <=50 字结论（超长截断）
-- [x] 失败兜底模板（超时/空输出/异常）
-- [x] 报告生成时写入“资产层面结论”段落
-- [x] observability 记录输入摘要、输出文本、耗时、失败原因
-- [x] 单测：长度限制/失败降级/缺字段不报错
+## data/trend_history/min/series/fund_flow/northbound_recent_5d.json
+- 问题: 日期过旧 (<2025-07-27) 共109条
+  - 异常日期/值/来源:
+    - 2023-11-20 | value=-21.59965099999681 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-21 | value=0.9160940000037954 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-22 | value=-70.72580099999686 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-23 | value=1.7580410000009579 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-24 | value=-31.61297800000102 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-27 | value=-42.00248600000123 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-28 | value=-15.080717000000732 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-29 | value=-30.495247000002564 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-30 | value=4.088177999998152 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-01 | value=16.075162000001 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-04 | value=-1.673309000001609 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-05 | value=-105.22453900000255 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-06 | value=-31.007011000001512 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-07 | value=-112.43856700000106 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-08 | value=-57.86615000000165 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-11 | value=-76.05054200000086 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-12 | value=-51.08309899999949 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-13 | value=-170.3987190000007 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-14 | value=-139.5027169999994 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-15 | value=-185.75791899999967 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-18 | value=-125.89538899999752 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-19 | value=-96.78292699999656 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-20 | value=-16.30659499999456 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-21 | value=-38.90609199999744 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-22 | value=-22.360439999996743 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-27 | value=7.149172000001272 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-28 | value=163.86028000000078 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-29 | value=173.62008699999933 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-02 | value=108.8980960000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-03 | value=150.89831799999956 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-04 | value=54.755278000000544 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-05 | value=-60.9115180000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-08 | value=-98.7149070000014 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-09 | value=-45.833480000001146 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-10 | value=-55.82740900000135 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-11 | value=25.841307999999117 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-12 | value=-24.393966999999975 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-15 | value=15.523796000001312 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-16 | value=-25.995046000000002 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-17 | value=-163.45786900000166 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-18 | value=-213.17418200000247 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-19 | value=-234.94251700000314 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-22 | value=-220.92104000000472 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-23 | value=-141.6899530000046 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-24 | value=-16.513033000002906 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-25 | value=53.83347699999649 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-26 | value=121.01991599999747 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-29 | value=104.62220299999899 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-30 | value=84.14609800000107 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-31 | value=126.54660599999988 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-01 | value=90.87453200000164 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-02 | value=99.37601700000232 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-05 | value=117.40992100000221 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-06 | value=226.0320520000023 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-07 | value=205.859336000005 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-08 | value=184.42612100000406 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-19 | value=97.10001900000498 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-20 | value=83.75872300000628 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-21 | value=93.66198100000474 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-22 | value=113.71881900000153 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-23 | value=106.9645210000017 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-26 | value=157.5629000000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-27 | value=281.27640899999824 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-28 | value=158.72437899999932 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-29 | value=287.86297900000136 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-01 | value=235.4549709999992 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-04 | value=177.97397299999648 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-05 | value=71.02724699999817 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-06 | value=43.03362799999741 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-07 | value=-144.40521600000284 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-08 | value=-31.070511000001716 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-11 | value=142.14871199999834 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-12 | value=169.0538579999993 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-13 | value=199.3170050000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-14 | value=284.9439979999988 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-15 | value=328.1992659999996 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-18 | value=253.8375930000002 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-19 | value=141.28674599999795 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-20 | value=181.30383699999584 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-21 | value=56.87913999999728 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-22 | value=-77.76323500000217 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-25 | value=-50.30277200000273 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-26 | value=67.05785899999682 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-27 | value=-61.11897000000317 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-28 | value=22.429285999998683 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-02 | value=37.63533599999937 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-03 | value=-40.82550699999774 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-08 | value=-118.52284499999587 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-09 | value=-35.4793789999967 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-10 | value=-99.96593899999789 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-11 | value=-63.571938000000955 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-12 | value=-114.6755510000039 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-15 | value=-3.1446110000033514 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-16 | value=-41.62233800000104 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-17 | value=-2.796553000000131 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-18 | value=-75.86069599999973 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-19 | value=-66.90705899999739 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-22 | value=-134.10477099999844 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-23 | value=-136.14249899999777 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-24 | value=-87.77032999999938 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-25 | value=-31.43134899999859 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-26 | value=257.9582169999994 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-29 | value=352.9958660000011 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-30 | value=296.79446499999904 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-06 | value=343.8941879999984 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-07 | value=319.0049579999977 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-08 | value=54.07259300000078 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-09 | value=25.29093400000056 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-10 | value=48.42222200000106 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+- 问题: 极端值/单位疑似错误
+  - 异常日期/值/来源:
+    - 2026-01-14 | value=420935.57 | source=MCP WebSearch实时获取
+    - 2026-01-19 | value=366572.5 | source=MCP WebSearch实时获取
+    - 2026-01-20 | value=-3237.7 | source=tavily+deepseek
+- 建议替换来源: 东方财富/同花顺/港交所北向近5日净流入（单位亿元）
 
-## 14. 2026-01-12 报告问题修复（trend_history 回读/前值补充/质量闸）
-- [x] Stage1 回读 trend_history：对 bonds/forex/commodities/stock_indices 缺失 change_120d(_bp) 的数据补算并回填（`scripts/stage1_data_collector.py`）
-- [x] Stage2.5 注入后全量补算：扩展 `inject_websearch_data_test.py`，对所有指标执行 trend_history 缺失回填（开关 `--backfill-trend`，默认开启）
-- [x] 宏观/货币政策前值规则：手动注入 JSON 增加 `previous_value` 或 `change_rate` 提示；缺前值时按规则估计并标注 `is_estimated=true`
-- [x] 货币政策事件序列补齐：新增/补齐 `data/trend_history/min/events/monetary_policy/*.json`
-- [x] 预报告质量闸：报告生成前校验关键字段，缺失则标红并输出“需补数原因”（`generate_simple_report*` 或 `tests/scripts/generate_simple_report_test.py`）
-- [x] 失败归因枚举统一：`trend_history_missing/no_previous_value/source_latest_only/manual_incomplete` 写入 `reports/gap_monitor_*.json` 与 `logs/observability_*.json`
-- [x] 回归用例：US10Y/CN10Y/CN10Y_CDB 有 121+ 交易日数据时报告不得出现 N/A；宏观/政策缺前值必须标注估计与原因
+## data/trend_history/min/series/fund_flow/northbound_total_120d.json
+- 问题: 日期过旧 (<2025-07-27) 共109条
+  - 异常日期/值/来源:
+    - 2023-11-20 | value=-1369.5262999000042 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-21 | value=-1345.8477819000036 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-22 | value=-1422.552398900003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-23 | value=-1292.211278900002 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-24 | value=-1309.3482269000015 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-27 | value=-1210.3927659 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-28 | value=-1196.4169019 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-29 | value=-1253.7117089000021 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-11-30 | value=-1130.5675830000037 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-01 | value=-1162.5247030000028 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-04 | value=-1262.2770500000042 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-05 | value=-1325.335458000005 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-06 | value=-1291.1433990000041 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-07 | value=-1312.5216290000026 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-08 | value=-1337.4370690000032 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-11 | value=-1355.6206690000035 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-12 | value=-1376.5637490000045 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-13 | value=-1470.147080000006 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-14 | value=-1413.5755640000061 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-15 | value=-1547.240276000004 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-18 | value=-1625.4259300000012 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-19 | value=-1632.0875850000011 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-20 | value=-1664.9284460000017 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-21 | value=-1646.4879900000014 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-22 | value=-1692.769887999999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-27 | value=-1610.0292279999994 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-28 | value=-1432.293196999999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2023-12-29 | value=-1361.8948530000016 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-02 | value=-1451.3411730000007 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-03 | value=-1461.3045100000018 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-04 | value=-1481.173060000001 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-05 | value=-1420.9051740000032 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-08 | value=-1450.930992000005 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-09 | value=-1405.571192000003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-10 | value=-1410.9778410000035 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-11 | value=-1403.5635840000032 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-12 | value=-1436.3812410000028 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-15 | value=-1575.775206000002 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-16 | value=-1627.5585060000012 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-17 | value=-1670.4732550000044 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-18 | value=-1628.5693180000053 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-19 | value=-1684.1219220000057 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-22 | value=-1731.8986820000064 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-23 | value=-1642.5733800000053 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-24 | value=-1837.7969280000034 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-25 | value=-1780.0128970000042 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-26 | value=-1802.3834040000038 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-29 | value=-1972.3370010000035 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-30 | value=-2048.380984000003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-01-31 | value=-2059.9128070000042 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-01 | value=-1982.457518000003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-02 | value=-1964.2892490000013 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-05 | value=-1979.5995040000016 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-06 | value=-1828.5772969999998 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-07 | value=-1743.5934669999988 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-08 | value=-1724.4445969999979 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-19 | value=-1762.1825059999974 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-20 | value=-1640.038741999997 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-21 | value=-1457.4575399999958 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-22 | value=-1322.828212999997 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-23 | value=-1277.3607239999983 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-26 | value=-1275.3011279999992 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-27 | value=-1067.600010000002 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-28 | value=-990.0797120000025 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-02-29 | value=-760.2654790000015 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-01 | value=-708.9845780000032 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-04 | value=-811.9258180000033 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-05 | value=-772.3773520000032 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-06 | value=-704.5016220000034 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-07 | value=-719.1023170000044 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-08 | value=-634.4697630000046 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-11 | value=-488.8935740000052 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-12 | value=-515.295737000004 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-13 | value=-453.5379580000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-14 | value=-389.7239180000033 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-15 | value=-215.74326300000394 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-18 | value=-187.49256800000512 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-19 | value=-280.0417480000069 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-20 | value=-204.56289900000775 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-21 | value=-198.8461340000067 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-22 | value=-166.04868700000588 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-25 | value=-85.7364840000082 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-26 | value=-66.77763400000913 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-27 | value=-115.04210300001068 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-28 | value=-56.298889000008785 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-02 | value=-29.17693500000678 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-03 | value=-126.85549000000537 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-08 | value=-76.90875400000368 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-09 | value=-3.399529000005714 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-10 | value=-62.57274100000359 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-11 | value=7.59376799999518 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-12 | value=8.342722999994294 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-15 | value=144.1395349999948 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-16 | value=120.11159799999587 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-17 | value=51.638765999996394 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-18 | value=63.175492999995186 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-19 | value=63.045258999994985 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-22 | value=107.50682799999413 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-23 | value=89.14801599999555 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-24 | value=252.2476039999965 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-25 | value=272.20011399999566 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-26 | value=547.1457369999953 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-29 | value=669.0218559999958 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-30 | value=570.5876999999964 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-06 | value=617.0640479999965 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-07 | value=619.6411159999952 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-08 | value=626.7325369999962 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-09 | value=727.697366999997 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-10 | value=637.8446069999954 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+- 问题: 极端值/单位疑似错误
+  - 异常日期/值/来源:
+    - 2026-01-21 | value=343768.12 | source=MCP WebSearch实时获取
+    - 2026-01-22 | value=343768.12 | source=MCP WebSearch实时获取
+- 建议替换来源: 东方财富/同花顺/港交所北向近120日累计（单位亿元）
 
-## 15. 报告缺口补数流程落地（文档/模板/回归）
-- [x] 需求文档补充“补数流程（报告生成前置）”与示例
-- [x] 提供 WebSearch 手工补数 JSON 模板（含 bonds/macro/monetary 示例）
-- [x] 可选脚本：解析 `gap_monitor_${DATE}.json` 输出补数清单（待补字段/推荐来源）
-- [x] 回归验证：补数 → 注入 → 报告，`data_quality_issues=0` 且报告无 N/A
+## data/trend_history/min/series/fund_flow/southbound_recent_5d.json
+- 问题: 日期过旧 (<2025-07-27) 共109条
+  - 异常日期/值/来源:
+    - 2024-03-06 | value=154.49292799999967 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-07 | value=185.801832000001 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-08 | value=171.24304499999926 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-11 | value=164.62304500000027 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-12 | value=107.28189399999974 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-13 | value=209.91926500000045 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-14 | value=190.9554050000006 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-15 | value=213.8368580000024 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-18 | value=213.1360480000003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-19 | value=280.41752899999847 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-20 | value=230.1868669999967 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-21 | value=251.88859899999807 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-22 | value=355.6120589999955 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-25 | value=262.85566299999846 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-26 | value=238.88811500000156 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-27 | value=240.5620880000024 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-28 | value=230.86315699999977 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-02 | value=122.43714900000123 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-03 | value=237.1135030000005 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-08 | value=239.34447299999738 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-09 | value=201.0449579999986 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-10 | value=186.27501699999993 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-11 | value=220.8138680000011 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-12 | value=231.02462200000082 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-15 | value=254.07864500000142 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-16 | value=325.5241869999991 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-17 | value=313.7429979999979 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-18 | value=308.6243919999979 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-19 | value=321.489789999996 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-22 | value=279.9477159999951 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-23 | value=204.56305999999677 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-24 | value=213.04235799999879 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-25 | value=165.4643079999987 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-26 | value=102.88580500000171 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-29 | value=101.4104060000027 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-30 | value=110.50904100000116 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-06 | value=141.42343400000027 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-07 | value=144.04159900000013 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-08 | value=150.20823499999824 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-09 | value=80.97749399999884 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-10 | value=113.53351499999917 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-13 | value=150.74338699999862 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-14 | value=128.17709999999715 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-16 | value=149.99887099999614 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-17 | value=251.26930999999604 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-20 | value=211.11930999999822 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-21 | value=127.77883699999802 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-22 | value=145.45017499999813 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-23 | value=140.83237200000076 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-24 | value=106.41748200000075 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-27 | value=125.76654199999757 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-28 | value=162.69480499999918 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-29 | value=213.91834499999823 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-30 | value=222.83094399999754 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-31 | value=296.73583399999916 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-03 | value=286.48711399999956 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-04 | value=333.06411300000036 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-05 | value=342.6938480000026 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-06 | value=335.35833000000275 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-07 | value=272.37100700000155 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-11 | value=341.17677500000354 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-12 | value=321.6541070000021 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-13 | value=284.24566600000253 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-14 | value=305.64016600000105 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-17 | value=307.36576200000127 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-18 | value=263.1726669999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-19 | value=218.14313699999911 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-20 | value=253.47313699999722 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-21 | value=241.17776499999673 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-24 | value=182.1994919999961 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-25 | value=126.81398699999772 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-26 | value=141.21661299999687 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-27 | value=102.50429999999687 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-28 | value=93.3437359999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-02 | value=174.05275999999867 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-03 | value=207.25156199999765 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-04 | value=178.62027399999715 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-05 | value=145.53233799999725 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-08 | value=130.6625959999983 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-09 | value=107.64067699999941 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-10 | value=79.8624000000018 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-11 | value=75.14544300000125 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-12 | value=73.35873600000195 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-15 | value=100.3135970000003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-16 | value=125.06904999999824 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-17 | value=113.25871899999765 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-18 | value=132.48203699999794 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-19 | value=192.0042059999978 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-22 | value=180.2130279999983 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-23 | value=119.8860339999992 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-24 | value=122.29000199999791 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-25 | value=51.72462900000028 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-26 | value=78.22362500000236 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-29 | value=48.760919000000285 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-30 | value=44.416995999999926 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-31 | value=68.08626000000004 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-01 | value=198.46015700000135 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-02 | value=91.76720699999714 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-05 | value=98.18840400000045 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-06 | value=161.46278700000403 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-07 | value=255.2814750000034 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-08 | value=110.64663999999902 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-09 | value=152.38089000000036 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-12 | value=181.97541199999978 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-13 | value=141.286967 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-14 | value=14.157344999999623 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-15 | value=141.37066100000084 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-16 | value=165.84999300000345 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-19 | value=60.60999300000549 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+- 问题: 极端值/单位疑似错误
+  - 异常日期/值/来源:
+    - 2026-01-19 | value=51453.74 | source=MCP WebSearch实时获取
+    - 2026-01-14 | value=51439.31 | source=MCP WebSearch实时获取
+- 建议替换来源: 东方财富/同花顺/港交所南向近5日净流入（单位亿元）
 
-## 16. Stage2 Tavily 命中率提升（2026-01-07）
-- [x] 复盘日志：统计 `score<阈值` 却仍进入抽取的指标清单与比例（基于 `logs/observability_*.json`）
-- [x] `search_profiles` 调整：报价类补充双语 query/ticker，`topic` 从 news 放宽，按指标细化 `days/max_age_days`
-- [x] 白名单重排：区分“行情页优先 + 新闻兜底”，避免只命中文章页
-- [x] 低相关保护：全部低分时直接 `manual_required` 并写原因（新增 `low_score_drop` 统计）
-- [x] 422 降级策略改为“按指标/短窗口”而非全局关闭 extract
-- [x] issuer 校验放宽：有数值时只提示不强制失败；补充 USDCNH/MLF/逆回购别名
-- [x] observability 补充：记录 `score_min/score_p50/score_p95` 与过滤原因
-- [x] 多 query 兜底：同一指标支持 2–3 条 query，行情页优先 → 官方公告 → 新闻兜底
-- [x] 支持 `exclude_domains`：报价类屏蔽泛新闻/软广告站点（search_profiles + Tavily client）
-- [x] Query 结构标准化模板：中文名 + ticker + price/quote/level + 单位
+## data/trend_history/min/series/fund_flow/southbound_total_120d.json
+- 问题: 日期过旧 (<2025-07-27) 共109条
+  - 异常日期/值/来源:
+    - 2024-03-06 | value=1755.6394290000098 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-07 | value=1771.5554920000104 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-08 | value=1744.4283350000078 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-11 | value=1746.1384740000067 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-12 | value=1705.0990020000063 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-13 | value=1699.2996480000074 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-14 | value=1683.6348360000084 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-15 | value=1654.8268240000107 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-18 | value=1684.146014000009 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-19 | value=1855.940906000007 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-20 | value=1852.6209060000074 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-21 | value=1918.008438000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-22 | value=2037.2820400000055 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-25 | value=1961.909992000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-26 | value=1919.842774000008 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-27 | value=1950.6124520000085 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-03-28 | value=1956.6360750000058 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-02 | value=1961.1519990000052 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-03 | value=2054.667078000006 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-08 | value=2041.827538000005 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-09 | value=2067.5745870000064 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-10 | value=2054.0023690000053 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-11 | value=2084.2067820000048 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-12 | value=2125.2266840000048 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-15 | value=2133.5134000000035 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-16 | value=2218.960517000003 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-17 | value=2285.260341000001 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-18 | value=2311.4700340000018 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-19 | value=2345.215243999999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-22 | value=2368.8874509999987 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-23 | value=2435.5469429999976 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-24 | value=2437.569637999997 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-25 | value=2437.691662999998 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-26 | value=2426.177402999998 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-29 | value=2454.2197259999957 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-04-30 | value=2464.439047999993 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-06 | value=2491.1873759999944 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-07 | value=2490.136447999994 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-08 | value=2488.682820999995 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-09 | value=2424.6373709999934 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-10 | value=2480.288420999994 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-13 | value=2556.7760779999917 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-14 | value=2547.2800619999907 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-16 | value=2491.333956999988 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-17 | value=2564.485857999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-20 | value=2538.98048799999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-21 | value=2500.3983549999903 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-22 | value=2536.806102999988 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-23 | value=2558.28213399999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-24 | value=2678.8992339999895 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-27 | value=2679.755127999986 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-28 | value=2684.014938999986 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-29 | value=2812.844051999986 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-30 | value=2881.2260389999865 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-05-31 | value=2928.6560789999894 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-03 | value=3020.166092999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-04 | value=3021.13606099999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-05 | value=3095.0371829999895 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-06 | value=3162.251664999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-07 | value=3206.503241999988 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-11 | value=3292.09896499999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-12 | value=3307.921138999991 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-13 | value=3354.8409799999936 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-14 | value=3367.302861999993 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-17 | value=3348.992109999992 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-18 | value=3423.956074999991 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-19 | value=3413.9513769999903 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-20 | value=3433.31080499999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-21 | value=3506.0711089999895 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-24 | value=3476.341578999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-25 | value=3576.5513599999904 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-26 | value=3654.26772299999 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-27 | value=3573.3564669999905 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-06-28 | value=3597.2443409999905 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-02 | value=3767.162788999991 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-03 | value=3779.214085999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-04 | value=3831.440045999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-05 | value=3822.5127749999883 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-08 | value=3863.9167559999914 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-09 | value=3881.6238609999928 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-10 | value=3851.7356299999956 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-11 | value=3788.307600999993 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-12 | value=3768.514725999994 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-15 | value=3801.1563999999926 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-16 | value=3876.7189579999904 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-17 | value=3913.9166599999917 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-18 | value=3912.183110999991 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-19 | value=4027.6595289999896 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-22 | value=4049.9042489999883 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-23 | value=4008.539859999986 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-24 | value=3978.332923999984 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-25 | value=3872.3920379999836 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-26 | value=3954.279990999985 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-29 | value=3951.4245129999836 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-30 | value=3941.4471839999824 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-07-31 | value=4017.556363999982 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-01 | value=4081.5170459999827 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-02 | value=4044.3823899999807 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-05 | value=4005.0276299999823 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-06 | value=4090.857092999984 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-07 | value=4216.176714999983 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-08 | value=4161.620971999982 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-09 | value=4197.810061999982 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-12 | value=4281.152471999983 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-13 | value=4261.307883999987 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-14 | value=4319.807883999987 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-15 | value=4362.605972999987 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-16 | value=4363.950309999989 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+    - 2024-08-19 | value=4259.522851999991 | source=MCP WebSearch实时获取|同花顺数据中心日度净流入
+- 建议替换来源: 东方财富/同花顺/港交所南向近120日累计（单位亿元）
 
-## 17. 120日变化派生（方案1：Stage2.5 注入后派生）
-- [x] 在 `inject_websearch_data_test.py` 增加“注入后派生 120 日变化”的步骤（写入 `market_data_complete.json`）。
-- [x] 债券类：从 `trend_history` 的 121 交易日序列首尾计算 `change_120d_bp`（CN10Y/CN10Y_CDB 优先验证）。
-- [x] 政策类：事件序列回看 120 日内前值补 `change_from_120d`；无前值则标注 `no_previous_value` 并写明“无前值可比”。
-- [x] `gap_monitor`/`observability` 记录派生失败原因（如 `trend_history_missing/no_previous_value`）。
-- [x] 参考 `reference_date` 回看窗口，剔除同日记录，避免当日写入污染基准。
-- [x] 派生失败不再写 0，占位改为 `None` 并写入 `reason=...`。
-- [x] 回归验证：注入 → Stage3 → 报告，CN10Y/CN10Y_CDB/RRR 的 120 日变化不再出现 N/A。
-  - 2026-01-15：已通过（报告中 CN10Y/CN10Y_CDB/RRR 120日变化无 N/A/无(估)；逆回购 120日变化已补齐无(估)）。
-- [x] 需求文档补充国开债（CN10Y_CDB）计算页（数据源/窗口边界/公式/结果/估计标记）。
+## data/trend_history/min/series/macro_indicators/bdi.json
+- 问题: 疑似使用 BDRY ETF 代理(尺度异常)
+  - 异常日期/值/来源:
+    - 2025-07-29 | value=6.940000057220459 | source=Yahoo Finance chart API (BDRY ETF proxy for BDI)
+    - 2025-07-30 | value=7.019999980926514 | source=Yahoo Finance chart API (BDRY ETF proxy for BDI)
+    - 2025-07-25 | value=7.150000095367432 | source=Yahoo Finance chart API (BDRY ETF proxy for BDI)
+    - 2025-07-28 | value=7.245999813079834 | source=Yahoo Finance chart API (BDRY ETF proxy for BDI)
+    - 2025-08-04 | value=7.309999942779541 | source=Yahoo Finance chart API (BDRY ETF proxy for BDI)
+- 问题: 估计值占比高 (119/121)
+  - 异常日期/值/来源:
+    - 主要估计来源: [('Yahoo Finance chart API (BDRY ETF proxy for BDI)', 114), ('tavily+deepseek', 2), ('MCP WebSearch实时获取(Stage2 DeepSeek extraction)', 2)]
+- 建议替换来源: Baltic Exchange 官方 BDI 指数（或权威终端）

@@ -95,6 +95,13 @@ class TestFundFlowPipeline(unittest.TestCase):
 
         print("[OK] fund_flow_configs包含完整的search_query字段")
 
+    def test_margin_delta_guard_filters_outlier(self):
+        collector = MarketDataCollector(end_date=self.test_date)
+        value, warn = collector._sanitize_margin_delta(-13756.54, latest_balance=18000.0, window=5)
+        self.assertIsNone(value)
+        self.assertIsNotNone(warn)
+        self.assertIn("已置空待复核", warn)
+
     def test_manual_updater_script_exists(self):
         """测试手动更新工具脚本存在"""
         updater_path = PROJECT_ROOT / "scripts" / "utility" / "manual_fund_flow_updater.py"

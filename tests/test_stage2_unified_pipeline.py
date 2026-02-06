@@ -43,7 +43,15 @@ def test_unified_pipeline_write_back(tmp_path: Path):
     tasks = planner.build_tasks(payload)
 
     completed, failures, web_results = asyncio.run(
-        s._execute_tasks(tasks, payload, DummyClient(), DummyExtractor(), tmp_path / "task_log.jsonl", cache_ttl=60)
+        s._execute_tasks(
+            tasks,
+            payload,
+            DummyClient(),
+            None,
+            DummyExtractor(),
+            tmp_path / "task_log.jsonl",
+            cache_ttl=60,
+        )
     )
     flagged = s._flag_fund_flow_anomalies(payload)
     s._compute_derived_metrics(payload)
