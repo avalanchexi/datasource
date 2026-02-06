@@ -12,7 +12,7 @@ import argparse
 import os
 from collections import defaultdict
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 import shutil
 import pandas as pd
@@ -633,7 +633,7 @@ class MarketDataCollector:
         """收集汇率数据"""
         print("[3/5] 收集汇率数据...")
 
-        forex_list = []
+        forex_list: List[ForexData] = []
         forex_configs = [
             {'symbol': 'USDCNY', 'pair': 'USDCNY', 'name': 'USD/CNY在岸'},
             {'symbol': 'USDCNH', 'pair': 'USDCNH', 'name': 'USD/CNH离岸'},
@@ -647,6 +647,18 @@ class MarketDataCollector:
                 forex_list.append(fx_entry)
                 print(f"  [OK] {config['name']} 通过 TuShare fx_daily 获取")
                 continue
+            # Stage1 即使无实时值，也创建占位条目，避免 Stage2 无数组可写
+            forex_list.append(
+                ForexData(
+                    pair=config["pair"],
+                    name=config["name"],
+                    current_rate=0.0,
+                    daily_change=0.0,
+                    change_120d=0.0,
+                    trend="待获取",
+                    source="MCP WebSearch待获取",
+                )
+            )
             self._record_missing(
                 'forex',
                 config['symbol'],
@@ -962,7 +974,7 @@ class MarketDataCollector:
                 previous_value=None,
                 change_rate=None,
                 unit=indicator['unit'],
-                date=self.end_date,
+                date="",
                 source=placeholder_source,
                 is_estimated=True
             )
@@ -1050,7 +1062,7 @@ class MarketDataCollector:
                 current_value=None,
                 change_from_120d=None,
                 unit=policy['unit'],
-                date=self.end_date,
+                date="",
                 source=placeholder_source,
                 is_estimated=True
             )
@@ -1545,11 +1557,14 @@ class MarketDataCollector:
                 return None
             latest = df.iloc[-1]
             previous = df.iloc[-2] if len(df) >= 2 else None
+            change_rate = None
+            if previous is not None:
+                change_rate = float(latest[value_col]) - float(previous[value_col])
             return {
                 "indicator_name": "GDP",
                 "current_value": float(latest[value_col]),
                 "previous_value": float(previous[value_col]) if previous is not None else None,
-                "change_rate": float(latest[value_col]),
+                "change_rate": change_rate,
                 "unit": "%",
                 "date": latest["quarter"],
                 "source": "TuShare cn_gdp",
@@ -1654,23 +1669,62 @@ class MarketDataCollector:
             frame = frame.dropna(subset=["trade_date", value_col])
             if frame.empty:
                 return None
-            series = frame.groupby("trade_date")[value_col].sum().sort_index() / 1e8
+            raw_series = frame.groupby("trade_date")[value_col].sum().sort_index() / 1e8
+            series = raw_series
+            note_parts: List[str] = []
+
+            # 若存在交易所字段，优先使用“沪深两市均有记录”的交易日，避免单边缺口导致异常跳变
+            exchange_col = None
+            for candidate in ("exchange_id", "exchange", "market"):
+                if candidate in frame.columns:
+                    exchange_col = candidate
+                    break
+            if exchange_col:
+                coverage = (
+                    frame.assign(exchange_norm=frame[exchange_col].astype(str).str.upper().str.strip())
+                    .groupby("trade_date")["exchange_norm"]
+                    .nunique()
+                )
+                complete_dates = coverage[coverage >= 2].index
+                if len(complete_dates) >= 2:
+                    series = (
+                        frame[frame["trade_date"].isin(complete_dates)]
+                        .groupby("trade_date")[value_col]
+                        .sum()
+                        .sort_index()
+                        / 1e8
+                    )
+                    dropped = len(raw_series) - len(series)
+                    if dropped > 0:
+                        note_parts.append(f"过滤{dropped}个单交易所缺口日")
+                else:
+                    note_parts.append("交易所覆盖不足，使用原始汇总序列")
             if series.empty:
                 return None
 
-            recent_delta = self._calc_flow_delta(series, window=5)
-            total_delta = self._calc_flow_delta(series, window=120)
+            latest_value = float(series.iloc[-1])
+            recent_delta_raw = self._calc_flow_delta(series, window=5)
+            total_delta_raw = self._calc_flow_delta(series, window=120)
+            recent_delta, recent_warn = self._sanitize_margin_delta(recent_delta_raw, latest_value, window=5)
+            total_delta, total_warn = self._sanitize_margin_delta(total_delta_raw, latest_value, window=120)
+
+            if recent_warn:
+                note_parts.append(recent_warn)
+            if total_warn:
+                note_parts.append(total_warn)
             if recent_delta is None and total_delta is None:
                 return None
 
-            latest_value = float(series.iloc[-1])
+            note = f"依据融资融券余额推算；最新余额≈{latest_value:.1f}亿元"
+            if note_parts:
+                note = note + "；" + "；".join(note_parts)
             return FundFlowData(
                 type="margin",
                 recent_5d=recent_delta,
                 total_120d=total_delta,
                 trend=self._infer_trend(recent_delta),
                 source="TuShare margin(SSE+SZSE)",
-                note=f"依据融资融券余额推算；最新余额≈{latest_value:.1f}亿元"
+                note=note
             )
         except Exception:
             return None
@@ -1720,7 +1774,7 @@ class MarketDataCollector:
         """计算指定窗口的余额变化（亿元）"""
         if series.empty:
             return None
-        if len(series) <= 1:
+        if len(series) <= max(1, window):
             return None
         base_index = len(series) - window - 1
         if base_index < 0:
@@ -1729,6 +1783,20 @@ class MarketDataCollector:
         base_value = float(series.iloc[base_index])
         delta = latest - base_value
         return round(delta, 2)
+
+    def _sanitize_margin_delta(
+        self, delta: Optional[float], latest_balance: float, *, window: int
+    ) -> Tuple[Optional[float], Optional[str]]:
+        """对融资融券变化值做异常跳变保护，避免单日缺口导致离谱数值写入。"""
+        if delta is None:
+            return None, None
+        if window <= 5:
+            limit = max(5000.0, latest_balance * 0.25)
+        else:
+            limit = max(15000.0, latest_balance * 0.8)
+        if abs(delta) > limit:
+            return None, f"{window}日变化异常({delta:.2f}亿元)，已置空待复核"
+        return round(delta, 2), None
 
     def _infer_trend(self, value: Optional[float]) -> str:
         if value is None:

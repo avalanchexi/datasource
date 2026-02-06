@@ -70,3 +70,73 @@ def test_sample_c_legacy_ok(tmp_path: Path):
     generate_report(m, p, out)
     assert out.exists()
     assert "第Ⅴ阶段" in out.read_text(encoding="utf-8")
+
+
+def test_report_hides_low_confidence_changes(tmp_path: Path):
+    market = _base_market()
+    market["bonds"] = [
+        {
+            "symbol": "CN10Y",
+            "name": "中国10年期国债",
+            "current_yield": 1.83,
+            "change_5d_bp": 0.0,
+            "change_120d_bp": -12.3,
+            "trend": "平稳",
+            "source": "MCP WebSearch实时获取",
+            "trend_history_confidence": "low",
+        }
+    ]
+    pring = {
+        "final_stage": "第Ⅲ阶段",
+        "confidence": 0.61,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+    assert "N/A（低置信度）" in text
+
+
+def test_report_monetary_no_previous_value_hides_zero_change(tmp_path: Path):
+    market = _base_market()
+    market["monetary_policy"] = {
+        "mlf": {
+            "policy_name": "MLF利率",
+            "current_value": 2.0,
+            "change_from_120d": 0.0,
+            "unit": "%",
+            "date": "2026-01",
+            "source": "MCP WebSearch实时获取(TradingEconomics)",
+            "note": "reason=no_previous_value",
+            "is_estimated": False,
+        }
+    }
+    pring = {
+        "final_stage": "第Ⅲ阶段",
+        "confidence": 0.61,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+    assert "| MLF利率 | 2.0% | N/A（待 WebSearch） | % | 2026-01 |" in text

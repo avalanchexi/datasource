@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - 环境缺省时延迟导入
     OpenAI = None  # type: ignore
 
 NA_TEXT = "N/A（待 WebSearch）"
+LOW_CONF_TEXT = "N/A（低置信度）"
 DEFAULT_ASSET_CONCLUSION = "资金流转正，汇率偏稳，债券小幅下行，商品分化。"
 MAX_CONCLUSION_CHARS = 50
 QUALITY_REASONS = {
@@ -43,6 +44,9 @@ NON_MACRO_KEYS = {
     "US10Y", "CN10Y", "CN10Y_CDB",
     "000016",
 }
+DAILY_MACRO_KEYS = {"bdi"}
+DAILY_POLICY_KEYS = {"dr007"}
+EVENTS_DIR = Path("data/trend_history/min/events")
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -128,6 +132,20 @@ def _fmt_bp(value: Optional[float], digits: int = 1) -> Optional[str]:
     if value is None:
         return None
     return f"{value:+.{digits}f}bp"
+
+
+def _is_low_trend_confidence(entry: dict) -> bool:
+    level = str(entry.get("trend_history_confidence") or "").strip().lower()
+    return level == "low"
+
+
+def _fmt_change_cell(value: Any, *, digits: int, suffix: str, low_confidence: bool) -> str:
+    num = _to_float(value)
+    if num is None:
+        return "N/A"
+    if low_confidence:
+        return LOW_CONF_TEXT
+    return f"{num:+.{digits}f}{suffix}"
 
 
 def _pick_top(items: list, score_fn, limit: int = 3) -> list:
@@ -367,6 +385,98 @@ def _has_trend_history(category: str, symbol: str) -> bool:
     return len(values) >= 2
 
 
+def _parse_event_date(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    text = str(value)[:10]
+    for fmt in ("%Y-%m-%d", "%Y%m%d", "%Y-%m", "%Y%m"):
+        try:
+            dt = datetime.strptime(text, fmt)
+        except Exception:
+            continue
+        if fmt in ("%Y-%m", "%Y%m"):
+            return datetime(dt.year, dt.month, 1)
+        return dt
+    return None
+
+
+def _load_latest_event_marker(indicator_key: str) -> Optional[str]:
+    path = EVENTS_DIR / f"{indicator_key}.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    events = payload.get("events") if isinstance(payload.get("events"), list) else []
+    latest_event = None
+    latest_dt = None
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        dt = _parse_event_date(event.get("release_date") or event.get("date"))
+        if dt is None:
+            continue
+        if latest_dt is None or dt > latest_dt:
+            latest_dt = dt
+            latest_event = event
+    if not latest_event:
+        return None
+    return (
+        latest_event.get("report_period")
+        or latest_event.get("release_date")
+        or latest_event.get("date")
+    )
+
+
+def _is_placeholder_entry(entry: dict) -> bool:
+    if entry.get("current_value") in (None, "N/A"):
+        return True
+    if entry.get("is_estimated"):
+        return True
+    source = str(entry.get("source", ""))
+    return "待MCP" in source or "待 WebSearch" in source
+
+
+def _pick_release_date(
+    entry: dict,
+    indicator_key: str,
+    report_date: str,
+    *,
+    is_non_daily: bool,
+) -> Optional[str]:
+    if _is_placeholder_entry(entry):
+        return None
+    candidate = entry.get("as_of_date") or entry.get("report_period")
+    if candidate:
+        return str(candidate)
+    candidate = entry.get("date")
+    if candidate:
+        cand_text = str(candidate)[:10]
+        if is_non_daily and cand_text == str(report_date)[:10]:
+            latest = _load_latest_event_marker(indicator_key)
+            if latest and str(latest)[:10] != str(report_date)[:10]:
+                return str(latest)
+            return None
+        return str(candidate)
+    latest = _load_latest_event_marker(indicator_key)
+    if latest and is_non_daily and str(latest)[:10] == str(report_date)[:10]:
+        return None
+    return latest
+
+
+def _extract_date_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    match = re.search(r"(20\d{2}-\d{2}-\d{2})", text)
+    if match:
+        return match.group(1)
+    match = re.search(r"(20\d{2}-\d{2})", text)
+    if match:
+        return match.group(1)
+    return None
+
+
 def _collect_quality_issues(market_data: dict) -> list[dict]:
     issues: list[dict] = []
 
@@ -600,6 +710,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     for comm in commodities:
         current_price = comm.get('current_price')
         is_placeholder = current_price in (None, 0.0)
+        low_confidence = _is_low_trend_confidence(comm)
 
         if is_placeholder:
             latest_price = NA_TEXT
@@ -610,13 +721,17 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             else:
                 latest_price = f"{current_price:.2f}"
 
-        daily_change = (
-            f"{comm['daily_change']:+.2f}%"
-            if comm.get('daily_change') is not None else "N/A"
+        daily_change = _fmt_change_cell(
+            comm.get("daily_change"),
+            digits=2,
+            suffix="%",
+            low_confidence=low_confidence,
         )
-        ytd_change = (
-            f"{comm['ytd_change']:+.2f}%"
-            if comm.get('ytd_change') is not None else "N/A"
+        ytd_change = _fmt_change_cell(
+            comm.get("ytd_change"),
+            digits=2,
+            suffix="%",
+            low_confidence=low_confidence,
         )
         trend = comm.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
@@ -628,12 +743,13 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
 ## 四、债券市场
 
-| 债券品种 | 当前收益率 | 近5日变化 | 近120日变化 | 趋势方向 |
-|----------|-----------|----------|-------------|----------|
+| 债券品种 | 当前收益率 | 近5日变化 | 近120日变化 | 趋势方向 | 日期 | 来源 |
+|----------|-----------|----------|-------------|----------|------|------|
 """
     for bond in bonds:
         current_yield = bond.get('current_yield')
         is_placeholder = current_yield in (None, 0.0)
+        low_confidence = _is_low_trend_confidence(bond)
 
         if is_placeholder:
             yield_str = NA_TEXT
@@ -643,11 +759,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
         bp5 = bond.get('change_5d_bp')
         bp120 = bond.get('change_120d_bp')
-        bp5_str = f"{bp5:+.1f}bp" if bp5 is not None else "N/A"
-        bp120_str = f"{bp120:+.1f}bp" if bp120 is not None else "N/A"
+        bp5_str = _fmt_change_cell(bp5, digits=1, suffix="bp", low_confidence=low_confidence)
+        bp120_str = _fmt_change_cell(bp120, digits=1, suffix="bp", low_confidence=low_confidence)
         trend = bond.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
-        report += f"| {bond['name']} | {yield_str} | {bp5_str} | {bp120_str} | {trend} |\n"
+        date_val = bond.get('as_of_date') or bond.get('date') or _extract_date_from_text(str(bond.get('note') or ''))
+        date_str = date_val or (NA_TEXT if is_placeholder else "N/A")
+        source_str = bond.get('source') or "-"
+
+        report += f"| {bond['name']} | {yield_str} | {bp5_str} | {bp120_str} | {trend} | {date_str} | {source_str} |\n"
 
     report += """
 
@@ -659,7 +779,23 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 |--------|---------|--------|-------------|----------|
 """
     for forex in forex_list:
-        report += f"| {forex['name']} | {forex['current_rate']:.4f} | {forex['daily_change']:+.2f}% | {forex['change_120d']:+.2f}% | {forex['trend']} |\n"
+        current_rate = _to_float(forex.get("current_rate"))
+        current_rate_text = f"{current_rate:.4f}" if current_rate is not None else NA_TEXT
+        low_confidence = _is_low_trend_confidence(forex)
+        daily_change = _fmt_change_cell(
+            forex.get("daily_change"),
+            digits=2,
+            suffix="%",
+            low_confidence=low_confidence,
+        )
+        change_120d = _fmt_change_cell(
+            forex.get("change_120d"),
+            digits=2,
+            suffix="%",
+            low_confidence=low_confidence,
+        )
+        trend = forex.get("trend") or ("待 WebSearch" if current_rate is None else "未知")
+        report += f"| {forex.get('name') or forex.get('pair') or '外汇'} | {current_rate_text} | {daily_change} | {change_120d} | {trend} |\n"
 
     report += """
 
@@ -679,7 +815,24 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         prev = indicator.get('previous_value', 'N/A')
         change = indicator.get('change_rate', 'N/A')
         unit = indicator.get('unit', '')
-        date = indicator.get('date', '')
+        is_non_daily = key not in DAILY_MACRO_KEYS
+        date_val = _pick_release_date(indicator, key, report_date, is_non_daily=is_non_daily)
+        date = date_val or NA_TEXT
+
+        name = indicator.get('indicator_name') or key
+        if key == "industrial":
+            value_type = indicator.get('value_type')
+            yoy_ytd = indicator.get('yoy_ytd')
+            if value_type == "yoy_ytd":
+                name = f"{name}(累计同比)"
+            else:
+                if yoy_ytd is not None:
+                    try:
+                        name = f"{name}(当月同比/累计同比{float(yoy_ytd):.1f}%)"
+                    except Exception:
+                        name = f"{name}(当月同比/累计同比)"
+                else:
+                    name = f"{name}(当月同比)"
 
         is_placeholder = indicator.get('is_estimated') or '待MCP' in indicator.get('source', '')
         def _fmt_val(val, suffix="", allow_est=False):
@@ -696,9 +849,9 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             suffix = 'pp' if unit == '%' else unit
             change_str = _fmt_val(f"{float(change):+.1f}", suffix, allow_est=True)
         else:
-            change_str = _fmt_val("0", "pp" if unit == '%' else unit, allow_est=True)
+            change_str = NA_TEXT
 
-        report += f"| {indicator['indicator_name']} | {curr_str} | {prev_str} | {change_str} | {unit} | {date} |\n"
+        report += f"| {name} | {curr_str} | {prev_str} | {change_str} | {unit} | {date} |\n"
 
     report += """
 
@@ -710,11 +863,19 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 |----------|--------|-----------|------|----------|
 """
 
-    for _, policy in market_data['monetary_policy'].items():
+    for key, policy in market_data['monetary_policy'].items():
         curr = policy.get('current_value', 'N/A')
         change = policy.get('change_from_120d', 'N/A')
         unit = policy.get('unit', '')
-        date = policy.get('date', '')
+        is_non_daily = key not in DAILY_POLICY_KEYS
+        date_val = _pick_release_date(policy, key, report_date, is_non_daily=is_non_daily)
+        date = date_val or NA_TEXT
+
+        name = policy.get('policy_name') or key
+        if name and policy.get('rrr_type') and name in ("存款准备金率", "存准率", "Reserve Requirement Ratio"):
+            rrr_type = policy.get('rrr_type')
+            label = "加权平均" if rrr_type == "weighted" else "法定平均" if rrr_type == "statutory" else rrr_type
+            name = f"{name}({label})"
 
         is_placeholder = policy.get('is_estimated') or '待MCP' in policy.get('source', '')
         def _fmt_val(val, suffix="", allow_est=False):
@@ -725,12 +886,16 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             return f"{val}{suffix}" + ("(估)" if is_placeholder else "")
 
         curr_str = _fmt_val(curr, unit, allow_est=True)
-        if change not in ('N/A', None):
+        reason = _extract_reason(policy.get('note'))
+        change_num = _to_float(change)
+        if reason == "no_previous_value" and (change_num is None or abs(change_num) < 1e-9):
+            change_str = NA_TEXT
+        elif change not in ('N/A', None):
             change_str = _fmt_val(f"{float(change):+.1f}", "pp", allow_est=True)
         else:
-            change_str = _fmt_val("0", "pp", allow_est=True)
+            change_str = NA_TEXT
 
-        report += f"| {policy['policy_name']} | {curr_str} | {change_str} | {unit} | {date} |\n"
+        report += f"| {name} | {curr_str} | {change_str} | {unit} | {date} |\n"
 
     leading_summary = pring_result.get('leading_summary')
     if not leading_summary:
