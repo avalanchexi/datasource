@@ -35,7 +35,10 @@ class Stage2TaskPlanner:
         self.stage_phase = stage_phase
         self.search_backend = search_backend
         self.task_file = task_file
-        self.fund_flow_backend = fund_flow_backend
+        backend = str(fund_flow_backend or "tavily").lower()
+        if backend != "tavily":
+            logger.warning(f"[Stage2TaskPlanner] 不再支持 fund_flow_backend={backend}，已自动改为 tavily")
+        self.fund_flow_backend = "tavily"
         self.query_context: Dict[str, object] = {}
 
     @staticmethod

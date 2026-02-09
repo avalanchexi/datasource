@@ -10,6 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **核心数据流**: Stage1 (API采集) → Stage2 (Tavily+DeepSeek增强) → Stage2.5 (手工注入补缺) → Stage3 (Pring分析) → Stage4 (报告生成)
 
+> 执行参数与口径以 `AGENTS.md` 为准；本文件保留最小操作指引与高频约束。
+
 ## Critical Constraints
 
 - **Tavily 每日限制**: Stage2 Tavily search/extract **每日只能运行一次**。遇到 422 会自动回退 DeepSeek 从原始 snippets 抽取，但仍不要重试 Stage2；缺口改用 Stage2.5 手工注入补数
@@ -17,6 +19,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **完整度要求**: Stage3 需要 `data_completeness ≥ 80%`，否则报告会有缺失
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
 - **Exa 自动兜底**: 当 `EXA_API_KEY` 已配置时，Tavily 422/5xx/空结果会自动触发 Exa fallback
+- **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
+- **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily) -> Stage2.5`，当前流程不使用 MCP 获取链路
 
 ## Quick Start
 
@@ -31,6 +35,9 @@ python -c "from datasource import get_manager; print('OK')"
 
 # 预检（每次运行流水线前必跑）
 bash run_preflight.sh
+
+# 推荐统一入口（自动激活 venv/.env、清代理、设置 PYTHONPATH）
+bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
 ```
 
 ## Testing
@@ -38,48 +45,57 @@ bash run_preflight.sh
 ```bash
 pytest -q                                # 快速测试
 pytest tests/test_file.py::test_name -v  # 单测
-python tests/test_datasource.py          # 集成测试
+pytest tests/integration/                # 集成测试套件
+python tests/test_datasource.py          # 数据源集成测试
 black src/ tests/ scripts/ && flake8 src/ && mypy src/datasource/  # 代码质量
 ```
 
 ## Daily Report Pipeline
 
 ```bash
-DATE=$(date +%Y%m%d)
+DATE=$(date +%Y-%m-%d)
+DATE_NH=${DATE//-/}
 source .venv/bin/activate && source .env
 
 # Stage 1: API 数据采集
-python scripts/stage1_data_collector.py --date $DATE --output data/${DATE}_market_data.json
+env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+PYTHONPATH=./src python scripts/stage1_data_collector.py \
+  --date "$DATE" \
+  --output data/${DATE_NH}_market_data.json
 
 # Stage 2: Tavily+DeepSeek 增强（当日只跑1次！）
-PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
-  --market-data data/${DATE}_market_data.json \
-  --output data/${DATE}_market_data_stage2.json \
-  --execute-search --fund-flow-backend tavily \
+PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
+  --market-data data/${DATE_NH}_market_data.json \
+  --output data/${DATE_NH}_market_data_stage2.json \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --extraction-backend regex \
+  --disable-extract \
   --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
-  --websearch-results reports/websearch_results_${DATE}_auto.json \
-  --gap-monitor reports/gap_monitor_${DATE}.json
+  --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
+  --log-output logs/stage2_unified_log_${DATE_NH}.json \
+  --gap-monitor reports/gap_monitor_${DATE_NH}.json
 
-# Stage 2.5: WebSearch 注入补缺
+# Stage 2.5: WebSearch 注入补缺（脚本位于项目根目录）
 python inject_websearch_data_test.py \
-  data/${DATE}_market_data_stage2.json \
-  reports/websearch_results_${DATE}_auto.json \
-  data/${DATE}_market_data_complete.json
+  data/${DATE_NH}_market_data_stage2.json \
+  reports/websearch_results_${DATE_NH}_manual.json \
+  data/${DATE_NH}_market_data_complete.json
 
 # Stage 3: Pring 分析
 PYTHONPATH=. python scripts/stage3_pring_analyzer.py \
-  --market-data data/${DATE}_market_data_complete.json \
-  --output data/${DATE}_pring_result.json \
+  --market-data data/${DATE_NH}_market_data_complete.json \
+  --output data/${DATE_NH}_pring_result.json \
   --allow-estimated
 
 # Stage 4: 报告生成
 PYTHONPATH=. python tests/scripts/generate_simple_report_test.py \
-  data/${DATE}_market_data_complete.json \
-  data/${DATE}_pring_result.json \
-  reports/${DATE}背景扫描120.md
+  data/${DATE_NH}_market_data_complete.json \
+  data/${DATE_NH}_pring_result.json \
+  reports/${DATE}-背景扫描120.md
 
 # 验证：确保无缺口
-cat reports/gap_monitor_${DATE}.json  # 应为 [] 或 {}
+cat reports/gap_monitor_${DATE_NH}.json  # 应为空对象或无 pending/manual_required
 ```
 
 ### Stage2 运行模式
@@ -89,16 +105,24 @@ cat reports/gap_monitor_${DATE}.json  # 应为 [] 或 {}
 | **Fast (regex)** | `--extraction-backend regex --disable-extract` |
 | **Precision (DeepSeek)** | `--extraction-backend deepseek --deepseek-timeout 12` |
 | **重试指定缺口** | `--tasks USDCNY,northbound,etf` |
+| **资金流后端** | 固定 `--fund-flow-backend tavily`（当前唯一支持） |
 | **Exa fallback** | 自动（需 `EXA_API_KEY`），Tavily 422/5xx 时触发 |
 
 > 详细参数说明见 AGENTS.md "Stage2 Performance / Timeout Tips"
+
+### Stage2/Stage2.5 搜索优化要点（2026-02-09）
+
+- DeepSeek 抽取采用“强 schema + 证据约束”，最少输出：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund_flow 还需 `recent_5d/total_120d/trend`。
+- `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
+- 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构、月份）。
+- Stage2.5 在接收 Stage2 `results` 结构时，会保留 `manual_required/manual_reason` 并生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`，按 `category:indicator_key` 去重）。
 
 ### 注入后完整度检查
 
 ```bash
 python -c "
 import json
-d = json.load(open('data/${DATE}_market_data_complete.json'))
+d = json.load(open('data/${DATE_NH}_market_data_complete.json'))
 comp = d.get('metadata',{}).get('data_completeness', 0)
 print(f'数据完整度: {comp*100:.1f}%')
 if comp < 0.8:
@@ -114,12 +138,19 @@ if comp < 0.8:
 src/datasource/
 ├── adapters/        # 数据源适配器 (TuShare, Tavily, Exa, InternationalFinance)
 ├── engines/         # 处理引擎 (deepseek_reasoner, stage2_task_planner)
-├── calculators/     # 计算模块 (pring_analyzer, fund_flow)
+├── calculators/     # 计算模块 (pring_analyzer, fund_flow, technical_indicators)
 ├── models/          # Pydantic 数据契约
 ├── config/          # 配置 (indices_config.py, search_profiles.py)
 ├── generators/      # 报告生成器 (simple_report)
 ├── cache/           # 缓存 (memory_cache, sqlite_cache)
 ├── utils/           # 工具 (trend_history_store, quality_metrics, observability)
+├── agents/          # AI 代理 (background_scan with config/templates)
+├── analyzers/       # 长期分析 (long_term_analyzer)
+├── comparators/     # 国际对比 (international_comparator)
+├── mappers/         # 行业轮动映射 (industry_rotation_mapper)
+├── trackers/        # 政策追踪 (policy_tracker)
+├── warnings/        # 系统性风险监控 (systemic_risk_monitor)
+├── mcp_adapter.py   # 历史兼容模块（不参与 Stage1~Stage3 主流程）
 └── manager.py       # DataSourceManager 单例入口
 ```
 
@@ -144,7 +175,7 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 
 ### Trend History Rules
 
-- 股指 200 交易日 / 外汇商品债券 121 交易日 / 资金流 120 交易日 / 宏观事件 6–12 条
+- 股指 200 交易日 / 外汇商品债券 121 交易日 / 资金流 120 交易日 / 宏观事件 24 条
 - Stage1 写入 `is_partial=true`，Stage2.5 最终覆盖
 - CN10Y/CN10Y_CDB 禁止 ETF 代理写入；禁止从 `reports/*.md` 反向回填
 
@@ -160,6 +191,7 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 | fund_flow | `recent_5d`, `total_120d`, `trend`, `source` | `{"recent_5d": 85.6, "total_120d": 1250.0, "trend": "流入"}` |
 
 **Critical**: `recent_5d`/`total_120d` 必须是数字（非"波动"/"净流入"）。
+`_manual.json` 中凡填写了数值的条目必须提供 `source_url`（或在 `source/note` 中附 URL）。
 
 ## Data Coverage
 
@@ -190,6 +222,7 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback
 | DeepSeek 超时 | `--extraction-backend regex --disable-extract` |
 | Tavily extract 422 | 自动回退 DeepSeek；仍不稳用 `--disable-extract` |
 | Tavily 当日重复 422 | **不要重试 Stage2**；改用 Stage2.5 手工注入 |
+| 日志出现 `deepseek_no_value/no_deepseek_key` | 视为 `manual_required`，优先使用 `metadata.manual_required` 骨架补数 |
 | 代理/TLS 问题 | `env -u http_proxy -u https_proxy` 前缀 |
 | 完整度 <80% | 检查 macro/monetary null 字段，手动补数后重注入 |
 | 报告出现 N/A | 检查 `gap_monitor`，确保数值为可解析数字 |
@@ -200,15 +233,15 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback
 
 | Stage | Output | Purpose |
 |-------|--------|---------|
-| Stage1 | `data/${DATE}_market_data.json` | 原始 API 数据 |
-| Stage2 | `data/${DATE}_market_data_stage2.json` | 增强后数据 |
-| Stage2 | `reports/gap_monitor_${DATE}.json` | 缺失数据追踪 |
-| Stage2 | `reports/websearch_results_${DATE}_auto.json` | Tavily 搜索结果 |
-| Stage2 | `logs/observability_${DATE}.json` | 指标级耗时/失败统计 |
-| Stage2 | `reports/quality_metrics_${DATE}.json` | 数据质量评估 |
-| Stage2.5 | `data/${DATE}_market_data_complete.json` | 注入完成后数据 |
-| Stage3 | `data/${DATE}_pring_result.json` | Pring 分析输出 |
-| Stage4 | `reports/${DATE}背景扫描120.md` | 最终报告 |
+| Stage1 | `data/${DATE_NH}_market_data.json` | 原始 API 数据 |
+| Stage2 | `data/${DATE_NH}_market_data_stage2.json` | 增强后数据 |
+| Stage2 | `reports/gap_monitor_${DATE_NH}.json` | 缺失数据追踪 |
+| Stage2 | `reports/websearch_results_${DATE_NH}_auto.json` | Tavily 搜索结果 |
+| Stage2 | `logs/observability_${DATE_NH}.json` | 指标级耗时/失败统计 |
+| Stage2 | `reports/quality_metrics_${DATE_NH}.json` | 数据质量评估 |
+| Stage2.5 | `data/${DATE_NH}_market_data_complete.json` | 注入完成后数据 |
+| Stage3 | `data/${DATE_NH}_pring_result.json` | Pring 分析输出 |
+| Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 
 ## Code Standards
 
@@ -220,4 +253,5 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback
 ## Key Documentation
 
 - **AGENTS.md**: 详细编码规范、资金流数据标准、Stage2.5 工作流、性能调优
+- **SCRIPTS.md**: 脚本参考文档（各 stage 脚本参数与用法）
 - **docs/系统技术文档.md**: 完整技术参考（含 Pring 六阶段分析原理）

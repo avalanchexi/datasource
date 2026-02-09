@@ -34,9 +34,17 @@
    ```
    使用方式：`bash run_preflight.sh && <后续 Stage1/Stage2… 命令>`；若终端重开，请先跑一次再执行流水线。
 
+5.1) **统一运行入口（推荐）**：`bash run_clean.sh <command> [args...]`
+   - 自动执行：`source .venv/bin/activate`、`source .env`、清理 `http_proxy/https_proxy`，并设置 `PYTHONPATH=./src`（若外部已设置则沿用）。
+   - 示例：
+   ```bash
+   bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
+   bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
+   ```
+
 6) **Health Check（可选，建议在 Stage2 前跑）**：`PYTHONPATH=./src python3 scripts/stage2_health_check.py`
    - 校验 Tavily/DeepSeek 密钥、缓存路径可写、基础连通性（HEAD Ping）。失败即退出；需代理时先设置环境变量再跑。
-6) **代码语法预检（可选）**
+7) **代码语法预检（可选）**
    ```bash
    python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py
    # 如有 SyntaxError，先修复再执行流水线
@@ -58,32 +66,37 @@
 - PRs: state scope, link issues, list commands run, show before/after for templates/reports.
 - Run `black src/ tests/ scripts/`, `flake8 src/`, `mypy src/datasource/...`; note any skips.
 
+## Review 完成后更新
+- 若 `HEAD` 相对基线无代码差异，review 结论必须明确写为“无可审查代码差异、无可执行问题”，不得臆造问题。
+- review 识别出流程或口径问题后，需同步更新本文件对应章节（Stage 命令、字段口径、校验规则、排障建议）。
+- 更新 `AGENTS.md` 时仅记录可复用流程与规则，不写当日临时数值或一次性结论。
+
 ## 数据来源约束
 - 运行各 stage 及生成报告时严禁从历史 `reports/*.md` 中抓取或复用数据；所有数据必须来自 TuShare、Tavily/AI WebSearch 实时获取或各 stage 的计算产出。
 - trend_history 禁止从 `reports/*.md` 反向回填（仅允许 Stage1/Stage2.5 写入或 TuShare 回补）。
 
 ## Trend History（非 SQLite）
 - 目录结构：`data/trend_history/min/series/{category}/{symbol}.json`、`data/trend_history/min/events/{indicator}.json`
-- 窗口规则：股指 200 交易日；外汇/商品/债券 121 交易日；资金流 120 交易日；宏观/政策事件 6–12 条
+- 窗口规则：股指 200 交易日；外汇/商品/债券 121 交易日；资金流 120 交易日；宏观/政策事件 24 条（用于提升 120d 对比可用性）
 - 写入策略：Stage1 部分写入（`is_partial=true`），Stage2.5 最终写入覆盖
 - 交易日对齐：依赖 TuShare `trade_cal`；缺口过大需手工补或标记估计值
 - 写入防护：过滤低质量标记（如“数值超出合理区间”“异常零值”“regex_only且缺少发布机构”）；CN10Y/CN10Y_CDB 禁止 ETF 代理写入；回补脚本跳过 `bond_etf_proxy` 来源；不使用“真实范围”作硬性校验标准
 
-## Fund Flow Data Standard (V2.1 MCP增强)
-**Background Scan Generator**: `scripts/utility/background_scan_120d_generator.py`
+## Fund Flow Data Standard (V2.3，Stage2/Stage2.5 主路径)
+**Background Scan Generator（历史脚本）**: `scripts/utility/background_scan_120d_generator.py`（主流程可跳过）
 
 **Priority**
-1. MCP WebSearch only: real-time data from 东方财富网 / 同花顺 / 每日经济新闻等。
-2. Anomaly detect: any 0/None triggers immediate second WebSearch.
+1. TuShare 能直接获取的指标优先 TuShare（Stage1）。
+2. TuShare 不可得或缺失时，统一走 Stage2 Tavily+DeepSeek（`--fund-flow-backend tavily`）。
+3. Stage2 仍缺值时，统一走 Stage2.5 手工注入。
+4. 异常检测：任一 `0/None` 或窗口值缺失都需标记 `manual_required` 并进入 Stage2.5。
 
 **Must-do checks**
-- 北向/南向/ETF/融资融券: use MCP WebSearch only; AKShare forbidden.
+- 北向/南向/ETF/融资融券: 禁止 AKShare 直接写最终值；仅允许 WebSearch 实时来源或 Stage2.5 手工补数。
 - Zero/missing values: mark as `异常零值-需核查`; log raw source in `note`.
-- Annotate sources: `MCP WebSearch实时获取` or `异常零值-需核查`.
-- Stage2 CLI: `python scripts/stage2_unified_enhancer.py --fund-flow-backend {mcp|tavily|hybrid} --tasks northbound,southbound,etf --execute-search`
-  - `tavily`: searches, fills `recent_5d/total_120d`, source `tavily+deepseek`.
-  - `mcp`: skip search, record pending in `gap_monitor` for MCP/manual injection.
-  - `hybrid`: MCP → Tavily fallback; failures/zeros flagged `manual_required`.
+- Annotate sources: `tavily+deepseek` / `待人工补数(Stage2 manual_required)` / `异常零值-需核查`.
+- Stage2 CLI: `python scripts/stage2_unified_enhancer.py --fund-flow-backend tavily --tasks northbound,southbound,etf --execute-search`
+  - 固定 `tavily`：search + extraction 回填 `recent_5d/total_120d`，source=`tavily+deepseek`。
 
 **Code touchpoints**
 - `BackgroundScan120DGeneratorFixed._get_fund_flow_websearch()` (≈ lines 318-359)
@@ -96,7 +109,7 @@
     'recent_5d': 123.45,       # 近5日流向(亿元)
     'total_120d': 456.78,      # 近120日累计(亿元)
     'trend': '流入' or '流出',
-    'source': 'MCP WebSearch实时获取' or '异常零值-需核查',
+    'source': 'tavily+deepseek' or '待人工补数(Stage2 manual_required)' or '异常零值-需核查',
     'note': '来源:东方财富网',  # optional
 }
 ```
@@ -115,9 +128,10 @@
 | commodities | `symbol`, `name`, `current_price`, `unit` | `{"symbol": "GC=F", "name": "COMEX黄金", "current_price": 2650.5, "unit": "$/oz"}` |
 | forex | `pair`, `name`, `current_rate` | `{"pair": "USDCNY", "name": "USD/CNY在岸", "current_rate": 7.248}` |
 | bonds | `symbol`, `name`, `current_yield` | `{"symbol": "US10Y", "name": "美国10年期国债", "current_yield": 4.18}` |
-| fund_flow | `recent_5d`, `total_120d`, `trend`, `source` | `{"recent_5d": 85.6, "total_120d": 1250.0, "trend": "流入", "source": "MCP WebSearch实时获取"}` |
+| fund_flow | `recent_5d`, `total_120d`, `trend`, `source` | `{"recent_5d": 85.6, "total_120d": 1250.0, "trend": "流入", "source": "tavily+deepseek"}` |
 
 **注意**：`recent_5d`/`total_120d` 必须是可解析的数字，不能是描述性文本（如“波动”“净流入”）。
+`_manual.json` 中凡填写了数值的条目必须带 `source_url`（或在 `source/note` 含 URL），否则注入脚本会报错。
 
 ## Stage1 → Stage3 Daily Run
 - **0) Preflight（必跑）**：`bash run_preflight.sh`，校验 `.env` 中 `TAVILY_API_KEY/DEEPSEEK_API_KEY/TUSHARE_TOKEN` 且清空代理；失败直接终止。
@@ -144,7 +158,7 @@
   ```
   - 商品行情不走 Yahoo/Investing 兜底；北向/南向/ETF 资金流写占位符，后续必补。
 
-- **Stage2** Tavily 增强（推荐速度优先配置；同日只跑 1 次 Tavily，失败转 Stage2.5/MCP 补数）：
+- **Stage2** Tavily 增强（推荐速度优先配置；同日只跑 1 次 Tavily，失败转 Stage2.5 补数）：
   ```bash
   PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
     --market-data data/${DATE_NH}_market_data.json \
@@ -159,13 +173,13 @@
     --queue-retry-limit 0 \
     --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
     --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
-  --log-output logs/stage2_unified_log_${DATE_NH}.json \
-  --gap-monitor reports/gap_monitor_${DATE_NH}.json
+    --log-output logs/stage2_unified_log_${DATE_NH}.json \
+    --gap-monitor reports/gap_monitor_${DATE_NH}.json
   ```
   - 使用 `--extraction-backend regex --disable-extract` 跳过 DeepSeek/Tavily extract，30–60 秒完成。
   - 若代理导致 TLS/证书报错，优先直连：在命令前加 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`；需要高精度时去掉 `--disable-extract` 让 DeepSeek 抽取生效。
   - 若需更高精度：改为 `--extraction-backend deepseek --deepseek-model deepseek-chat --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`；langchain 默认禁用，如需实验必须加 `--allow-langchain`。
-  - Tavily extract 422 频发时：系统会自动回退到 DeepSeek 从原始 snippets 抽取，并在 Stage2 Summary 计数 `extract_fallback_to_deepseek`；如仍不稳，改用 `--disable-extract` 或收紧 `--extract-topk 1` 以避免 422 软拒绝；当日不要重复跑 Stage2，缺口改用 Stage2.5 `_manual.json` 或 MCP 注入。
+  - Tavily extract 422 频发时：系统会自动回退到 DeepSeek 从原始 snippets 抽取，并在 Stage2 Summary 计数 `extract_fallback_to_deepseek`；如仍不稳，改用 `--disable-extract` 或收紧 `--extract-topk 1` 以避免 422 软拒绝；当日不要重复跑 Stage2，缺口改用 Stage2.5 `_manual.json` 注入。
   - LangChain 默认禁用；如需实验，必须显式传 `--allow-langchain`（自备依赖）。
   - 仅重试资金流：加 `--tasks northbound,southbound,etf`；失败落 `gap_monitor`，转 Stage2.5。
 
@@ -198,6 +212,8 @@
     data/${DATE_NH}_market_data_complete.json
   ```
   - 成功后 `metadata.missing_items`、`reports/gap_monitor_${DATE_NH}.json` 应为空；零值标记 `异常零值-需核查`。
+  - 若输入是 Stage2 自动结果（`results` 数组），脚本会自动转换为 schema，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`）。
+  - `metadata.manual_required` 按 `category:indicator_key` 去重，避免人工项重复。
   - 注入后会刷新 `reports/quality_metrics_${DATE_NH}.json` 并写入 trend_history。
   - 注入结束会自动输出 `is_estimated=True` 的字段清单（`_post_injection_validation()`），便于定位仍需补数的指标。
   - （可选）如需自动结果：将 `_manual.json` 换成 `_auto.json`，手工编辑后反复注入。
@@ -287,8 +303,9 @@ print('metadata.missing_items:', d.get('metadata', {}).get('missing_items'))
 "
 ```
 
-## Tavily / MCP Modes (2025-12 update)
-- Fund flow & forex default to Tavily; `fund-flow-backend` default `tavily`. `hybrid` = Tavily fallback from MCP; no automatic MCP channel.
+## Tavily Mode（2026-02 update）
+- Stage2 Unified 中 fund flow & forex 统一使用 `tavily`。
+- `--fund-flow-backend` 当前仅支持 `tavily`。
 - Required keys: `.env` sets `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`; prefer `PYTHONPATH=./src` when running.
 - DeepSeek default model `deepseek-reasoner`, timeout 12s; `--use-queue` enables `asyncio.Queue` extraction.
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`; macro/low-timeliness: `time_range=year/month`, `max_results<=6`, `search_depth=basic`.
@@ -318,6 +335,9 @@ print('metadata.missing_items:', d.get('metadata', {}).get('missing_items'))
 
 ## Stage2 抽取/校验优化（2026-01-28+）
 - **结构化数值提取**：对 USDCNY/USDCNH/DXY/CN10Y/政策利率（RRR/MLF/逆回购）以及 northbound/southbound 增加结构化抽取，优先抓取带关键字/单位/精度的数值，过滤 1.00/9.0 等非报价数字。
+- **DeepSeek 强 schema + 证据约束（2026-02-09）**：抽取统一返回 `value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；资金流额外返回 `recent_5d/total_120d/trend`。`source_url` 必须来自 snippets，否则强制 `manual_required`。
+- **无值强制人工（2026-02-09）**：`no_value/deepseek_no_value/no_deepseek_key` 不再默默跳过，统一进入 `manual_required` 并记录 `manual_reason`。
+- **定向二次 query（2026-02-09）**：命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时自动追加一次“单位+发布机构+月份”定向检索，降低 `skip_no_value`。
 - **政策利率发布机构校验放宽**：当来源为 `tradingeconomics.com/ceicdata.com/chinamoney.com.cn/cls.cn` 时放宽 issuer 强校验，避免“缺发布机构”导致 manual。
 - **北向/南向月度口径**：查询口径调整为月度/累计，并尝试从 HKEX 月度统计页提取“净流入/净流出 + 单位”。
 - **排噪提醒**：USDCNY/USDCNH 避免 xe/x-rates 类 1 USD 兑换页面导致的 1.00 数值干扰。
@@ -328,7 +348,7 @@ print('metadata.missing_items:', d.get('metadata', {}).get('missing_items'))
 
 ## Stage2 Performance / Timeout Tips (2025-12-04)
 - Disable bad proxies first: prefix command with `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY` or pass `--http-proxy '' --https-proxy ''`.
-- Trim long tail (fund flow manual/MCP): `--fund-flow-backend mcp` or `--fund-flow-backend hybrid` so northbound/southbound/etf skip live search.
+- Trim long tail: keep `--fund-flow-backend tavily` and run `--tasks northbound,southbound,etf` for targeted retries，再通过 Stage2.5 补数。
 - Turbo no-LLM: `--extraction-backend regex --queue-concurrency 6 --deepseek-max-concurrency 0 --deepseek-timeout 8 --queue-retry-limit 0` (faster, slightly less accurate).
 - With LLM: `--deepseek-timeout 8 --queue-concurrency 5 --deepseek-max-concurrency 4 --queue-retry-limit 0`; consider two-pass `--phase essential` then `--phase assets`.
 - Reduce Tavily extract load: set `top_for_extract = snippets[:2]` or `extract_depth="basic"` for commodities/forex to avoid 422/timeout.
@@ -338,7 +358,7 @@ print('metadata.missing_items:', d.get('metadata', {}).get('missing_items'))
 
 ### Stage2 性能瓶颈与快速模式
 - 常见瓶颈：Tavily extract 422（现已自动回退 DeepSeek）；DeepSeek 请求超时（单指标可耗时 30–40s）；并发受限或串行导致总耗时上升。
-- Tavily 调用策略：**当日 Stage2 只跑 1 次 tavily search/extract**，失败或 422 不要重复跑 Stage2；改用 Stage2.5 WebSearch/manual JSON（`reports/websearch_results_${DATE}_manual.json`）或 MCP 兜底，再注入→Stage3；`--resume-from-task-file` 仅用于跨天/中断恢复。
+- Tavily 调用策略：**当日 Stage2 只跑 1 次 tavily search/extract**，失败或 422 不要重复跑 Stage2；改用 Stage2.5 WebSearch/manual JSON（`reports/websearch_results_${DATE}_manual.json`）补数，再注入→Stage3；`--resume-from-task-file` 仅用于跨天/中断恢复。
 - 快速绕行：`--extraction-backend regex --disable-extract --queue-retry-limit 0 --deepseek-max-concurrency 0`，资金流仍用 tavily，整体 30–60s 完成。
 - 需要方向/高精度时再移除上述两参数启用 DeepSeek（3–5 分钟），并适当调低 `--deepseek-timeout/--deepseek-max-concurrency`。
 
@@ -359,10 +379,15 @@ PY
 If proxy required, pass `proxies` explicitly in the check.
 
 ## Data Priority (forex/fund flow/market)
-- MCP first when available: `fund_flow_backend=mcp` or `forex_backend=mcp` skips online search and marks pending for MCP injection.
-- Tavily second: `hybrid` = MCP then Tavily; `tavily` = direct Tavily.
-- WebSearch JSON last resort: use `data/websearch_results_${DATE}.json` + `inject_websearch_data_test.py` for forex/fund_flow/macro/currency/commodities/bonds write-back.
+- TuShare first: Stage1 先采 TuShare 可得字段。
+- Stage2 Tavily second: TuShare 不可得或缺失字段统一走 Stage2（`--fund-flow-backend tavily`）。
+- Stage2.5 manual last resort: 用 `reports/websearch_results_${DATE}.json` 或手工 `_manual.json` + `inject_websearch_data_test.py` 完成补数回写。
 - Market fallback: after Stage2 run `scripts/fill_market_data_from_yahoo.py`, then WebSearch injection to fill commodities/bonds/forex gaps.
+
+## TuShare 直采口径（2026-02-09）
+- `USDCNH`：`fx_daily` 需优先使用 `ts_code=USDCNH.FXCM`；`USDCNH` 常返回空数据。
+- `CN10Y`：优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；若空则回退 `curve_type=1`。
+- `CN10Y_CDB`：当前无稳定 TuShare 直采口径，仍需 WebSearch/手工注入；若为利差估算需保留 `is_estimated=True`。
 
 ## Troubleshooting 速查表
 | 问题 | 原因 | 解决方案 |

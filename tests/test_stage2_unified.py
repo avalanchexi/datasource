@@ -39,7 +39,7 @@ def test_flag_fund_flow_anomalies_marks_zero_values():
     flagged = _flag_fund_flow_anomalies(payload)
     assert "northbound" in flagged
     assert payload["fund_flow"]["northbound"]["source"] == "异常零值-需核查"
-    assert payload["fund_flow"]["southbound"]["source"] == "MCP WebSearch实时获取"
+    assert payload["fund_flow"]["southbound"]["source"] == "tavily+deepseek"
 
 
 def test_gap_monitor_pending_only_incomplete(tmp_path: Path):
@@ -159,8 +159,8 @@ def test_flag_fund_flow_anomalies_marks_placeholder_pair():
     assert "疑似占位值" in payload["fund_flow"]["northbound"]["note"]
 
 
-def test_execute_tasks_mcp_backend_skips_search(tmp_path: Path):
-    # MCP backend should mark manual_required without invoking client.search
+def test_execute_tasks_legacy_mcp_backend_still_searches(tmp_path: Path):
+    # 历史 mcp backend 配置应被忽略，仍走 tavily 搜索
     payload = {"fund_flow": {"northbound": {"recent_5d": None, "total_120d": None}}}
     task = {
         "task_id": "t1",
@@ -178,18 +178,40 @@ def test_execute_tasks_mcp_backend_skips_search(tmp_path: Path):
     }
 
     class DummyClient:
+        def __init__(self):
+            self.called = 0
+
         async def search(self, *args, **kwargs):
-            raise AssertionError("search should not be called in MCP mode")
+            self.called += 1
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/northbound",
+                        "snippet": "北向资金近5日净流入 12.3 亿元，近120日累计 456.7 亿元",
+                        "score": 0.9,
+                    }
+                ]
+            }
 
     class DummyExtractor:
         async def extract(self, *args, **kwargs):
-            return {}
+            return {
+                "value": 12.3,
+                "unit": "亿元",
+                "source_url": "https://example.com/northbound",
+                "confidence": 0.9,
+                "manual_required": False,
+                "recent_5d": 12.3,
+                "total_120d": 456.7,
+                "trend": "inflow",
+            }
 
+    client = DummyClient()
     completed, failures, _ = asyncio.run(
         _execute_tasks(
             [task],
             payload,
-            DummyClient(),
+            client,
             None,
             DummyExtractor(),
             tmp_path / "log.jsonl",
@@ -197,8 +219,9 @@ def test_execute_tasks_mcp_backend_skips_search(tmp_path: Path):
             fund_flow_backend="mcp",
         )
     )
-    assert not completed
-    assert failures and failures[0]["manual_required"] is True
+    assert client.called == 1
+    assert completed
+    assert not failures
 import pytest
 
 pytest.importorskip("langchain_core")

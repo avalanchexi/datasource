@@ -10,7 +10,7 @@ Stage 2 Unified Enhancer (Tavily + DeepSeek)
 - 计算派生字段 (m1_m2_spread 等)
 - 输出日志/状态标志，方便 Stage3 在入口阻断
 
-资金流向仍保持 MCP WebSearch 独立通道；如检测到零值占位会写入 gap_monitor.json 供人工复核。
+资金流向统一走 Tavily+DeepSeek；如检测到零值占位会写入 gap_monitor.json 供人工复核。
 """
 
 from __future__ import annotations
@@ -58,6 +58,18 @@ from datasource.utils.observability import build_observability_log, write_observ
 from datasource.utils.policy_rules import evaluate_policy, write_policy_evaluation, load_policy_rules
 from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
+
+CRITICAL_EXTRACT_KEYS = {
+    "industrial",
+    "industrial_sales",
+    "bdi",
+    "rrr",
+    "reverse_repo",
+    "mlf",
+    "northbound",
+    "southbound",
+    "etf",
+}
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -118,6 +130,24 @@ def _apply_aliases(market_payload: Dict[str, Any], alias_map: Dict[str, str]) ->
             elif item in alias_map:
                 miss[idx] = alias_map[item]
         market_payload["missing_items"] = miss
+
+
+def _warn_disable_extract_on_critical_tasks(tasks: List[Dict[str, Any]], disable_extract: bool) -> None:
+    if not disable_extract:
+        return
+    affected = sorted(
+        {
+            str(task.get("indicator_key"))
+            for task in tasks
+            if str(task.get("indicator_key")) in CRITICAL_EXTRACT_KEYS
+        }
+    )
+    if affected:
+        logger.warning(
+            "[Stage2] --disable-extract 已启用，关键指标可能落入 manual_required: {}；"
+            "建议关键指标不要全局禁用 extract。",
+            ",".join(affected),
+        )
 
 
 def _parse_date_str(text: str) -> Optional[datetime]:
@@ -1084,6 +1114,98 @@ def _compute_derived_metrics(market_payload: Dict[str, Any]) -> None:
         derived["commodity_trend"] = "上行" if avg_change > 0 else "下行"
 
 
+def _append_note(note: Optional[str], extra: Optional[str]) -> Optional[str]:
+    base = (note or "").strip()
+    tail = (extra or "").strip()
+    if not tail:
+        return base or None
+    if not base:
+        return tail
+    if tail in base:
+        return base
+    return f"{base} {tail}".strip()
+
+
+def _build_directed_query(
+    task: Dict[str, Any],
+    extraction: Dict[str, Any],
+    skip_reason: Optional[str],
+    extra_reason: Optional[str],
+) -> Optional[str]:
+    base_query = (task.get("query") or task.get("indicator_key") or "").strip()
+    if not base_query:
+        return None
+    hint_tokens: List[str] = ["最新", "官方", "数据"]
+    unit = (task.get("unit") or "").strip()
+    issuer = (task.get("issuer") or "").strip()
+    if unit:
+        hint_tokens.append(f"单位{unit}")
+    if issuer:
+        hint_tokens.append(f"发布机构{issuer}")
+
+    indicator = str(task.get("indicator_key") or "").lower()
+    if indicator in {"industrial", "industrial_sales", "cpi", "ppi", "pmi", "pmi_new_orders", "gdp"}:
+        now = datetime.now()
+        year = now.year
+        month = now.month - 1 if now.month > 1 else 12
+        if now.month == 1:
+            year -= 1
+        hint_tokens.append(f"{year}年{month}月")
+        hint_tokens.append("同比")
+
+    trigger_text = " ".join(
+        [
+            str(skip_reason or ""),
+            str(extra_reason or ""),
+            str(extraction.get("manual_reason") or ""),
+            str(extraction.get("note") or ""),
+        ]
+    ).lower()
+    if "low_score_all" in trigger_text or "低分" in trigger_text:
+        hint_tokens.append("公告")
+        hint_tokens.append("统计公报")
+    if "单位不匹配" in trigger_text:
+        hint_tokens.append("精确单位")
+    if "发布机构" in trigger_text:
+        hint_tokens.append("发布机构原文")
+
+    directed = f"{base_query} {' '.join(hint_tokens)}".strip()
+    return directed if directed != base_query else None
+
+
+def _should_retry_with_directed_query(
+    extraction: Dict[str, Any],
+    skip_reason: Optional[str],
+    extra_reason: Optional[str],
+    *,
+    attempt: int,
+    max_retries: int,
+    directed_retry_done: bool,
+) -> bool:
+    if directed_retry_done:
+        return False
+    # 当前循环使用 count(start=1)，最多允许触发一次定向重试
+    if attempt > max(1, max_retries):
+        return False
+    trigger_text = " ".join(
+        [
+            str(skip_reason or ""),
+            str(extra_reason or ""),
+            str(extraction.get("manual_reason") or ""),
+            str(extraction.get("note") or ""),
+        ]
+    ).lower()
+    triggers = [
+        "low_score_all",
+        "单位不匹配",
+        "缺少发布机构",
+        "no_value",
+        "deepseek_no_value",
+        "no_deepseek_key",
+    ]
+    return any(t in trigger_text for t in triggers)
+
+
 async def _execute_tasks(
     tasks: List[Dict[str, Any]],
     market_payload: Dict[str, Any],
@@ -1093,8 +1215,8 @@ async def _execute_tasks(
     task_log_path: Path,
     cache_ttl: Optional[int],
     max_retries: int = 1,
-    fund_flow_backend: str = "mcp",
-    forex_backend: str = "hybrid",
+    fund_flow_backend: str = "tavily",
+    forex_backend: str = "tavily",
     deepseek_timeout: Optional[float] = None,
     extraction_backend: str = "deepseek",
     deepseek_max_concurrency: int = 3,
@@ -1116,7 +1238,6 @@ async def _execute_tasks(
     failures: List[Dict[str, Any]] = []
     websearch_results: List[Dict[str, Any]] = []
     manual_required_keys: List[str] = []
-    skipped_mcp: List[Dict[str, Any]] = []
     stats = stats if stats is not None else {}
     stats.setdefault("domain_filtered_drop", 0)
     stats.setdefault("regex_hits", 0)
@@ -1323,7 +1444,10 @@ async def _execute_tasks(
                 _augment_extraction_metadata(extraction, task, snippets)
                 _refine_extraction_value(extraction, task, snippets)
                 is_fund_flow = task["indicator_key"] in {"northbound", "southbound", "etf", "margin"}
-                manual_required = False
+                manual_required = bool(extraction.get("manual_required"))
+                manual_reason = extraction.get("manual_reason")
+                if manual_reason:
+                    extraction["note"] = _append_note(extraction.get("note"), str(manual_reason))
                 if is_fund_flow and (extraction.get("confidence", 0.0) < 0.5 or extraction.get("value") is None):
                     manual_required = True
                 if is_fund_flow:
@@ -1368,6 +1492,7 @@ async def _execute_tasks(
                     "created_at": task["created_at"],
                     "finished_at": int(datetime.now().timestamp()),
                     "manual_required": manual_required,
+                    "manual_reason": extraction.get("manual_reason"),
                     "extraction_skipped_reason": task.get("extraction_skipped_reason"),
                     "extract_skipped_reason": task.get("extract_skipped_reason"),
                     "score_min": (task.get("score_stats") or {}).get("score_min"),
@@ -1405,6 +1530,7 @@ async def _execute_tasks(
                         "search_backend": task.get("search_backend"),
                         "note": task.get("search_note"),
                         "manual_required": manual_required,
+                        "manual_reason": extraction.get("manual_reason"),
                     }
                 )
             except Exception as exc:
@@ -1438,8 +1564,12 @@ async def _execute_tasks(
     for task in tasks:
         is_fund_flow = task["indicator_key"] in {"northbound", "southbound", "etf", "margin"}
         is_forex = task["indicator_key"] in forex_keys
-        backend = task.get("fund_flow_backend") or fund_flow_backend
-        backend_forex = task.get("forex_backend") or forex_backend
+        requested_backend = str(task.get("fund_flow_backend") or fund_flow_backend or "tavily").lower()
+        backend = "tavily"
+        if is_fund_flow and requested_backend != "tavily":
+            logger.warning(
+                f"[Stage2] 不再支持 fund_flow_backend={requested_backend}，已自动改为 tavily: {task.get('indicator_key')}"
+            )
         try:
             # 若已存在非占位有效值，直接跳过搜索
             has_value, existing_val = _has_non_placeholder_value(market_payload, task["indicator_key"])
@@ -1482,6 +1612,8 @@ async def _execute_tasks(
                     }
                 )
                 continue
+            directed_retry_done = False
+            directed_query_override: Optional[str] = None
             for attempt in count(start=1):
                 started = time.perf_counter()
                 skip_deepseek_reason: Optional[str] = None
@@ -1492,28 +1624,11 @@ async def _execute_tasks(
                 search_note: Optional[str] = None
                 task_for_log = task
                 result: Dict[str, Any] = {}
-                # fund_flow_backend=mcp: 跳过实时搜索，直接标记待人工/MCP
-                if is_fund_flow and backend == "mcp":
-                    task_record = {
-                        "task_id": task["task_id"],
-                        "indicator_key": task["indicator_key"],
-                        "stage_phase": task["stage_phase"],
-                        "search_backend": task["search_backend"],
-                        "fund_flow_backend": backend,
-                        "extraction_backend": extraction_backend,
-                        "manual_required": True,
-                        "note": "fund_flow_backend=mcp skip search",
-                        "attempt_index": attempt,
-                        "elapsed_ms": None,
-                        "created_at": task.get("created_at", int(datetime.now().timestamp())),
-                        "finished_at": int(datetime.now().timestamp()),
-                    }
-                    failures.append(task_record)
-                    _append_task_log(task_log_path, task_record)
-                    break
                 try:
                     try:
                         query_candidates = []
+                        if directed_query_override:
+                            query_candidates.append(directed_query_override)
                         primary_query = task.get("query") or task.get("indicator_key")
                         if primary_query:
                             query_candidates.append(primary_query)
@@ -1783,6 +1898,8 @@ async def _execute_tasks(
                                 "llm_error": f"skipped_deepseek:{skip_deepseek_reason}",
                                 "llm_timeout": False,
                                 "llm_latency_ms": 0,
+                                "manual_required": True,
+                                "manual_reason": f"skipped_deepseek:{skip_deepseek_reason}",
                             }
                             task_record = {
                                 "task_id": task["task_id"],
@@ -1811,6 +1928,7 @@ async def _execute_tasks(
                                 "created_at": task["created_at"],
                                 "finished_at": int(datetime.now().timestamp()),
                                 "manual_required": True,
+                                "manual_reason": extraction.get("manual_reason"),
                                 "extraction_skipped_reason": skip_deepseek_reason,
                                 "extract_skipped_reason": extract_skipped_reason,
                                 "score_min": score_stats.get("score_min"),
@@ -1835,6 +1953,7 @@ async def _execute_tasks(
                                     "search_backend": task_for_log.get("search_backend"),
                                     "note": task_for_log.get("search_note"),
                                     "manual_required": True,
+                                    "manual_reason": extraction.get("manual_reason"),
                                 }
                             )
                             break
@@ -1852,6 +1971,8 @@ async def _execute_tasks(
                                 "llm_error": f"skipped_deepseek:{skip_deepseek_reason}",
                                 "llm_timeout": False,
                                 "llm_latency_ms": 0,
+                                "manual_required": True,
+                                "manual_reason": f"skipped_deepseek:{skip_deepseek_reason}",
                             }
                         else:
                             stats["extract_calls"] += 1
@@ -1877,10 +1998,18 @@ async def _execute_tasks(
                                     extraction["value"] = -abs(extraction["value"])
                                 if inferred_dir == "inflow" and extraction["value"] < 0:
                                     extraction["value"] = abs(extraction["value"])
+                        # 先继承模型层 manual 标记
+                        manual_required = bool(extraction.get("manual_required"))
+                        if extraction.get("manual_reason"):
+                            extraction["note"] = _append_note(
+                                extraction.get("note"),
+                                str(extraction.get("manual_reason")),
+                            )
+
                         # fund_flow 低置信度或无值 → manual_required
-                        manual_required = False
                         if is_fund_flow and (extraction.get("confidence", 0.0) < 0.5 or extraction.get("value") is None):
                             manual_required = True
+                        validate_note_append = ""
                         if is_fund_flow:
                             adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(
                                 extraction, indicator_key=task["indicator_key"]
@@ -1891,6 +2020,7 @@ async def _execute_tasks(
                             ).strip()
                             extraction["note"] = combined_note or None
                             manual_required = manual_required or unit_manual
+                            validate_note_append = note_append or ""
                         else:
                             # 对非资金流向的校验
                             val_adj, manual2, note_append2 = _validate_general_extraction(extraction, task, snippets)
@@ -1898,10 +2028,30 @@ async def _execute_tasks(
                             if note_append2:
                                 extraction["note"] = ((extraction.get("note") or "") + " " + note_append2).strip()
                             manual_required = manual_required or manual2
+                            validate_note_append = note_append2 or ""
                         if search_note and search_backend == "exa":
                             extraction["note"] = ((extraction.get("note") or "") + f" {search_note}").strip()
                         if skip_deepseek_reason == "low_score_all":
                             manual_required = True
+
+                        if manual_required and _should_retry_with_directed_query(
+                            extraction,
+                            skip_reason=skip_deepseek_reason,
+                            extra_reason=validate_note_append,
+                            attempt=attempt,
+                            max_retries=max_retries,
+                            directed_retry_done=directed_retry_done,
+                        ):
+                            directed_query = _build_directed_query(
+                                task,
+                                extraction,
+                                skip_reason=skip_deepseek_reason,
+                                extra_reason=validate_note_append,
+                            )
+                            if directed_query:
+                                directed_query_override = directed_query
+                                directed_retry_done = True
+                                continue
 
                         task_record = {
                             "task_id": task["task_id"],
@@ -1930,6 +2080,7 @@ async def _execute_tasks(
                             "created_at": task["created_at"],
                             "finished_at": int(datetime.now().timestamp()),
                             "manual_required": manual_required,
+                            "manual_reason": extraction.get("manual_reason"),
                             "extraction_skipped_reason": skip_deepseek_reason,
                             "extract_skipped_reason": extract_skipped_reason,
                             "score_min": score_stats.get("score_min"),
@@ -1944,7 +2095,7 @@ async def _execute_tasks(
                         }
                         if manual_required:
                             failures.append(task_record)
-                            if attempt >= max_retries + 1 and extraction.get("value") is None:
+                            if extraction.get("value") is None:
                                 manual_required_keys.append(task_record["indicator_key"])
                         else:
                             write_target = _apply_extraction(market_payload, task, extraction)
@@ -1967,6 +2118,7 @@ async def _execute_tasks(
                                 "search_backend": search_backend,
                                 "note": search_note,
                                 "manual_required": manual_required,
+                                "manual_reason": extraction.get("manual_reason"),
                             }
                         )
                         break
@@ -2009,8 +2161,18 @@ def _gap_monitor(
     manual_required: Optional[List[str]] = None,
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    clean_pending = [p for p in pending if p]
-    clean_manual = [m for m in manual_required or [] if m]
+    def _dedupe_keep_order(values: List[str]) -> List[str]:
+        seen = set()
+        ordered: List[str] = []
+        for v in values:
+            if not v or v in seen:
+                continue
+            seen.add(v)
+            ordered.append(v)
+        return ordered
+
+    clean_pending = _dedupe_keep_order([p for p in pending if p])
+    clean_manual = _dedupe_keep_order([m for m in manual_required or [] if m])
     payload = {
         "generated_at": datetime.now().isoformat(),
     }
@@ -2086,9 +2248,14 @@ def _flag_fund_flow_anomalies(market_payload: Dict[str, Any]) -> List[str]:
             item["manual_required"] = True
             flagged.append(key)
         else:
-            # 合规标注 MCP
-            if "mcp" in (item.get("source") or "").lower():
-                item["source"] = "MCP WebSearch实时获取"
+            # 兼容历史 MCP 标注，统一归一到当前 Tavily 口径
+            source_text = str(item.get("source") or "").lower()
+            if "mcp" in source_text:
+                item["source"] = "tavily+deepseek"
+                note = (item.get("note") or "").strip()
+                compat_note = "legacy_source_normalized:mcp->tavily"
+                if compat_note not in note:
+                    item["note"] = (note + f" {compat_note}").strip()
     return flagged
 
 
@@ -2173,6 +2340,10 @@ def _validate_general_extraction(
             for s in (snippets or [])
         ]
     ).lower()
+
+    if val is None:
+        manual = True
+        note_append = (note_append + " no_value").strip()
 
     # unit 校验（允许点/points 互通）
     if unit_hint:
@@ -2337,7 +2508,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="增强后输出路径；默认覆盖输入")
     parser.add_argument("--phase", choices=["essential", "assets", "all"], default="all")
     parser.add_argument("--search-backend", choices=["tavily"], default="tavily")
-    parser.add_argument("--fund-flow-backend", choices=["tavily", "hybrid", "mcp"], default="tavily")
+    parser.add_argument("--fund-flow-backend", choices=["tavily"], default="tavily")
     parser.add_argument("--task-file", default="reports/search_tasks_stage2.jsonl", help="输出任务文件路径")
     parser.add_argument("--task-log", default="logs/stage_task_log.jsonl")
     parser.add_argument("--websearch-results", default="reports/websearch_results_auto.json", help="搜索抽取结果保存路径")
@@ -2425,7 +2596,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fast-mode",
         action="store_true",
-        help="极速模式：regex 抽取、并发放大、短超时、队列不重试，资金流改 mcp，禁用 extract 以加速",
+        help="极速模式：regex 抽取、并发放大、短超时、队列不重试，并禁用 extract 以加速",
     )
     return parser.parse_args()
 
@@ -2527,9 +2698,6 @@ async def main() -> int:
         args.llm_hard_timeout = 8.0 if args.llm_hard_timeout is None or args.llm_hard_timeout == 0 else min(
             args.llm_hard_timeout, 8.0
         )
-        if args.fund_flow_backend == "tavily":
-            logger.info("[Stage2] Fast mode: fund_flow_backend forced to mcp to skip realtime fund-flow search.")
-            args.fund_flow_backend = "mcp"
         args.disable_extract = True
 
     market_payload = _load_json(market_path)
@@ -2563,6 +2731,16 @@ async def main() -> int:
     if task_ids_filter or indicators_filter:
         tasks = _filter_tasks(tasks, task_ids_filter, indicators_filter)
         logger.info(f"[Stage2] 过滤后剩余 {len(tasks)} 条任务")
+    # 兼容历史 task_file：统一修正 fund_flow_backend 为 tavily
+    normalized_legacy_backend = 0
+    for task in tasks:
+        b = str(task.get("fund_flow_backend") or "").lower()
+        if b and b != "tavily":
+            task["fund_flow_backend"] = "tavily"
+            normalized_legacy_backend += 1
+    if normalized_legacy_backend:
+        logger.warning(f"[Stage2] 已将 {normalized_legacy_backend} 条历史任务的 fund_flow_backend 统一为 tavily")
+    _warn_disable_extract_on_critical_tasks(tasks, args.disable_extract)
     if not tasks:
         logger.info("[Stage2] 无待执行任务，提前退出。")
         _dump_json([], websearch_results_path)
@@ -2628,7 +2806,7 @@ async def main() -> int:
                 args.cache_ttl,
                 max_retries=args.max_retries,
                 fund_flow_backend=args.fund_flow_backend,
-                forex_backend="hybrid",
+                forex_backend="tavily",
                 lc_max_concurrency=args.lc_max_concurrency,
                 deepseek_timeout=args.lc_timeout,
                 llm_hard_timeout=args.llm_hard_timeout,
@@ -2644,7 +2822,7 @@ async def main() -> int:
                 args.cache_ttl,
                 max_retries=args.max_retries,
                 fund_flow_backend=args.fund_flow_backend,
-                forex_backend="hybrid",
+                forex_backend="tavily",
                 deepseek_timeout=args.deepseek_timeout,
                 extraction_backend=args.extraction_backend,
                 deepseek_max_concurrency=args.deepseek_max_concurrency,
@@ -2664,7 +2842,7 @@ async def main() -> int:
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
     # Second WebSearch pass for fund_flow anomalies (zero/None)
-    if flagged_fund_flow and args.execute_search and args.fund_flow_backend in {"tavily", "hybrid"}:
+    if flagged_fund_flow and args.execute_search and args.fund_flow_backend == "tavily":
         retry_tasks = [t for t in tasks if t.get("indicator_key") in flagged_fund_flow]
         if retry_tasks:
             logger.info(f"[Stage2] fund_flow anomalies detected, retrying: {flagged_fund_flow}")
@@ -2678,7 +2856,7 @@ async def main() -> int:
                 args.cache_ttl,
                 max_retries=0,
                 fund_flow_backend=args.fund_flow_backend,
-                forex_backend="hybrid",
+                forex_backend="tavily",
                 deepseek_timeout=args.deepseek_timeout,
                 extraction_backend="regex",
                 deepseek_max_concurrency=1,
@@ -2726,7 +2904,9 @@ async def main() -> int:
 
     _dump_json(market_payload, output_path, backup=True)
 
-    pending_manual = [f["indicator_key"] for f in failures if f.get("manual_required")]
+    pending_manual = list(
+        dict.fromkeys([f["indicator_key"] for f in failures if f.get("manual_required") and f.get("indicator_key")])
+    )
     success_keys = {c["indicator_key"] for c in completed_tasks}
     failure_keys = {f["indicator_key"] for f in failures}
     pending_keys = [

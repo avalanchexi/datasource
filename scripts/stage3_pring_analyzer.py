@@ -59,6 +59,52 @@ def _flatten_missing_items(market_payload: Dict[str, Any]) -> List[str]:
     return unique
 
 
+def _collect_estimated_items(market_payload: Dict[str, Any]) -> List[str]:
+    """收集当前值存在但被标记为 is_estimated=True 的指标。"""
+    estimated: List[str] = []
+
+    for key, entry in (market_payload.get("macro_indicators") or {}).items():
+        if isinstance(entry, dict) and entry.get("current_value") not in (None, "N/A") and entry.get("is_estimated"):
+            estimated.append(f"macro_indicators.{key}")
+    for key, entry in (market_payload.get("monetary_policy") or {}).items():
+        if isinstance(entry, dict) and entry.get("current_value") not in (None, "N/A") and entry.get("is_estimated"):
+            estimated.append(f"monetary_policy.{key}")
+    for item in market_payload.get("bonds", []) or []:
+        if isinstance(item, dict) and item.get("current_yield") not in (None, 0, "N/A") and item.get("is_estimated"):
+            estimated.append(f"bonds.{item.get('symbol')}")
+    for item in market_payload.get("forex", []) or []:
+        if isinstance(item, dict) and item.get("current_rate") not in (None, 0, "N/A") and item.get("is_estimated"):
+            estimated.append(f"forex.{item.get('pair')}")
+    for item in market_payload.get("commodities", []) or []:
+        if isinstance(item, dict) and item.get("current_price") not in (None, 0, "N/A") and item.get("is_estimated"):
+            estimated.append(f"commodities.{item.get('symbol')}")
+    for item in market_payload.get("stock_indices", []) or []:
+        if isinstance(item, dict) and item.get("current_price") not in (None, 0, "N/A") and item.get("is_estimated"):
+            estimated.append(f"stock_indices.{item.get('symbol')}")
+
+    return estimated
+
+
+def _collect_compare_gaps(market_payload: Dict[str, Any]) -> List[str]:
+    """收集“当前值存在但对比值未补齐”的指标。"""
+    gaps: List[str] = []
+    for key, entry in (market_payload.get("macro_indicators") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("current_value") in (None, "N/A"):
+            continue
+        if entry.get("previous_value") is None or entry.get("change_rate") is None:
+            gaps.append(f"macro_indicators.{key}")
+    for key, entry in (market_payload.get("monetary_policy") or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("current_value") in (None, "N/A"):
+            continue
+        if entry.get("change_from_120d") is None:
+            gaps.append(f"monetary_policy.{key}")
+    return gaps
+
+
 def _require_data_completeness(
     market_payload: Dict[str, Any],
     min_completeness: float,
@@ -69,6 +115,23 @@ def _require_data_completeness(
     metadata = market_payload.get("metadata", {})
     completeness = metadata.get("data_completeness", 0.0) or 0.0
     missing_items = _flatten_missing_items(market_payload)
+    compare_gaps = _collect_compare_gaps(market_payload)
+    estimated_items = _collect_estimated_items(market_payload)
+
+    if estimated_items and not allow_estimated:
+        raise RuntimeError(
+            "检测到估算值（is_estimated=True），按当前策略禁止进入 Stage3。"
+            f"\n估算项: {', '.join(estimated_items)}"
+            "\n请通过 Stage2/Stage2.5 获取真实值后重试。"
+        )
+
+    if compare_gaps:
+        raise RuntimeError(
+            "检测到“当前值已填但对比值未补齐”的指标，禁止进入 Stage3。"
+            f"\n缺口: {', '.join(compare_gaps)}"
+            "\n请通过 Stage2/Stage2.5 补齐 previous_value/change 后重试。"
+        )
+
     # 若允许估算值，自动忽略那些已经被估算填充但仍留在 missing 列表中的条目
     if allow_estimated:
         def _has_non_null_value(key: str) -> bool:
@@ -136,7 +199,7 @@ def _require_data_completeness(
             "  PYTHONPATH=. python scripts/stage2_unified_enhancer.py "
             "--market-data data/market_data.json "
             "--output data/market_data_stage2.json "
-            "--execute-search --fund-flow-backend hybrid "
+            "--execute-search --fund-flow-backend tavily "
             "--cache-backend sqlite --cache-path reports/tavily_cache.sqlite "
             "--websearch-results reports/websearch_results_auto.json "
             "--gap-monitor reports/gap_monitor.json"

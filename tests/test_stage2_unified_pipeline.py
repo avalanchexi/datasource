@@ -39,7 +39,7 @@ def test_unified_pipeline_write_back(tmp_path: Path):
     market_path = tmp_path / "market.json"
     market_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
-    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl", fund_flow_backend="hybrid")
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl", fund_flow_backend="tavily")
     tasks = planner.build_tasks(payload)
 
     completed, failures, web_results = asyncio.run(
