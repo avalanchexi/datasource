@@ -16,7 +16,14 @@ class DummyClient:
 
 
 class DummyExtractor:
-    async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None):
+    async def extract(
+        self,
+        snippets,
+        indicator,
+        unit_hint=None,
+        issuer_hint=None,
+        request_timeout=None,
+    ):
         return {
             "value": 2.3,
             "unit": unit_hint or "%",
@@ -24,6 +31,8 @@ class DummyExtractor:
             "confidence": 0.9,
             "note": "dummy",
             "issuer_match": True,
+            "manual_required": False,
+            "manual_reason": None,
         }
 
 
@@ -34,7 +43,7 @@ def test_unified_pipeline_write_back(tmp_path: Path):
         "monetary_policy": {"m1": {"policy_name": "M1", "current_value": 5.0, "unit": "%", "date": "", "source": ""}, "m2": {"policy_name": "M2", "current_value": 7.0, "unit": "%", "date": "", "source": ""}},
         "commodities": [{"daily_change": 1.0}],
         "missing_items": ["cpi"],
-        "fund_flow": {"northbound": {"recent_5d": 0, "total_120d": None, "source": "MCP raw"}},
+        "fund_flow": {"northbound": {"recent_5d": 0, "total_120d": None, "source": "legacy_raw"}},
     }
     market_path = tmp_path / "market.json"
     market_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")

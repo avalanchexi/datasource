@@ -592,12 +592,12 @@ class MarketDataCollector:
     async def collect_commodities(self) -> List[CommodityData]:
         """收集商品数据
 
-        注意: 此方法返回占位符,实际数据需要通过MCP WebSearch/WebFetch获取
+        注意: 此方法返回占位符，实际数据需要通过 Stage2(Tavily) 或 Stage2.5 注入补齐
         """
         print("[2/5] 收集商品数据...")
 
         commodity_list = []
-        print("  [INFO] Stage1已禁用Yahoo/Investing fallback，商品行情需由Stage2/MCP补充")
+        print("  [INFO] Stage1已禁用Yahoo/Investing fallback，商品行情需由Stage2(Tavily)/Stage2.5补充")
 
         for config in self.commodity_configs:
             symbol = config['symbol']
@@ -609,9 +609,9 @@ class MarketDataCollector:
                 'commodities',
                 symbol,
                 name,
-                'Stage1禁用Yahoo/Investing fallback，需MCP补充实时行情',
+                'Stage1禁用Yahoo/Investing fallback，需Stage2/Stage2.5补充实时行情',
                 search_query=config.get('search_query'),
-                source_hint='MCP WebSearch'
+                source_hint='WebSearch/Tavily'
             )
             commodity_data = CommodityData(
                 symbol=symbol,
@@ -620,8 +620,8 @@ class MarketDataCollector:
                 unit=unit,
                 daily_change=None,
                 ytd_change=None,
-                trend="待MCP获取",
-                source="MCP WebFetch待获取",
+                trend="待WebSearch补充",
+                source="待WebSearch补充",
                 timestamp=self.end_date
             )
 
@@ -640,7 +640,7 @@ class MarketDataCollector:
             {'symbol': 'DXY', 'pair': 'DXY', 'name': 'DXY美元指数'}
         ]
 
-        print("  [INFO] Stage1尝试TuShare fx_daily，若无数据则交由 Stage2/MCP")
+        print("  [INFO] Stage1尝试TuShare fx_daily，若无数据则交由 Stage2(Tavily)/Stage2.5")
         for config in forex_configs:
             fx_entry = await self._fetch_fx_from_tushare(config['symbol'], config['name'])
             if fx_entry:
@@ -656,16 +656,16 @@ class MarketDataCollector:
                     daily_change=0.0,
                     change_120d=0.0,
                     trend="待获取",
-                    source="MCP WebSearch待获取",
+                    source="待WebSearch补充",
                 )
             )
             self._record_missing(
                 'forex',
                 config['symbol'],
                 config['name'],
-                'TuShare fx_daily 返回空，需MCP/Tavily补充',
+                'TuShare fx_daily 返回空，需Stage2(Tavily)/Stage2.5补充',
                 search_query=f"{config['name']} 汇率 最新 数据",
-                source_hint='MCP WebSearch',
+                source_hint='WebSearch/Tavily',
                 preferred_source='tushare',
                 attempted_tushare=True
             )
@@ -675,7 +675,7 @@ class MarketDataCollector:
     async def collect_bonds(self) -> List[BondYieldData]:
         """收集债券收益率数据"""
         print("[4/5] 收集债券收益率数据...")
-        print("  [INFO] Stage1尝试 TuShare/中债接口，失败再交 Stage2/MCP")
+        print("  [INFO] Stage1尝试 TuShare/中债接口，失败再交 Stage2(Tavily)/Stage2.5")
 
         bond_list = []
         bond_configs = [
@@ -694,9 +694,9 @@ class MarketDataCollector:
                 'bonds',
                 config['symbol'],
                 config['name'],
-                'TuShare/中债接口无数据，需MCP WebSearch补充',
+                'TuShare/中债接口无数据，需WebSearch/Tavily补充',
                 search_query=f"{config['name']} 收益率 最新",
-                source_hint='MCP WebSearch',
+                source_hint='WebSearch/Tavily',
                 preferred_source='tushare',
                 attempted_tushare=True
             )
@@ -706,8 +706,8 @@ class MarketDataCollector:
                 current_yield=None,
                 change_5d_bp=None,
                 change_120d_bp=None,
-                trend="待MCP获取",
-                source="MCP WebFetch待获取",
+                trend="待WebSearch补充",
+                source="待WebSearch补充",
                 is_estimated=True
             )
             bond_list.append(bond)
@@ -717,10 +717,10 @@ class MarketDataCollector:
     async def collect_fund_flow(self) -> Dict[str, FundFlowData]:
         """收集资金流向数据
 
-        注意: 资金流向数据需要通过MCP WebSearch获取
+        注意: 资金流向缺口需要通过 Stage2(Tavily) 或 Stage2.5 获取
         """
         print("[5/5] 收集资金流向数据...")
-        print("  [INFO] 资金流向数据优先使用TuShare/交易所数据，缺口再由MCP WebSearch补充")
+        print("  [INFO] 资金流向数据优先使用TuShare/交易所数据，缺口再由Stage2(Tavily)/Stage2.5补充")
 
         fund_flow_dict: Dict[str, FundFlowData] = {}
         pending_missing: List[Dict[str, str]] = []
@@ -731,35 +731,50 @@ class MarketDataCollector:
                 recent_5d=None,
                 total_120d=None,
                 trend='待获取',
-                source='MCP WebSearch待获取',
-                note='需要MCP WebSearch实时获取'
+                source='待WebSearch补充',
+                note='需要WebSearch/Tavily实时获取'
             )
             pending_missing.append(flow)
 
-        # 0) TuShare 沪深港通北向/南向资金（最近开市日）
-        nb_val, sb_val = await self._fetch_hsgt_from_tushare()
-        if nb_val is not None:
+        # 0) TuShare 沪深港通北向/南向资金（近5日/120日窗口）
+        hsgt_metrics = await self._fetch_hsgt_from_tushare()
+        nb_recent = hsgt_metrics.get("north_recent_5d")
+        nb_total = hsgt_metrics.get("north_total_120d")
+        sb_recent = hsgt_metrics.get("south_recent_5d")
+        sb_total = hsgt_metrics.get("south_total_120d")
+        as_of_trade_date = hsgt_metrics.get("as_of_trade_date")
+        full_120_window = bool(hsgt_metrics.get("full_120_window"))
+        note_suffix = f"截至{as_of_trade_date}" if as_of_trade_date else "窗口日期未知"
+
+        if nb_recent is not None:
             fund_flow_dict['northbound'] = FundFlowData(
                 type='northbound',
-                recent_5d=nb_val,
-                total_120d=None,
-                trend='流入' if nb_val > 0 else '流出' if nb_val < 0 else '未知',
+                recent_5d=round(float(nb_recent), 2),
+                total_120d=round(float(nb_total), 2) if nb_total is not None else None,
+                trend='流入' if nb_recent > 0 else '流出' if nb_recent < 0 else '未知',
                 source='TuShare moneyflow_hsgt',
-                note='最新交易日北向资金（十亿元）',
+                note=f'北向资金近5日/120日累计（亿元，原始字段万元）{note_suffix}',
             )
-            pending_missing = [item for item in pending_missing if item['key'] != 'northbound']
-            print("  [OK] 北向资金已通过 TuShare moneyflow_hsgt 获取")
-        if sb_val is not None:
+            if nb_total is not None and full_120_window:
+                pending_missing = [item for item in pending_missing if item['key'] != 'northbound']
+                print("  [OK] 北向资金已通过 TuShare moneyflow_hsgt 获取近5日/120日累计")
+            else:
+                print("  [WARN] 北向资金仅获取到部分窗口，仍保留缺口供 Stage2/Stage2.5 补齐")
+
+        if sb_recent is not None:
             fund_flow_dict['southbound'] = FundFlowData(
                 type='southbound',
-                recent_5d=sb_val,
-                total_120d=None,
-                trend='流入' if sb_val > 0 else '流出' if sb_val < 0 else '未知',
+                recent_5d=round(float(sb_recent), 2),
+                total_120d=round(float(sb_total), 2) if sb_total is not None else None,
+                trend='流入' if sb_recent > 0 else '流出' if sb_recent < 0 else '未知',
                 source='TuShare moneyflow_hsgt',
-                note='最新交易日南向资金（十亿元）',
+                note=f'南向资金近5日/120日累计（亿元，原始字段万元）{note_suffix}',
             )
-            pending_missing = [item for item in pending_missing if item['key'] != 'southbound']
-            print("  [OK] 南向资金已通过 TuShare moneyflow_hsgt 获取")
+            if sb_total is not None and full_120_window:
+                pending_missing = [item for item in pending_missing if item['key'] != 'southbound']
+                print("  [OK] 南向资金已通过 TuShare moneyflow_hsgt 获取近5日/120日累计")
+            else:
+                print("  [WARN] 南向资金仅获取到部分窗口，仍保留缺口供 Stage2/Stage2.5 补齐")
 
         # 1) TuShare 融资融券余额 -> fund_flow.margin
         margin_entry = await self._fetch_margin_flow_from_tushare()
@@ -768,7 +783,7 @@ class MarketDataCollector:
             pending_missing = [item for item in pending_missing if item['key'] != 'margin']
             print("  [OK] 融资融券余额已通过TuShare margin转换为近5日/120日变化")
         else:
-            print("  [WARN] TuShare margin暂未返回数据，融资融券仍需MCP补充")
+            print("  [WARN] TuShare margin暂未返回数据，融资融券仍需Stage2/Stage2.5补充")
 
         # 2) 日度成交统计（daily_info）估算ETF热度
         etf_entry = await self._fetch_etf_flow_proxy()
@@ -781,12 +796,12 @@ class MarketDataCollector:
 
         # 其余类型仍需 WebSearch
         for flow in pending_missing:
-            print(f"  [{flow['name']}] 占位符已创建,需MCP补充")
+            print(f"  [{flow['name']}] 占位符已创建,需Stage2/Stage2.5补充")
             self._record_missing(
                 'fund_flow',
                 flow['key'],
                 flow['name'],
-                'TuShare/公共接口不可用，需MCP WebSearch',
+                'TuShare/公共接口不可用，需Stage2(Tavily)/Stage2.5',
                 search_query=flow['search_query'],
                 source_hint='eastmoney.com',
                 attempted_tushare=flow['key'] in {'northbound', 'southbound'}
@@ -794,36 +809,86 @@ class MarketDataCollector:
 
         return fund_flow_dict
 
-    async def _fetch_hsgt_from_tushare(self) -> (Optional[float], Optional[float]):
-        """尝试获取最近开市日的北向/南向资金（十亿元）"""
+    async def _fetch_hsgt_from_tushare(self) -> Dict[str, Any]:
+        """获取沪深港通北向/南向近5日与近120日累计（单位亿元）。"""
+        def _empty_result() -> Dict[str, Any]:
+            return {
+                "north_recent_5d": None,
+                "north_total_120d": None,
+                "south_recent_5d": None,
+                "south_total_120d": None,
+                "as_of_trade_date": None,
+                "full_5_window": False,
+                "full_120_window": False,
+            }
+
         try:
             import tushare as ts  # 局部导入，避免环境缺少时报错
             token = os.getenv("TUSHARE_TOKEN")
             pro = ts.pro_api(token) if token else ts.pro_api()
-            open_dates = self._get_recent_open_dates(count=5)
+            open_dates = self._get_recent_open_dates(count=120)
+            if not open_dates:
+                return _empty_result()
+
+            # TuShare moneyflow_hsgt 原始字段通常为“万元”，统一折算为“亿元”
+            UNIT_DIVISOR = 10000.0
+            start_date = open_dates[0]
+            end_date = open_dates[-1]
             last_error = None
-            for trade_date in open_dates[::-1]:  # 从最近往前最多 5 个开市日
-                for attempt in range(3):
+            df = None
+            for _ in range(3):
+                try:
+                    df = pro.moneyflow_hsgt(start_date=start_date, end_date=end_date)
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+                    await asyncio.sleep(1)
+            if df is None or df.empty:
+                if last_error:
+                    print(f"  [WARN] moneyflow_hsgt retries exhausted: {last_error}")
+                return _empty_result()
+
+            date_col = "trade_date" if "trade_date" in df.columns else ("cal_date" if "cal_date" in df.columns else None)
+            if date_col is None:
+                return _empty_result()
+
+            work = df.copy()
+            work[date_col] = work[date_col].astype(str)
+            work = work.drop_duplicates(subset=[date_col], keep="first")
+            work = work.sort_values(date_col)
+
+            def _to_yi(series_name: str) -> List[float]:
+                if series_name not in work.columns:
+                    return []
+                values: List[float] = []
+                for raw in work[series_name].tolist():
+                    if raw is None:
+                        continue
                     try:
-                        df = pro.moneyflow_hsgt(trade_date=trade_date)
-                        if df is None or df.empty:
-                            break
-                        north = df.iloc[0].get('north_money')
-                        south = df.iloc[0].get('south_money')
-                        nb_val = float(north) if north is not None else None  # TuShare 单位：亿元
-                        sb_val = float(south) if south is not None else None
-                        if nb_val is not None or sb_val is not None:
-                            return nb_val, sb_val
-                        break
-                    except Exception as exc:  # noqa: BLE001
-                        last_error = exc
-                        await asyncio.sleep(1)
-                # 尝试完此交易日继续往前
-            if last_error:
-                print(f"  [WARN] moneyflow_hsgt retries exhausted: {last_error}")
-            return None, None
+                        values.append(float(raw) / UNIT_DIVISOR)
+                    except Exception:
+                        continue
+                return values
+
+            north_values = _to_yi("north_money")
+            south_values = _to_yi("south_money")
+
+            north_recent = sum(north_values[-5:]) if north_values else None
+            north_total = sum(north_values[-120:]) if north_values else None
+            south_recent = sum(south_values[-5:]) if south_values else None
+            south_total = sum(south_values[-120:]) if south_values else None
+
+            return {
+                "north_recent_5d": north_recent,
+                "north_total_120d": north_total,
+                "south_recent_5d": south_recent,
+                "south_total_120d": south_total,
+                "as_of_trade_date": str(work[date_col].iloc[-1]) if not work.empty else None,
+                "full_5_window": len(work) >= 5,
+                "full_120_window": len(work) >= 120,
+            }
         except Exception:
-            return None, None
+            return _empty_result()
 
     async def _fetch_fx_from_tushare(self, symbol: str, name: str) -> Optional[ForexData]:
         """尝试用 TuShare fx_daily 获取在岸/离岸汇率"""
@@ -899,9 +964,10 @@ class MarketDataCollector:
             token = os.getenv("TUSHARE_TOKEN")
             pro = ts.pro_api(token) if token else ts.pro_api()
             end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
+            lookback_days = max(30, int(count * 3))
             cal = pro.trade_cal(
                 exchange='',
-                start_date=(end_dt - timedelta(days=30)).strftime("%Y%m%d"),
+                start_date=(end_dt - timedelta(days=lookback_days)).strftime("%Y%m%d"),
                 end_date=end_dt.strftime("%Y%m%d")
             )
             open_dates = [str(d) for d in cal[cal.is_open == 1].cal_date]
@@ -960,11 +1026,11 @@ class MarketDataCollector:
         收集宏观经济指标 - Pring第一层(库存周期)必需数据
 
         数据项: PPI, PMI, 工业增加值, BDI, CPI
-        数据来源: 100% MCP WebSearch (国家统计局、央行等权威来源)
+        数据来源: TuShare + Stage2(Tavily)/Stage2.5
         """
         print("[6/8] 收集宏观经济指标...")
         print("  [INFO] 宏观指标用于Pring第一层库存周期分析")
-        print("  [INFO] 优先使用TuShare (PPI/CPI/PMI/GDP)，BDI与工业营收缺口由MCP WebSearch补齐")
+        print("  [INFO] 优先使用TuShare (PPI/CPI/PMI/GDP)，BDI与工业营收缺口由Stage2(Tavily)/Stage2.5补齐")
 
         macro_dict = {}
         indicators = self.macro_indicator_config
@@ -976,12 +1042,12 @@ class MarketDataCollector:
             if preferred_source == 'tushare':
                 print(f"    [INFO] 优先使用TuShare: {indicator['search_query']}")
             else:
-                print(f"    [INFO] 需要MCP WebSearch: {indicator['search_query']}")
+                print(f"    [INFO] 需要Stage2(Tavily)/Stage2.5: {indicator['search_query']}")
 
             placeholder_source = (
                 f'待TuShare获取({indicator["source_hint"]})'
                 if preferred_source == 'tushare'
-                else f'待MCP WebSearch获取({indicator["source_hint"]})'
+                else f'待WebSearch补充({indicator["source_hint"]})'
             )
 
             macro_dict[indicator['key']] = MacroIndicatorData(
@@ -997,7 +1063,7 @@ class MarketDataCollector:
             missing_reason = (
                 'TuShare暂未返回数据，需后续补录'
                 if preferred_source == 'tushare'
-                else 'TuShare/本地无数据，需MCP WebSearch'
+                else 'TuShare/本地无数据，需Stage2(Tavily)/Stage2.5'
             )
             if preferred_source == 'websearch':
                 self._record_missing(
@@ -1053,11 +1119,11 @@ class MarketDataCollector:
         收集货币政策数据 - Pring第二层(货币周期)必需数据
 
         数据项: 存准率、DR007、7天逆回购、MLF、TSF、M0/M1/M2
-        数据来源: 政策利率优先MCP WebSearch，DR007/货币供应/TSF优先TuShare
+        数据来源: 政策利率优先Stage2(Tavily)/Stage2.5，DR007/货币供应/TSF优先TuShare
         """
         print("[7/8] 收集货币政策数据...")
         print("  [INFO] 货币政策用于Pring第二层货币周期分析")
-        print("  [INFO] 政策利率走MCP WebSearch，DR007与货币供应数据优先TuShare cn_m/sf_month")
+        print("  [INFO] 政策利率走Stage2(Tavily)/Stage2.5，DR007与货币供应数据优先TuShare cn_m/sf_month")
 
         tushare_payload = await self._fetch_monetary_policy_from_tushare()
         monetary_dict: Dict[str, MonetaryPolicyData] = {}
@@ -1068,7 +1134,7 @@ class MarketDataCollector:
             print(f"    [INFO] 数据源指引: {policy.get('search_query')} ({policy.get('preferred_source', 'websearch')})")
             preferred_source = policy.get('preferred_source', 'websearch')
             placeholder_source = (
-                f'待MCP WebSearch获取({policy["source_hint"]})'
+                f'待WebSearch补充({policy["source_hint"]})'
                 if preferred_source == 'websearch'
                 else f'待TuShare获取({policy["source_hint"]})'
             )
@@ -1087,7 +1153,7 @@ class MarketDataCollector:
                     'monetary_policy',
                     policy['key'],
                     policy['name'],
-                    'TuShare/本地无数据，需MCP WebSearch',
+                    'TuShare/本地无数据，需Stage2(Tavily)/Stage2.5',
                     search_query=policy.get('search_query'),
                     source_hint=policy.get('source_hint'),
                     preferred_source=preferred_source
@@ -1878,7 +1944,7 @@ class MarketDataCollector:
 
         # 商品 (6个)
         total += 6
-        complete += sum(1 for c in commodities if c.source != "MCP WebFetch待获取")
+        complete += sum(1 for c in commodities if c.source != "待WebSearch补充")
 
         # 汇率 (3个)
         total += 3
@@ -1890,7 +1956,7 @@ class MarketDataCollector:
 
         # 资金流向 (4个)
         total += 4
-        complete += sum(1 for f in fund_flow.values() if f.source != "MCP WebSearch待获取")
+        complete += sum(1 for f in fund_flow.values() if f.source != "待WebSearch补充")
 
         return complete / total if total > 0 else 0.0
 

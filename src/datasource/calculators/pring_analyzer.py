@@ -861,7 +861,7 @@ class PringAnalyzer:
         )
         if highlights:
             return prefix + "关键驱动：" + "；".join(highlights)
-        return prefix + "指标数据待MCP补全。"
+        return prefix + "指标数据待WebSearch补全。"
 
     def _build_monetary_summary_text(self, details: Dict[str, str], stage: str, equity_bias: str, bond_bias: str) -> str:
         prefix = f"{stage}，权益偏向{equity_bias}，债券偏向{bond_bias}。"
@@ -1154,13 +1154,13 @@ class PringAnalyzer:
         """
         try:
             # 使用DataSourceManager获取数据（替代直接AKShare调用）
-            # 注意：此方法可能返回None，触发MCP WebSearch补充
+            # 注意：此方法可能返回None，触发 Stage2/Stage2.5 WebSearch 补充
             print(f"    [V4.3] 商品{symbol}数据获取: 优先DataSourceManager，失败则需WebSearch补充")
 
             # 商品数据目前通过DataSourceManager的InternationalFinance适配器获取
             # 如果获取失败，返回None触发WebSearch占位符
             # TODO: 实现DataSourceManager的商品数据接口
-            print(f"    [INFO] 商品{symbol}数据需要通过MCP WebSearch获取或使用InternationalFinance接口")
+            print(f"    [INFO] 商品{symbol}数据需要通过Stage2/Stage2.5 WebSearch补充或使用InternationalFinance接口")
             return None
 
         except Exception as e:

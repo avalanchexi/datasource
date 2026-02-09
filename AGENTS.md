@@ -158,7 +158,31 @@
   ```
   - 商品行情不走 Yahoo/Investing 兜底；北向/南向/ETF 资金流写占位符，后续必补。
 
-- **Stage2** Tavily 增强（推荐速度优先配置；同日只跑 1 次 Tavily，失败转 Stage2.5 补数）：
+- **Stage2** Tavily 增强（首次运行推荐精度优先；同日只跑 1 次 Tavily，失败转 Stage2.5 补数）：
+  ```bash
+  PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
+    --market-data data/${DATE_NH}_market_data.json \
+    --output data/${DATE_NH}_market_data_stage2.json \
+    --phase all --execute-search \
+    --fund-flow-backend tavily \
+    --extraction-backend deepseek \
+    --deepseek-timeout 12 \
+    --llm-hard-timeout 12 \
+    --deepseek-max-concurrency 1 \
+    --queue-retry-limit 0 \
+    --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
+    --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
+    --log-output logs/stage2_unified_log_${DATE_NH}.json \
+    --gap-monitor reports/gap_monitor_${DATE_NH}.json
+  ```
+  - 首次跑当日数据，默认启用 `deepseek` 抽取，避免出现“搜索命中但提取为 0”。
+  - 若代理导致 TLS/证书报错，优先直连：在命令前加 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`。
+  - 仅在“补缺重试”场景使用 `--extraction-backend regex --disable-extract`。
+  - Tavily extract 422 频发时：系统会自动回退到 DeepSeek 从原始 snippets 抽取，并在 Stage2 Summary 计数 `extract_fallback_to_deepseek`；如仍不稳，改用 `--disable-extract` 或收紧 `--extract-topk 1` 以避免 422 软拒绝；当日不要重复跑 Stage2，缺口改用 Stage2.5 `_manual.json` 注入。
+  - LangChain 默认禁用；如需实验，必须显式传 `--allow-langchain`（自备依赖）。
+  - 仅重试资金流：加 `--tasks northbound,southbound,etf`；失败落 `gap_monitor`，转 Stage2.5。
+
+- **Stage2 快速补缺命令（仅用于重试缺口，不用于首次全量）**：
   ```bash
   PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
     --market-data data/${DATE_NH}_market_data.json \
@@ -168,31 +192,6 @@
     --extraction-backend regex \
     --disable-extract \
     --deepseek-timeout 8 \
-    --llm-hard-timeout 10 \
-    --deepseek-max-concurrency 1 \
-    --queue-retry-limit 0 \
-    --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
-    --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
-    --log-output logs/stage2_unified_log_${DATE_NH}.json \
-    --gap-monitor reports/gap_monitor_${DATE_NH}.json
-  ```
-  - 使用 `--extraction-backend regex --disable-extract` 跳过 DeepSeek/Tavily extract，30–60 秒完成。
-  - 若代理导致 TLS/证书报错，优先直连：在命令前加 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`；需要高精度时去掉 `--disable-extract` 让 DeepSeek 抽取生效。
-  - 若需更高精度：改为 `--extraction-backend deepseek --deepseek-model deepseek-chat --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`；langchain 默认禁用，如需实验必须加 `--allow-langchain`。
-  - Tavily extract 422 频发时：系统会自动回退到 DeepSeek 从原始 snippets 抽取，并在 Stage2 Summary 计数 `extract_fallback_to_deepseek`；如仍不稳，改用 `--disable-extract` 或收紧 `--extract-topk 1` 以避免 422 软拒绝；当日不要重复跑 Stage2，缺口改用 Stage2.5 `_manual.json` 注入。
-  - LangChain 默认禁用；如需实验，必须显式传 `--allow-langchain`（自备依赖）。
-  - 仅重试资金流：加 `--tasks northbound,southbound,etf`；失败落 `gap_monitor`，转 Stage2.5。
-
-- **Stage2 优化命令（避免 Tavily extract 422，强制 DeepSeek 解析 snippets；同日只跑一次 Tavily）**：
-  ```bash
-  PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
-    --market-data data/${DATE_NH}_market_data.json \
-    --output data/${DATE_NH}_market_data_stage2.json \
-    --phase all --execute-search \
-    --fund-flow-backend tavily \
-    --extraction-backend deepseek \
-    --disable-extract \
-    --deepseek-timeout 8 \
     --deepseek-max-concurrency 1 \
     --queue-retry-limit 0 \
     --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
@@ -200,7 +199,7 @@
     --log-output logs/stage2_unified_log_${DATE_NH}_rerun.json \
     --gap-monitor reports/gap_monitor_${DATE_NH}_rerun.json
   ```
-  - 适用：Tavily extract 多次 422 或需快速验证搜索相关性；禁用 Tavily extract，直接用 DeepSeek/regex 处理 snippets。
+  - 适用：已跑过一次当日 Stage2，仅需按缺口快速重试（建议加 `--tasks`）。
   - 可选：如需更高并发可加 `--use-queue --queue-concurrency 3`；若只补资金流，加 `--tasks northbound,southbound,etf`。
 
 - **Stage2.5 WebSearch 手工注入（补缺口）**：
@@ -262,7 +261,7 @@
 - Script: `inject_websearch_data_test.py`.
 - Successful injection clears `metadata.missing_items` and top-level `missing_items` to prevent repeated blocking.
 - When real numbers filled for `stock_indices/forex/bonds/commodities/fund_flow`, gaps drop automatically.
-- Macro metrics missing `previous_value` are back-filled with `current_value - change_rate`; if no change_rate, fallback `previous_value=current_value` to reduce “N/A”.
+- Macro `change_rate` 口径统一为百分比（`(current-previous)/abs(previous)*100`）；仅当分母有效时自动回填，分母为 0 时标记 `reason=change_rate_pct_div_by_zero` 并进入质量阻断。
 
 ### Stage2.5 注入后完整度检查
 注入完成后执行，确保数据完整度 ≥80%：

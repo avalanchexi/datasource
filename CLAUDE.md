@@ -20,7 +20,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
 - **Exa 自动兜底**: 当 `EXA_API_KEY` 已配置时，Tavily 422/5xx/空结果会自动触发 Exa fallback
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
-- **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily) -> Stage2.5`，当前流程不使用 MCP 获取链路
+- **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily) -> Stage2.5`，当前流程不使用旧版外部补数链路
 
 ## Quick Start
 
@@ -35,10 +35,17 @@ python -c "from datasource import get_manager; print('OK')"
 
 # 预检（每次运行流水线前必跑）
 bash run_preflight.sh
-
-# 推荐统一入口（自动激活 venv/.env、清代理、设置 PYTHONPATH）
-bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
 ```
+
+### 推荐运行方式
+
+优先使用 `run_clean.sh` 包装器执行所有脚本（自动 activate venv、source .env、清代理、设 PYTHONPATH）：
+```bash
+bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
+bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
+```
+
+若不用包装器，需手动设置：`source .venv/bin/activate && source .env`，并在命令前加 `PYTHONPATH=./src`（Stage1/2）或 `PYTHONPATH=.`（Stage3/4）。代理干扰时前缀 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY`。
 
 ## Testing
 
@@ -69,8 +76,9 @@ PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
   --output data/${DATE_NH}_market_data_stage2.json \
   --phase all --execute-search \
   --fund-flow-backend tavily \
-  --extraction-backend regex \
-  --disable-extract \
+  --extraction-backend deepseek \
+  --deepseek-timeout 12 \
+  --llm-hard-timeout 12 \
   --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
   --websearch-results reports/websearch_results_${DATE_NH}_auto.json \
   --log-output logs/stage2_unified_log_${DATE_NH}.json \
@@ -82,7 +90,7 @@ python inject_websearch_data_test.py \
   reports/websearch_results_${DATE_NH}_manual.json \
   data/${DATE_NH}_market_data_complete.json
 
-# Stage 3: Pring 分析
+# Stage 3: Pring 分析（--allow-estimated 让 is_estimated=True 的数据参与评分）
 PYTHONPATH=. python scripts/stage3_pring_analyzer.py \
   --market-data data/${DATE_NH}_market_data_complete.json \
   --output data/${DATE_NH}_pring_result.json \
@@ -102,20 +110,21 @@ cat reports/gap_monitor_${DATE_NH}.json  # 应为空对象或无 pending/manual_
 
 | 模式 | 关键参数 |
 |------|----------|
-| **Fast (regex)** | `--extraction-backend regex --disable-extract` |
-| **Precision (DeepSeek)** | `--extraction-backend deepseek --deepseek-timeout 12` |
+| **Default (首次推荐)** | `--extraction-backend deepseek --deepseek-timeout 12` |
+| **Fast (仅补缺)** | `--extraction-backend regex --disable-extract` |
 | **重试指定缺口** | `--tasks USDCNY,northbound,etf` |
 | **资金流后端** | 固定 `--fund-flow-backend tavily`（当前唯一支持） |
 | **Exa fallback** | 自动（需 `EXA_API_KEY`），Tavily 422/5xx 时触发 |
 
 > 详细参数说明见 AGENTS.md "Stage2 Performance / Timeout Tips"
 
-### Stage2/Stage2.5 搜索优化要点（2026-02-09）
+### Stage2/Stage2.5 搜索优化要点
 
 - DeepSeek 抽取采用“强 schema + 证据约束”，最少输出：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund_flow 还需 `recent_5d/total_120d/trend`。
 - `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构、月份）。
 - Stage2.5 在接收 Stage2 `results` 结构时，会保留 `manual_required/manual_reason` 并生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`，按 `category:indicator_key` 去重）。
+- Stage2.5 中 `macro_indicators.change_rate` 统一为百分比口径（`(current-previous)/abs(previous)*100`），分母为 0 时保留缺口并标记质量阻断。
 
 ### 注入后完整度检查
 
@@ -145,12 +154,7 @@ src/datasource/
 ├── cache/           # 缓存 (memory_cache, sqlite_cache)
 ├── utils/           # 工具 (trend_history_store, quality_metrics, observability)
 ├── agents/          # AI 代理 (background_scan with config/templates)
-├── analyzers/       # 长期分析 (long_term_analyzer)
-├── comparators/     # 国际对比 (international_comparator)
-├── mappers/         # 行业轮动映射 (industry_rotation_mapper)
-├── trackers/        # 政策追踪 (policy_tracker)
-├── warnings/        # 系统性风险监控 (systemic_risk_monitor)
-├── mcp_adapter.py   # 历史兼容模块（不参与 Stage1~Stage3 主流程）
+├── analyzers/       # 长期分析、国际对比、行业轮动、政策追踪、风险监控等
 └── manager.py       # DataSourceManager 单例入口
 ```
 
@@ -199,6 +203,11 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 - 宏观: GDP, CPI, PPI, PMI, M0/M1/M2, 社融
 - 股指日线、两融余额
 
+**TuShare 直采口径注意**:
+- `USDCNH`: `fx_daily` 需用 `ts_code=USDCNH.FXCM`（`USDCNH` 常返回空）
+- `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；空则回退 `curve_type=1`
+- `CN10Y_CDB`: 无稳定 TuShare 口径，需 WebSearch/手工注入；利差估算保留 `is_estimated=True`
+
 **必须 WebSearch** (Stage2/2.5):
 - 外汇: DXY（美元指数）, USDCNY/USDCNH
 - 债券: CN10Y, CN10Y_CDB, US10Y
@@ -226,8 +235,12 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback
 | 代理/TLS 问题 | `env -u http_proxy -u https_proxy` 前缀 |
 | 完整度 <80% | 检查 macro/monetary null 字段，手动补数后重注入 |
 | 报告出现 N/A | 检查 `gap_monitor`，确保数值为可解析数字 |
+| SyntaxError 启动失败 | `python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py` |
+| 搜索相关性低 | 调整 `search_profiles.queries/exclude_domains`，或提高 `--low-score-threshold` |
 
 > 完整故障排除表见 AGENTS.md "Troubleshooting 速查表"
+
+**诊断工具**: `PYTHONPATH=./src python3 scripts/stage2_low_score_audit.py --date YYYY-MM-DD` 可审计低分仍进入抽取的指标。
 
 ## Output Files
 

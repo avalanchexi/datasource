@@ -2248,7 +2248,7 @@ def _flag_fund_flow_anomalies(market_payload: Dict[str, Any]) -> List[str]:
             item["manual_required"] = True
             flagged.append(key)
         else:
-            # 兼容历史 MCP 标注，统一归一到当前 Tavily 口径
+            # 兼容历史旧标注，统一归一到当前 Tavily 口径
             source_text = str(item.get("source") or "").lower()
             if "mcp" in source_text:
                 item["source"] = "tavily+deepseek"

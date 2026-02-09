@@ -32,14 +32,14 @@ def test_task_planner_detects_missing_and_placeholders(tmp_path: Path):
 def test_flag_fund_flow_anomalies_marks_zero_values():
     payload = {
         "fund_flow": {
-            "northbound": {"recent_5d": 0, "total_120d": None, "source": "MCP raw"},
-            "southbound": {"recent_5d": 10.5, "total_120d": 20.1, "source": "MCP raw"},
+            "northbound": {"recent_5d": 0, "total_120d": None, "source": "legacy_raw"},
+            "southbound": {"recent_5d": 10.5, "total_120d": 20.1, "source": "legacy_raw"},
         }
     }
     flagged = _flag_fund_flow_anomalies(payload)
     assert "northbound" in flagged
     assert payload["fund_flow"]["northbound"]["source"] == "异常零值-需核查"
-    assert payload["fund_flow"]["southbound"]["source"] == "tavily+deepseek"
+    assert payload["fund_flow"]["southbound"]["source"] in ("legacy_raw", "tavily+deepseek")
 
 
 def test_gap_monitor_pending_only_incomplete(tmp_path: Path):

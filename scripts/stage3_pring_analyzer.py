@@ -202,7 +202,7 @@ def _require_data_completeness(
             "--execute-search --fund-flow-backend tavily "
             "--cache-backend sqlite --cache-path reports/tavily_cache.sqlite "
             "--websearch-results reports/websearch_results_auto.json "
-            "--gap-monitor reports/gap_monitor.json"
+            "--gap-monitor reports/gap_monitor_<DATE_NH>.json"
         )
         msg_lines.append(
             "若仅需重注入 WebSearch: "
@@ -220,6 +220,38 @@ def _load_gap_monitor(gap_path: Path) -> Dict[str, List[str]]:
             return json.load(fp)
     except Exception:
         return {"pending_tasks": [], "manual_required": []}
+
+
+def _derive_date_compact(market_payload: Dict[str, Any]) -> Optional[str]:
+    metadata = market_payload.get("metadata", {}) if isinstance(market_payload, dict) else {}
+    date_val = metadata.get("date") or metadata.get("end_date") or metadata.get("start_date")
+    if not date_val:
+        return None
+    return str(date_val).replace("-", "")
+
+
+def _resolve_gap_monitor_path(
+    market_payload: Dict[str, Any],
+    explicit_gap_path: Optional[Path] = None,
+) -> Path:
+    """优先使用日期版 gap_monitor，避免误读默认 gap_monitor.json。"""
+    candidates: List[Path] = []
+    date_compact = _derive_date_compact(market_payload)
+    if date_compact:
+        candidates.append(Path("reports") / f"gap_monitor_{date_compact}.json")
+    if explicit_gap_path:
+        candidates.append(explicit_gap_path)
+    candidates.append(Path("reports/gap_monitor.json"))
+
+    seen = set()
+    for candidate in candidates:
+        normalized = str(candidate)
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if candidate.exists():
+            return candidate
+    return candidates[0]
 
 
 async def _run_analysis(
@@ -247,28 +279,28 @@ async def _run_analysis(
     with market_path.open('r', encoding='utf-8') as fp:
         market_payload = json.load(fp)
 
-    # Policy-as-code gating (optional)
-    try:
-        meta_date = (
-            market_payload.get("metadata", {}).get("date")
-            or market_payload.get("metadata", {}).get("end_date")
-            or market_payload.get("metadata", {}).get("start_date")
-        )
-        date_compact = str(meta_date).replace("-", "") if meta_date else None
-        if date_compact:
-            policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
-            if policy_path.exists():
+    blockers: List[str] = []
+    fallback_used = False
+
+    # 1) policy gate
+    meta_date = (
+        market_payload.get("metadata", {}).get("date")
+        or market_payload.get("metadata", {}).get("end_date")
+        or market_payload.get("metadata", {}).get("start_date")
+    )
+    date_compact = str(meta_date).replace("-", "") if meta_date else None
+    if date_compact:
+        policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
+        if policy_path.exists():
+            try:
                 policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
                 if policy_payload.get("block_stage3"):
-                    raise RuntimeError(
-                        f"Policy evaluation blocked Stage3: redlist={policy_payload.get('redlist')}"
-                    )
-    except RuntimeError:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        print(f"[WARN] policy_evaluation check skipped: {exc}")
+                    blockers.append(f"policy: redlist={policy_payload.get('redlist')}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"[WARN] policy_evaluation check skipped: {exc}")
 
-    fallback_used = False
+    # 2) completeness gate
+    completeness_error: Optional[str] = None
     try:
         _require_data_completeness(
             market_payload,
@@ -276,29 +308,41 @@ async def _run_analysis(
             allow_estimated=allow_estimated,
             skip_fund_flow_check=skip_fund_flow_check,
         )
-    except RuntimeError as e:
+    except RuntimeError as exc:
+        completeness_error = str(exc)
         if allow_fallback:
             fallback_used = True
-            print(f"[WARN] 数据完整性未达标，但 allow_fallback=True，继续运行。原因: {e}")
+            print(f"[WARN] 数据完整性未达标，但 allow_fallback=True，继续运行。原因: {exc}")
         else:
-            raise
+            blockers.append(f"completeness: {completeness_error}")
 
-    contract = MarketDataContract(**market_payload)
-    ai_websearch_flag = bool(contract.metadata.get('ai_websearch_enhanced'))
+    # 3) gap monitor gate
+    ai_websearch_flag = bool(market_payload.get("metadata", {}).get("ai_websearch_enhanced"))
 
-    gap_path = gap_monitor_path or Path("reports/gap_monitor.json")
+    gap_path = _resolve_gap_monitor_path(market_payload, gap_monitor_path)
+    print(f"[META] gap_monitor 路径：{gap_path}")
     if not skip_gap_check:
         gap = _load_gap_monitor(gap_path)
         pending = gap.get("pending_tasks", [])
         manual = gap.get("manual_required", [])
         if pending or manual:
-            raise RuntimeError(
-                f"Gap monitor 未清空，pending: {pending}, manual_required: {manual}。请先补全缺口后再运行 Stage3。"
+            blockers.append(
+                f"gap_monitor({gap_path}): pending={pending}, manual_required={manual}"
             )
     else:
         print(f"[WARN] 已跳过 gap_monitor 检查（调试模式），路径: {gap_path}")
+
+    # 4) stage2 completion gate
     if not ai_websearch_flag:
-        raise RuntimeError("未检测到 Stage2 WebSearch 标记 (metadata.ai_websearch_enhanced)。请先完成 Stage2。")
+        blockers.append("stage2: 未检测到 metadata.ai_websearch_enhanced=true")
+
+    if blockers:
+        lines = ["Stage3 阻断，以下问题需一次性修复："]
+        for item in blockers:
+            lines.append(f"- {item}")
+        raise RuntimeError("\n".join(lines))
+
+    contract = MarketDataContract(**market_payload)
 
     manager = get_manager()
     analyzer = PringAnalyzer(
@@ -416,8 +460,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--gap-monitor",
-        default="reports/gap_monitor.json",
-        help="Gap monitor 文件路径，用于阻断未补齐的任务"
+        default=None,
+        help="可选：显式指定 gap monitor 路径；默认优先按 market_data 日期匹配 reports/gap_monitor_<DATE>.json"
     )
     parser.add_argument(
         "--skip-gap-check",
@@ -461,7 +505,7 @@ def main() -> None:
         market_path,
         output_path,
         min_completeness=min_completeness,
-        gap_monitor_path=Path(args.gap_monitor),
+        gap_monitor_path=Path(args.gap_monitor) if args.gap_monitor else None,
         skip_gap_check=args.skip_gap_check,
         skip_fund_flow_check=args.skip_fund_flow_check,
         days=days,

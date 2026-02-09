@@ -82,7 +82,7 @@ def test_report_shows_changes_even_when_trend_confidence_low(tmp_path: Path):
             "change_5d_bp": 0.0,
             "change_120d_bp": -12.3,
             "trend": "平稳",
-            "source": "MCP WebSearch实时获取",
+            "source": "websearch_manual",
             "trend_history_confidence": "low",
         }
     ]
@@ -117,7 +117,7 @@ def test_report_monetary_no_previous_value_hides_zero_change(tmp_path: Path):
             "change_from_120d": 0.0,
             "unit": "%",
             "date": "2026-01",
-            "source": "MCP WebSearch实时获取(TradingEconomics)",
+            "source": "websearch_manual(TradingEconomics)",
             "note": "reason=no_previous_value",
             "is_estimated": False,
         }
@@ -154,7 +154,7 @@ def test_bond_date_only_shows_same_day_and_supports_english_date(tmp_path: Path)
             "change_5d_bp": -1.7,
             "change_120d_bp": 1.3,
             "trend": "平稳",
-            "source": "MCP WebSearch实时获取(TradingEconomics/Investing.com)",
+            "source": "websearch_manual(TradingEconomics/Investing.com)",
             "note": "10Y yield eased to 1.80% on Feb 6, 2026, down 0.8bp",
         },
         {
@@ -164,7 +164,7 @@ def test_bond_date_only_shows_same_day_and_supports_english_date(tmp_path: Path)
             "change_5d_bp": 10.9,
             "change_120d_bp": -8.4,
             "trend": "上行",
-            "source": "MCP WebSearch实时获取(东方财富)",
+            "source": "websearch_manual(东方财富)",
             "note": "10Y CDB yield was 1.959% on Feb 9, 2026",
         },
     ]
