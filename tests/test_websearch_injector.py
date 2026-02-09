@@ -3,6 +3,7 @@
 """单元测试: WebSearch 注入脚本的数据标准化逻辑"""
 
 import sys
+import json
 from pathlib import Path
 
 import pytest
@@ -172,6 +173,41 @@ def test_merge_bond_entry_marks_low_confidence_when_history_base_estimated(monke
     assert merged["trend_history_confidence"] == "low"
 
 
+def test_merge_bond_entry_preserves_date_fields(monkeypatch):
+    existing = {
+        "symbol": "CN10Y_CDB",
+        "name": "中国10年期国开债",
+        "current_yield": None,
+        "change_5d_bp": None,
+        "change_120d_bp": None,
+        "trend": "未知",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "symbol": "CN10Y_CDB",
+        "current_yield": "1.959",
+        "date": "2026-02-09",
+        "as_of_date": "2026-02-09",
+        "source": "东方财富",
+    }
+
+    def _fake_history(*args, **kwargs):
+        return {
+            "change_5d_bp": 10.9,
+            "change_120d_bp": -8.4,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_history)
+    merged = injector._merge_bond_entry(existing, payload, is_manual=True)
+    assert merged["date"] == "2026-02-09"
+    assert merged["as_of_date"] == "2026-02-09"
+
+
 def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
     entry = {
         "policy_name": "MLF利率",
@@ -235,3 +271,139 @@ def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
     merged = injector._merge_forex_entry(existing, payload, is_manual=True)
     assert merged["daily_change"] == pytest.approx(-0.16)
     assert merged["change_120d"] == pytest.approx(-3.32)
+
+
+def test_backfill_trend_changes_clears_no_previous_note_when_monetary_filled(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-02-09"},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "note": "央行公开市场；reason=no_previous_value；无前值可比",
+                "is_estimated": False,
+            }
+        },
+        "macro_indicators": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    def _fake_event_hist(*args, **kwargs):
+        return {
+            "change_from_120d": 0.0,
+            "reason": None,
+            "base_estimated": False,
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_event_history", _fake_event_hist)
+    stats = injector._backfill_trend_changes(market_data)
+
+    entry = market_data["monetary_policy"]["reverse_repo"]
+    assert stats["monetary_policy"] == 1
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert "reason=no_previous_value" not in str(entry.get("note") or "")
+    assert "无前值可比" not in str(entry.get("note") or "")
+
+
+def test_run_post_write_trend_backfill_persists_output_and_resets_issues(monkeypatch, tmp_path: Path):
+    output_path = tmp_path / "out.json"
+    market_data = {
+        "metadata": {
+            "date": "2026-02-09",
+            "trend_backfill_issues": [
+                {
+                    "category": "monetary_policy",
+                    "key": "reverse_repo",
+                    "field": "change_from_120d",
+                    "reason": "no_previous_value",
+                }
+            ],
+        },
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "note": "reason=no_previous_value",
+            }
+        },
+    }
+
+    def _fake_backfill(payload):
+        payload["monetary_policy"]["reverse_repo"]["change_from_120d"] = 0.0
+        return {"monetary_policy": 1}
+
+    monkeypatch.setattr(injector, "_backfill_trend_changes", _fake_backfill)
+    monkeypatch.setattr(injector, "_refresh_stage2_gap_monitor", lambda payload: {"top_level": 0, "metadata": 0})
+    monkeypatch.setattr(injector, "_refresh_stage2_notes", lambda metadata, gap: None)
+    monkeypatch.setattr(injector, "_cleanup_metadata_missing", lambda metadata, payload: None)
+
+    stats = injector._run_post_write_trend_backfill(market_data, output_path)
+    saved = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert stats["monetary_policy"] == 1
+    assert market_data["metadata"]["trend_backfill_issues"] == []
+    assert saved["monetary_policy"]["reverse_repo"]["change_from_120d"] == pytest.approx(0.0)
+
+
+def test_is_missing_item_filled_requires_compare_and_non_estimated():
+    market_data = {
+        "macro_indicators": {
+            "industrial": {
+                "current_value": 5.2,
+                "previous_value": None,
+                "change_rate": None,
+                "is_estimated": False,
+            }
+        },
+        "bonds": [
+            {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 1.97,
+                "is_estimated": True,
+            }
+        ],
+    }
+    assert injector._is_missing_item_filled(market_data, "macro_indicators", "industrial") is False
+    assert injector._is_missing_item_filled(market_data, "bonds", "CN10Y_CDB") is False
+
+
+def test_enforce_quality_blockers_marks_missing_items():
+    market_data = {
+        "metadata": {"missing_items": {}},
+        "missing_items": [],
+        "macro_indicators": {
+            "industrial": {
+                "current_value": 5.2,
+                "previous_value": None,
+                "change_rate": None,
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {
+            "mlf": {
+                "current_value": 2.0,
+                "change_from_120d": 0.0,
+                "is_estimated": True,
+            }
+        },
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+    blockers = injector._enforce_quality_blockers(market_data)
+
+    assert {"category": "macro_indicators", "key": "industrial", "reason": "missing_compare_values"} in blockers
+    assert {"category": "monetary_policy", "key": "mlf", "reason": "estimated_not_allowed"} in blockers
+    metadata_missing = market_data["metadata"]["missing_items"]
+    assert "macro_indicators" in metadata_missing
+    assert "monetary_policy" in metadata_missing
+    assert "industrial" in market_data["missing_items"]
+    assert "mlf" in market_data["missing_items"]

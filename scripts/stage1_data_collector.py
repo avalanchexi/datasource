@@ -837,7 +837,23 @@ class MarketDataCollector:
 
             start = self.start_date.replace("-", "")
             end = self.end_date.replace("-", "")
-            df = pro.fx_daily(ts_code=symbol, start_date=start, end_date=end)
+            ts_code_candidates = [symbol]
+            if symbol == "USDCNH":
+                # TuShare fx_daily 对离岸人民币通常使用 USDCNH.FXCM
+                ts_code_candidates.append("USDCNH.FXCM")
+            elif symbol == "USDCNY":
+                # 预留在岸人民币候选编码；若无数据将继续返回 None
+                ts_code_candidates.append("USDCNY.FXCM")
+
+            selected_code = None
+            df = None
+            for ts_code in ts_code_candidates:
+                data = pro.fx_daily(ts_code=ts_code, start_date=start, end_date=end)
+                if data is not None and not data.empty:
+                    df = data
+                    selected_code = ts_code
+                    break
+
             if df is None or df.empty:
                 return None
 
@@ -870,7 +886,7 @@ class MarketDataCollector:
                 daily_change=float(daily_change),
                 change_120d=float(change_120d),
                 trend=trend,
-                source="TuShare fx_daily",
+                source=f"TuShare fx_daily({selected_code or symbol})",
             )
         except Exception:
             return None

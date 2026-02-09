@@ -236,6 +236,71 @@ class InternationalFinanceAdapter(BaseDataSource):
                 except Exception as ts_err:
                     logger.error(f"TuShare us_tycr 获取 {symbol} 失败: {ts_err}")
 
+            # 优先尝试 TuShare yc_cb 获取中国10年期国债收益率（中债收益率曲线）
+            if symbol == "CN10Y":
+                try:
+                    token = os.getenv("TUSHARE_TOKEN")
+                    pro = ts.pro_api(token) if token else ts.pro_api()
+                    start = start_date.replace("-", "")
+                    end = end_date.replace("-", "")
+                    curve_type_used = "0"
+                    raw_df = pro.yc_cb(
+                        start_date=start,
+                        end_date=end,
+                        ts_code="1001.CB",
+                        curve_type="0",
+                        curve_term="10",
+                    )
+                    if raw_df is None or raw_df.empty:
+                        # 部分日期可能缺失 curve_type=0，回退 curve_type=1
+                        curve_type_used = "1"
+                        raw_df = pro.yc_cb(
+                            start_date=start,
+                            end_date=end,
+                            ts_code="1001.CB",
+                            curve_type="1",
+                            curve_term="10",
+                        )
+
+                    if raw_df is not None and not raw_df.empty:
+                        cn10y_df = raw_df.copy()
+                        cn10y_df["trade_date"] = pd.to_datetime(
+                            cn10y_df.get("trade_date"),
+                            format="%Y%m%d",
+                            errors="coerce",
+                        )
+                        cn10y_df["yield"] = pd.to_numeric(cn10y_df.get("yield"), errors="coerce")
+                        cn10y_df = cn10y_df[
+                            (cn10y_df["trade_date"].notna()) & (cn10y_df["yield"].notna())
+                        ]
+
+                        if not cn10y_df.empty:
+                            cn10y_df = (
+                                cn10y_df[["trade_date", "yield"]]
+                                .rename(columns={"trade_date": "date", "yield": "close"})
+                                .sort_values("date")
+                                .drop_duplicates(subset=["date"], keep="last")
+                            )
+                            formatted_data = self._format_bond_yield_data(cn10y_df, symbol, bond_config)
+                            if "data_source" in formatted_data.columns:
+                                formatted_data["data_source"] = "TuShare yc_cb"
+                            self.cache.set(cache_key, formatted_data)
+                            return DataResponse(
+                                data=formatted_data,
+                                source=self.name,
+                                timestamp=datetime.now(),
+                                metadata={
+                                    "source_type": "tushare_yc_cb",
+                                    "symbol": symbol,
+                                    "curve_type": curve_type_used,
+                                    "curve_term": 10,
+                                    "data_source": "TuShare yc_cb(中债国债收益率曲线)"
+                                }
+                            )
+                    logger.warning("TuShare yc_cb 返回空数据，回退到其他数据源")
+                except Exception as ts_err:
+                    logger.error(f"TuShare yc_cb 获取 {symbol} 失败: {ts_err}")
+
             # 对于中国国债，使用债券ETF代理
             if symbol in ["CN10Y", "CN10Y_CDB"]:
                 proxy_etf = bond_config.get("proxy_etf")

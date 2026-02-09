@@ -23,7 +23,6 @@ except Exception:  # pragma: no cover - 环境缺省时延迟导入
     OpenAI = None  # type: ignore
 
 NA_TEXT = "N/A（待 WebSearch）"
-LOW_CONF_TEXT = "N/A（低置信度）"
 DEFAULT_ASSET_CONCLUSION = "资金流转正，汇率偏稳，债券小幅下行，商品分化。"
 MAX_CONCLUSION_CHARS = 50
 QUALITY_REASONS = {
@@ -31,12 +30,14 @@ QUALITY_REASONS = {
     "no_previous_value",
     "source_latest_only",
     "manual_incomplete",
+    "estimated_not_allowed",
 }
 QUALITY_REASON_LABELS = {
     "trend_history_missing": "trend_history缺失",
     "no_previous_value": "无前值可比",
     "source_latest_only": "来源仅提供最新值",
     "manual_incomplete": "补数不完整",
+    "estimated_not_allowed": "估算值禁用",
 }
 NON_MACRO_KEYS = {
     "GC=F", "CL=F", "BZ=F", "HG=F", "GSG", "BCOM",
@@ -139,12 +140,19 @@ def _is_low_trend_confidence(entry: dict) -> bool:
     return level == "low"
 
 
-def _fmt_change_cell(value: Any, *, digits: int, suffix: str, low_confidence: bool) -> str:
+def _is_mlf_non_unified_rate(policy: dict) -> bool:
+    text = " ".join(
+        str(policy.get(k) or "")
+        for k in ("policy_name", "note", "source")
+    )
+    markers = ("多重价位", "无统一利率", "美式招标", "利率区间")
+    return any(marker in text for marker in markers)
+
+
+def _fmt_change_cell(value: Any, *, digits: int, suffix: str, low_confidence: bool = False) -> str:
     num = _to_float(value)
     if num is None:
         return "N/A"
-    if low_confidence:
-        return LOW_CONF_TEXT
     return f"{num:+.{digits}f}{suffix}"
 
 
@@ -474,6 +482,24 @@ def _extract_date_from_text(text: str) -> Optional[str]:
     match = re.search(r"(20\d{2}-\d{2})", text)
     if match:
         return match.group(1)
+    # 英文日期：Feb 6, 2026 / February 6, 2026 / 6 Feb 2026
+    english_candidates = [
+        r"\b([A-Za-z]{3,9}\s+\d{1,2},\s*20\d{2})\b",
+        r"\b(\d{1,2}\s+[A-Za-z]{3,9}\s+20\d{2})\b",
+        r"\b([A-Za-z]{3,9}\s+\d{1,2}\s+20\d{2})\b",
+    ]
+    parse_formats = ("%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y", "%b %d %Y", "%B %d %Y")
+    for pattern in english_candidates:
+        m = re.search(pattern, text)
+        if not m:
+            continue
+        raw = m.group(1).strip()
+        for fmt in parse_formats:
+            try:
+                dt = datetime.strptime(raw, fmt)
+                return dt.strftime("%Y-%m-%d")
+            except Exception:
+                continue
     return None
 
 
@@ -505,6 +531,8 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
         if current in (None, 0.0):
             _issue("bonds", symbol, "current_yield", "manual_incomplete")
             continue
+        if bond.get("is_estimated"):
+            _issue("bonds", str(symbol), "current_yield", "estimated_not_allowed")
         change_120d = bond.get("change_120d_bp")
         if change_120d is None:
             source = str(bond.get("source", "")).lower()
@@ -524,6 +552,8 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
         if curr in (None, "N/A"):
             _issue("macro_indicators", key, "current_value", "manual_incomplete")
             continue
+        if indicator.get("is_estimated"):
+            _issue("macro_indicators", key, "current_value", "estimated_not_allowed")
         reason = _extract_reason(indicator.get("note"))
         if indicator.get("previous_value") is None and indicator.get("change_rate") is None:
             _issue("macro_indicators", key, "previous_value", reason or "no_previous_value")
@@ -534,6 +564,8 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
         if curr in (None, "N/A"):
             _issue("monetary_policy", key, "current_value", "manual_incomplete")
             continue
+        if policy.get("is_estimated"):
+            _issue("monetary_policy", key, "current_value", "estimated_not_allowed")
         reason = _extract_reason(policy.get("note"))
         change = policy.get("change_from_120d")
         if change is None:
@@ -764,7 +796,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         trend = bond.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
         date_val = bond.get('as_of_date') or bond.get('date') or _extract_date_from_text(str(bond.get('note') or ''))
-        date_str = date_val or (NA_TEXT if is_placeholder else "N/A")
+        # 债券日期仅展示“报告当日”数据，避免旧日期被误读为当日报价
+        report_day = str(report_date)[:10]
+        date_str = "N/A"
+        if date_val:
+            normalized = _extract_date_from_text(str(date_val)) or str(date_val)[:10]
+            if normalized == report_day:
+                date_str = normalized
+        elif is_placeholder:
+            date_str = NA_TEXT
         source_str = bond.get('source') or "-"
 
         report += f"| {bond['name']} | {yield_str} | {bp5_str} | {bp120_str} | {trend} | {date_str} | {source_str} |\n"
@@ -868,10 +908,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         change = policy.get('change_from_120d', 'N/A')
         unit = policy.get('unit', '')
         is_non_daily = key not in DAILY_POLICY_KEYS
+        is_mlf_non_unified = key == "mlf" and _is_mlf_non_unified_rate(policy)
         date_val = _pick_release_date(policy, key, report_date, is_non_daily=is_non_daily)
-        date = date_val or NA_TEXT
+        if is_mlf_non_unified and not date_val:
+            date_val = policy.get("date") or policy.get("as_of_date") or policy.get("report_period")
+        date = date_val or ("口径不适用" if is_mlf_non_unified else NA_TEXT)
 
         name = policy.get('policy_name') or key
+        if key == "mlf":
+            name = "中国MLF利率"
         if name and policy.get('rrr_type') and name in ("存款准备金率", "存准率", "Reserve Requirement Ratio"):
             rrr_type = policy.get('rrr_type')
             label = "加权平均" if rrr_type == "weighted" else "法定平均" if rrr_type == "statutory" else rrr_type
@@ -888,7 +933,9 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         curr_str = _fmt_val(curr, unit, allow_est=True)
         reason = _extract_reason(policy.get('note'))
         change_num = _to_float(change)
-        if reason == "no_previous_value" and (change_num is None or abs(change_num) < 1e-9):
+        if is_mlf_non_unified:
+            change_str = "口径不适用"
+        elif reason == "no_previous_value" and (change_num is None or abs(change_num) < 1e-9):
             change_str = NA_TEXT
         elif change not in ('N/A', None):
             change_str = _fmt_val(f"{float(change):+.1f}", "pp", allow_est=True)

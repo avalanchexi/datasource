@@ -28,8 +28,8 @@ SERIES_WINDOWS = {
 }
 
 EVENTS_WINDOWS = {
-    "macro_indicators": 12,
-    "monetary_policy": 12,
+    "macro_indicators": 24,
+    "monetary_policy": 24,
 }
 
 # Daily macro indicators that should be stored as series as well

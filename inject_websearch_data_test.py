@@ -63,6 +63,26 @@ INDICATOR_CATEGORY = {
     "industrial": "macro_indicators",
     "industrial_sales": "macro_indicators",
     "bdi": "macro_indicators",
+    "cpi": "macro_indicators",
+    "ppi": "macro_indicators",
+    "pmi": "macro_indicators",
+    "pmi_new_orders": "macro_indicators",
+    "gdp": "macro_indicators",
+    # monetary
+    "rrr": "monetary_policy",
+    "reserve_ratio": "monetary_policy",
+    "reverse_repo": "monetary_policy",
+    "mlf": "monetary_policy",
+    "tsf": "monetary_policy",
+    "m1": "monetary_policy",
+    "m2": "monetary_policy",
+    "dr007": "monetary_policy",
+    # stock indices
+    "000001": "stock_indices",
+    "000016": "stock_indices",
+    "000300": "stock_indices",
+    "399001": "stock_indices",
+    "399006": "stock_indices",
 }
 
 
@@ -206,7 +226,13 @@ def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str
         entry = market_data.get(category, {}).get(key)
         if not isinstance(entry, dict):
             return False
-        return _has_valid_value(entry.get('current_value'))
+        if not _has_valid_value(entry.get('current_value')):
+            return False
+        if entry.get('is_estimated'):
+            return False
+        if category == 'macro_indicators':
+            return entry.get('previous_value') is not None and entry.get('change_rate') is not None
+        return entry.get('change_from_120d') is not None
     if category == 'fund_flow':
         entry = market_data.get('fund_flow', {}).get(key)
         if not isinstance(entry, dict):
@@ -215,22 +241,22 @@ def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str
     if category == 'commodities':
         for item in market_data.get('commodities', []):
             if item.get('symbol') == key:
-                return _has_valid_value(item.get('current_price'))
+                return _has_valid_value(item.get('current_price')) and not bool(item.get('is_estimated'))
         return False
     if category == 'forex':
         for item in market_data.get('forex', []):
             if item.get('pair') == key:
-                return _has_valid_value(item.get('current_rate'))
+                return _has_valid_value(item.get('current_rate')) and not bool(item.get('is_estimated'))
         return False
     if category == 'bonds':
         for item in market_data.get('bonds', []):
             if item.get('symbol') == key:
-                return _has_valid_value(item.get('current_yield'))
+                return _has_valid_value(item.get('current_yield')) and not bool(item.get('is_estimated'))
         return False
     if category == 'stock_indices':
         for item in market_data.get('stock_indices', []):
             if item.get('symbol') == key:
-                return _has_valid_value(item.get('current_price'))
+                return _has_valid_value(item.get('current_price')) and not bool(item.get('is_estimated'))
         return False
     return False
 
@@ -286,6 +312,100 @@ def _cleanup_metadata_missing(metadata: Dict[str, Any], market_data: Dict[str, A
         metadata.pop('missing_items', None)
 
 
+def _append_missing_item(market_data: Dict[str, Any], category: str, key: str, reason: str) -> None:
+    """将质量阻断项写回 metadata/top-level missing_items，确保 Stage3 能硬阻断。"""
+    metadata = market_data.setdefault("metadata", {})
+    missing = metadata.setdefault("missing_items", {})
+    category_items = missing.setdefault(category, [])
+    seen_keys = set()
+    for item in category_items:
+        if isinstance(item, dict):
+            item_key = item.get("key") or item.get("indicator_key")
+        else:
+            item_key = item
+        if item_key:
+            seen_keys.add(str(item_key))
+    if key not in seen_keys:
+        category_items.append({"key": key, "reason": reason})
+
+    top_missing = market_data.setdefault("missing_items", [])
+    top_keys = set()
+    for item in top_missing:
+        if isinstance(item, dict):
+            item_key = item.get("key") or item.get("indicator_key")
+        else:
+            item_key = item
+        if item_key:
+            top_keys.add(str(item_key))
+    if key not in top_keys:
+        top_missing.append(key)
+
+
+def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str]]:
+    """
+    严格质量门禁：
+    1) 当前值已填但对比值缺失（macro previous/change；monetary 120d change）；
+    2) 当前值为估算值（is_estimated=True）。
+    """
+    blockers: List[Dict[str, str]] = []
+
+    def _add(category: str, key: str, reason: str) -> None:
+        record = {"category": category, "key": key, "reason": reason}
+        if record in blockers:
+            return
+        blockers.append(record)
+        _append_missing_item(market_data, category, key, reason)
+
+    for key, entry in (market_data.get("macro_indicators", {}) or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if _has_valid_value(entry.get("current_value")):
+            if entry.get("is_estimated"):
+                _add("macro_indicators", key, "estimated_not_allowed")
+            if entry.get("previous_value") is None or entry.get("change_rate") is None:
+                _add("macro_indicators", key, "missing_compare_values")
+
+    for key, entry in (market_data.get("monetary_policy", {}) or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if _has_valid_value(entry.get("current_value")):
+            if entry.get("is_estimated"):
+                _add("monetary_policy", key, "estimated_not_allowed")
+            if entry.get("change_from_120d") is None:
+                _add("monetary_policy", key, "missing_compare_values")
+
+    for bond in market_data.get("bonds", []) or []:
+        if not isinstance(bond, dict):
+            continue
+        symbol = bond.get("symbol")
+        if symbol and _has_valid_value(bond.get("current_yield")) and bond.get("is_estimated"):
+            _add("bonds", str(symbol), "estimated_not_allowed")
+
+    for fx in market_data.get("forex", []) or []:
+        if not isinstance(fx, dict):
+            continue
+        pair = fx.get("pair")
+        if pair and _has_valid_value(fx.get("current_rate")) and fx.get("is_estimated"):
+            _add("forex", str(pair), "estimated_not_allowed")
+
+    for comm in market_data.get("commodities", []) or []:
+        if not isinstance(comm, dict):
+            continue
+        symbol = comm.get("symbol")
+        if symbol and _has_valid_value(comm.get("current_price")) and comm.get("is_estimated"):
+            _add("commodities", str(symbol), "estimated_not_allowed")
+
+    for idx in market_data.get("stock_indices", []) or []:
+        if not isinstance(idx, dict):
+            continue
+        symbol = idx.get("symbol")
+        if symbol and _has_valid_value(idx.get("current_price")) and idx.get("is_estimated"):
+            _add("stock_indices", str(symbol), "estimated_not_allowed")
+
+    market_data.setdefault("metadata", {})["quality_blockers"] = blockers
+    return blockers
+
+
 def _cleanup_monetary_aliases(market_data: Dict[str, Any], metadata: Dict[str, Any]) -> None:
     """清理货币政策别名重复项（canonical 有值、alias 仍为占位时删除 alias）。"""
     section = market_data.get('monetary_policy', {}) if isinstance(market_data, dict) else {}
@@ -327,8 +447,11 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
         "commodities": [],
         "forex": [],
         "bonds": [],
+        "stock_indices": [],
         "fund_flow": {},
         "macro_indicators": {},
+        "monetary_policy": {},
+        "metadata": {"manual_required": []},
     }
 
     def _num(val):
@@ -337,26 +460,199 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             return None
 
+    def _trend_cn(raw_trend: Any, val: Optional[float]) -> str:
+        text = str(raw_trend or "").strip().lower()
+        if text in {"inflow", "流入", "净流入", "net_inflow", "buy"}:
+            return "流入"
+        if text in {"outflow", "流出", "净流出", "net_outflow", "sell"}:
+            return "流出"
+        if val is not None:
+            if val > 0:
+                return "流入"
+            if val < 0:
+                return "流出"
+        return "未知"
+
+    def _candidate_url(item: Dict[str, Any], extraction: Dict[str, Any]) -> Optional[str]:
+        url = extraction.get("source_url")
+        if isinstance(url, str) and url.strip().startswith("http"):
+            return url.strip()
+        for row in item.get("raw_results") or []:
+            u = row.get("url")
+            if isinstance(u, str) and u.strip().startswith("http"):
+                return u.strip()
+        return None
+
+    def _upsert(rows: List[Dict[str, Any]], key_field: str, payload: Dict[str, Any]) -> None:
+        key_val = payload.get(key_field)
+        for i, row in enumerate(rows):
+            if row.get(key_field) == key_val:
+                rows[i] = payload
+                return
+        rows.append(payload)
+
+    def _append_manual_skeleton(
+        key: str,
+        cat: str,
+        task: Dict[str, Any],
+        extraction: Dict[str, Any],
+        reason: str,
+        item: Dict[str, Any],
+    ) -> None:
+        src = _candidate_url(item, extraction)
+        schema["metadata"]["manual_required"].append(
+            {
+                "indicator_key": key,
+                "category": cat,
+                "reason": reason,
+                "source_url": src,
+                "query": task.get("query"),
+                "query_used": task.get("query_used"),
+            }
+        )
+        source_text = "待人工补数(Stage2 manual_required)"
+        note_text = reason
+        if src:
+            note_text = f"{reason} | {src}"
+
+        if cat == "commodities":
+            _upsert(
+                schema["commodities"],
+                "symbol",
+                {
+                    "symbol": key,
+                    "name": key,
+                    "current_price": None,
+                    "unit": task.get("unit") or "",
+                    "trend": "未知",
+                    "source": source_text,
+                    "note": note_text,
+                    "source_url": src,
+                },
+            )
+            return
+        if cat == "forex":
+            _upsert(
+                schema["forex"],
+                "pair",
+                {
+                    "pair": key,
+                    "name": key,
+                    "current_rate": None,
+                    "trend": "未知",
+                    "source": source_text,
+                    "note": note_text,
+                    "source_url": src,
+                },
+            )
+            return
+        if cat == "bonds":
+            _upsert(
+                schema["bonds"],
+                "symbol",
+                {
+                    "symbol": key,
+                    "name": key,
+                    "current_yield": None,
+                    "trend": "未知",
+                    "source": source_text,
+                    "note": note_text,
+                    "source_url": src,
+                },
+            )
+            return
+        if cat == "stock_indices":
+            _upsert(
+                schema["stock_indices"],
+                "symbol",
+                {
+                    "symbol": key,
+                    "name": key,
+                    "current_price": None,
+                    "source": source_text,
+                    "note": note_text,
+                    "source_url": src,
+                },
+            )
+            return
+        if cat == "fund_flow":
+            schema["fund_flow"][key] = {
+                "recent_5d": _num(extraction.get("recent_5d")),
+                "total_120d": _num(extraction.get("total_120d")),
+                "trend": _trend_cn(extraction.get("trend"), _num(extraction.get("value"))),
+                "source": source_text,
+                "note": note_text,
+                "source_url": src,
+            }
+            return
+        if cat == "macro_indicators":
+            schema["macro_indicators"][key] = {
+                "indicator_name": key,
+                "current_value": None,
+                "previous_value": extraction.get("previous_value"),
+                "change_rate": extraction.get("change_rate"),
+                "unit": task.get("unit") or "%",
+                "date": extraction.get("date") or "",
+                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
+                "value_type": extraction.get("value_type"),
+                "yoy_month": extraction.get("yoy_month"),
+                "yoy_ytd": extraction.get("yoy_ytd"),
+                "source": source_text,
+                "note": note_text,
+                "source_url": src,
+            }
+            return
+        if cat == "monetary_policy":
+            schema["monetary_policy"][key] = {
+                "policy_name": key,
+                "current_value": None,
+                "unit": task.get("unit") or "%",
+                "date": extraction.get("date") or "",
+                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
+                "source": source_text,
+                "note": note_text,
+                "source_url": src,
+            }
+
+    # 用于 manual_required 元数据去重
+    seen_manual_keys: set = set()
+
     for item in raw["results"]:
         task = item.get("task") or {}
         extraction = item.get("extraction") or {}
-        if item.get("manual_required") is True:
-            continue
         key = task.get("indicator_key")
         if not key:
             continue
         cat = INDICATOR_CATEGORY.get(key)
         if not cat:
             continue
+        manual_reason = (
+            extraction.get("manual_reason")
+            or extraction.get("note")
+            or item.get("note")
+            or "manual_required"
+        )
+        if item.get("manual_required") is True:
+            uniq_key = f"{cat}:{key}"
+            if uniq_key not in seen_manual_keys:
+                _append_manual_skeleton(key, cat, task, extraction, str(manual_reason), item)
+                seen_manual_keys.add(uniq_key)
+            continue
         note_text = extraction.get("note") or ""
         if isinstance(note_text, str) and ("数据超过" in note_text or "需更新" in note_text):
             continue
         val = _num(extraction.get("value"))
-        if val is None:
+        if val is None and cat != "fund_flow":
+            uniq_key = f"{cat}:{key}"
+            if uniq_key not in seen_manual_keys:
+                _append_manual_skeleton(key, cat, task, extraction, "no_value_from_stage2", item)
+                seen_manual_keys.add(uniq_key)
             continue
-        source = extraction.get("note") or extraction.get("source_url") or "MCP WebSearch自动抽取"
+        source = extraction.get("source_url") or extraction.get("note") or "MCP WebSearch自动抽取"
         if cat == "commodities":
-            schema["commodities"].append(
+            _upsert(
+                schema["commodities"],
+                "symbol",
                 {
                     "symbol": key,
                     "name": key,
@@ -365,10 +661,13 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "ytd_change": extraction.get("ytd_change"),
                     "trend": "未知",
                     "source": source,
-                }
+                    "source_url": extraction.get("source_url"),
+                },
             )
         elif cat == "forex":
-            schema["forex"].append(
+            _upsert(
+                schema["forex"],
+                "pair",
                 {
                     "pair": key,
                     "name": key,
@@ -377,10 +676,13 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "change_120d": extraction.get("change_120d"),
                     "trend": extraction.get("trend") or "未知",
                     "source": source,
-                }
+                    "source_url": extraction.get("source_url"),
+                },
             )
         elif cat == "bonds":
-            schema["bonds"].append(
+            _upsert(
+                schema["bonds"],
+                "symbol",
                 {
                     "symbol": key,
                     "name": key,
@@ -389,11 +691,38 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "change_120d_bp": extraction.get("change_120d_bp"),
                     "trend": extraction.get("trend") or "未知",
                     "source": source,
-                }
+                    "source_url": extraction.get("source_url"),
+                },
+            )
+        elif cat == "stock_indices":
+            _upsert(
+                schema["stock_indices"],
+                "symbol",
+                {
+                    "symbol": key,
+                    "name": key,
+                    "current_price": val,
+                    "source": source,
+                    "source_url": extraction.get("source_url"),
+                },
             )
         elif cat == "fund_flow":
-            # 单值无法拆 recent_5d/total_120d，跳过，仍留 gap_monitor 提醒人工
-            continue
+            recent = _num(extraction.get("recent_5d"))
+            total = _num(extraction.get("total_120d"))
+            if recent is None or total is None:
+                uniq_key = f"{cat}:{key}"
+                if uniq_key not in seen_manual_keys:
+                    _append_manual_skeleton(key, cat, task, extraction, "fund_flow_window_missing", item)
+                    seen_manual_keys.add(uniq_key)
+                continue
+            schema["fund_flow"][key] = {
+                "recent_5d": recent,
+                "total_120d": total,
+                "trend": _trend_cn(extraction.get("trend"), recent),
+                "source": source,
+                "note": extraction.get("note"),
+                "source_url": extraction.get("source_url"),
+            }
         elif cat == "macro_indicators":
             schema["macro_indicators"][key] = {
                 "indicator_name": key,
@@ -407,8 +736,36 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 "yoy_month": extraction.get("yoy_month"),
                 "yoy_ytd": extraction.get("yoy_ytd"),
                 "source": source,
+                "source_url": extraction.get("source_url"),
+            }
+        elif cat == "monetary_policy":
+            schema["monetary_policy"][key] = {
+                "policy_name": key,
+                "current_value": val,
+                "change_from_120d": extraction.get("change_from_120d"),
+                "unit": task.get("unit") or "%",
+                "date": extraction.get("date") or "",
+                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
+                "rrr_type": extraction.get("rrr_type"),
+                "source": source,
+                "source_url": extraction.get("source_url"),
             }
     # 移除空类别，保持与原脚本兼容
+    metadata = schema.get("metadata") or {}
+    if isinstance(metadata, dict):
+        manual_rows = metadata.get("manual_required") or []
+        if manual_rows:
+            deduped: List[Dict[str, Any]] = []
+            seen = set()
+            for row in manual_rows:
+                mk = f"{row.get('category')}:{row.get('indicator_key')}"
+                if mk in seen:
+                    continue
+                seen.add(mk)
+                deduped.append(row)
+            metadata["manual_required"] = deduped
+        else:
+            schema.pop("metadata", None)
     return {k: v for k, v in schema.items() if v}
 
 
@@ -692,6 +1049,7 @@ def inject_websearch_data(market_data_path, websearch_path, output_path, *, back
     for idx in market_data.get('stock_indices', []):
         _remove_top_missing(market_data, idx.get('symbol'))
     _cleanup_metadata_missing(metadata, market_data)
+    quality_blockers = _enforce_quality_blockers(market_data)
     if not market_data.get('missing_items'):
         market_data['missing_items'] = []
 
@@ -707,6 +1065,8 @@ def inject_websearch_data(market_data_path, websearch_path, output_path, *, back
     print(f"  - 注入数据项: {inject_count}")
     print(f"  - 数据完整性: {market_data['metadata']['data_completeness']:.1%}")
     print(f"  - 输出文件: {output_path}")
+    if quality_blockers:
+        print(f"  [WARN] 质量阻断项: {len(quality_blockers)}（需通过 Stage2/Stage2.5 补齐真实值/对比值）")
 
     # Final write to trend_history (post Stage2.5)
     try:
@@ -714,6 +1074,18 @@ def inject_websearch_data(market_data_path, websearch_path, output_path, *, back
         print(f"  - trend_history final write: {write_count} items")
     except Exception as exc:  # noqa: BLE001
         print(f"  - trend_history final write failed: {exc}")
+
+    # Post-write backfill: use freshly written trend_history details to recompute change fields.
+    if backfill_trend:
+        try:
+            post_stats = _run_post_write_trend_backfill(market_data, Path(output_path))
+            post_total = sum(post_stats.values())
+            if post_total:
+                print(f"  - trend_history post-write backfill: {post_stats}")
+            else:
+                print("  - trend_history post-write backfill: no updates")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  [WARN] trend_history post-write backfill failed: {exc}")
 
     date_val = (
         market_data.get("metadata", {}).get("date")
@@ -1590,6 +1962,16 @@ def _append_note(entry: Dict[str, Any], message: str) -> None:
     entry["note"] = note
 
 
+def _remove_note_markers(entry: Dict[str, Any], markers: Tuple[str, ...]) -> None:
+    """从 note 中移除已过期的原因标记（如 no_previous_value）。"""
+    note = entry.get("note")
+    if not isinstance(note, str) or not note:
+        return
+    parts = [part for part in note.split("；") if part]
+    filtered = [part for part in parts if not any(marker in part for marker in markers)]
+    entry["note"] = "；".join(filtered)
+
+
 def _record_backfill_issue(
     metadata: Dict[str, Any],
     category: str,
@@ -1689,7 +2071,6 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 _record_backfill_issue(metadata, "bonds", symbol, "change_5d_bp", reason)
                 _append_note(bond, f"reason={reason}")
         if (used_hist_120d and hist.get("base_120d_estimated")) or (used_hist_5d and hist.get("base_5d_estimated")):
-            bond["is_estimated"] = True
             _append_note(bond, "trend_history_base_estimated")
         confidence, confidence_reason = _derive_trend_confidence(
             hist,
@@ -1738,7 +2119,6 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 _record_backfill_issue(metadata, "forex", symbol, "daily_change", reason)
                 _append_note(fx, f"reason={reason}")
         if (used_hist_120d and hist.get("base_120d_estimated")) or (used_hist_1d and daily_hist.get("base_1d_estimated")):
-            fx["is_estimated"] = True
             _append_note(fx, "trend_history_base_estimated")
         confidence, confidence_reason = _derive_trend_confidence(
             hist,
@@ -1786,7 +2166,6 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 _record_backfill_issue(metadata, "commodities", symbol, "daily_change", reason)
                 _append_note(comm, f"reason={reason}")
         if (used_hist_120d and hist.get("base_120d_estimated")) or (used_hist_5d and hist.get("base_5d_estimated")):
-            comm["is_estimated"] = True
             _append_note(comm, "trend_history_base_estimated")
         confidence, confidence_reason = _derive_trend_confidence(
             hist,
@@ -1834,7 +2213,6 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 _record_backfill_issue(metadata, "stock_indices", symbol, "change_5d", reason)
                 _append_note(idx, f"reason={reason}")
         if (used_hist_120d and hist.get("base_120d_estimated")) or (used_hist_5d and hist.get("base_5d_estimated")):
-            idx["is_estimated"] = True
             _append_note(idx, "trend_history_base_estimated")
         confidence, confidence_reason = _derive_trend_confidence(
             hist,
@@ -1908,6 +2286,8 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 reason = hist_prev.get("reason") or "manual_incomplete"
                 _append_note(indicator, f"reason={reason}")
                 _record_backfill_issue(metadata, "macro_indicators", key, "previous_value", reason)
+            else:
+                _remove_note_markers(indicator, ("reason=no_previous_value", "无前值可比"))
             stats["macro_indicators"] += 1
 
     # monetary policy change_from_120d
@@ -1929,6 +2309,8 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                     _append_note(policy, "无前值可比")
                 _append_note(policy, f"reason={reason}")
                 _record_backfill_issue(metadata, "monetary_policy", key, "change_from_120d", reason)
+            elif used_hist_120d:
+                _remove_note_markers(policy, ("reason=no_previous_value", "无前值可比"))
             if hist.get("base_estimated"):
                 policy["is_estimated"] = True
                 _append_note(policy, "trend_history_base_estimated")
@@ -1938,6 +2320,22 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 _merge_trend_confidence(policy, "high")
             stats["monetary_policy"] += 1
 
+    return stats
+
+
+def _run_post_write_trend_backfill(market_data: Dict[str, Any], output_path: Path) -> Dict[str, int]:
+    """在 trend_history 最终写入后，基于最新明细再回填一轮变化值。"""
+    metadata = market_data.setdefault("metadata", {})
+    metadata["trend_backfill_issues"] = []
+
+    stats = _backfill_trend_changes(market_data)
+    gap_summary = _refresh_stage2_gap_monitor(market_data)
+    _refresh_stage2_notes(metadata, gap_summary)
+    _cleanup_metadata_missing(metadata, market_data)
+    _enforce_quality_blockers(market_data)
+
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(market_data, f, ensure_ascii=False, indent=2)
     return stats
 
 
@@ -2026,6 +2424,14 @@ def _merge_bond_entry(
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
     merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
     merged['current_yield'] = _coerce_float(payload.get('current_yield')) or existing.get('current_yield')
+    # 保留债券日期字段，供报告侧“当日数据”校验与展示
+    if payload.get('date'):
+        merged['date'] = payload.get('date')
+    if payload.get('as_of_date'):
+        merged['as_of_date'] = payload.get('as_of_date')
+    if payload.get('report_period'):
+        merged.setdefault('as_of_date', payload.get('report_period'))
+        merged.setdefault('date', payload.get('report_period'))
 
     # 从 trend_history 计算 bp 变化值
     current_yield = merged.get('current_yield')

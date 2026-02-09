@@ -25,6 +25,11 @@ INDEX_SYMBOLS = {
 FOREX_SYMBOLS = ["USDCNY", "USDCNH"]
 BOND_SYMBOLS = ["US10Y", "CN10Y", "CN10Y_CDB"]
 
+FOREX_TS_CODE_CANDIDATES = {
+    "USDCNY": ["USDCNY", "USDCNY.FXCM"],
+    "USDCNH": ["USDCNH", "USDCNH.FXCM"],
+}
+
 
 def _to_date_str(date_val: str) -> str:
     if not date_val:
@@ -83,11 +88,16 @@ async def _backfill_forex(start_date: str, end_date: str) -> int:
             token = None
         pro = ts.pro_api(token) if token else ts.pro_api()
         for symbol in FOREX_SYMBOLS:
-            df = pro.fx_daily(
-                ts_code=symbol,
-                start_date=start_date.replace("-", ""),
-                end_date=end_date.replace("-", ""),
-            )
+            df = None
+            for ts_code in FOREX_TS_CODE_CANDIDATES.get(symbol, [symbol]):
+                data = pro.fx_daily(
+                    ts_code=ts_code,
+                    start_date=start_date.replace("-", ""),
+                    end_date=end_date.replace("-", ""),
+                )
+                if data is not None and not data.empty:
+                    df = data
+                    break
             if df is None or df.empty:
                 continue
             df = df.sort_values("trade_date")

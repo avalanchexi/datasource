@@ -72,7 +72,7 @@ def test_sample_c_legacy_ok(tmp_path: Path):
     assert "第Ⅴ阶段" in out.read_text(encoding="utf-8")
 
 
-def test_report_hides_low_confidence_changes(tmp_path: Path):
+def test_report_shows_changes_even_when_trend_confidence_low(tmp_path: Path):
     market = _base_market()
     market["bonds"] = [
         {
@@ -104,7 +104,8 @@ def test_report_hides_low_confidence_changes(tmp_path: Path):
     _write_json(p, pring)
     generate_report(m, p, out)
     text = out.read_text(encoding="utf-8")
-    assert "N/A（低置信度）" in text
+    assert "| 中国10年期国债 | 1.83% | +0.0bp | -12.3bp |" in text
+    assert "N/A（低置信度）" not in text
 
 
 def test_report_monetary_no_previous_value_hides_zero_change(tmp_path: Path):
@@ -139,4 +140,51 @@ def test_report_monetary_no_previous_value_hides_zero_change(tmp_path: Path):
     _write_json(p, pring)
     generate_report(m, p, out)
     text = out.read_text(encoding="utf-8")
-    assert "| MLF利率 | 2.0% | N/A（待 WebSearch） | % | 2026-01 |" in text
+    assert "| 中国MLF利率 | 2.0% | N/A（待 WebSearch） | % | 2026-01 |" in text
+
+
+def test_bond_date_only_shows_same_day_and_supports_english_date(tmp_path: Path):
+    market = _base_market()
+    market["metadata"]["date"] = "2026-02-09"
+    market["bonds"] = [
+        {
+            "symbol": "CN10Y",
+            "name": "中国10年期国债",
+            "current_yield": 1.80,
+            "change_5d_bp": -1.7,
+            "change_120d_bp": 1.3,
+            "trend": "平稳",
+            "source": "MCP WebSearch实时获取(TradingEconomics/Investing.com)",
+            "note": "10Y yield eased to 1.80% on Feb 6, 2026, down 0.8bp",
+        },
+        {
+            "symbol": "CN10Y_CDB",
+            "name": "中国10年期国开债",
+            "current_yield": 1.959,
+            "change_5d_bp": 10.9,
+            "change_120d_bp": -8.4,
+            "trend": "上行",
+            "source": "MCP WebSearch实时获取(东方财富)",
+            "note": "10Y CDB yield was 1.959% on Feb 9, 2026",
+        },
+    ]
+    pring = {
+        "final_stage": "第Ⅲ阶段",
+        "confidence": 0.61,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+    assert "| 中国10年期国债 | 1.80% | -1.7bp | +1.3bp | 平稳 | N/A |" in text
+    assert "| 中国10年期国开债 | 1.96% | +10.9bp | -8.4bp | 上行 | 2026-02-09 |" in text
