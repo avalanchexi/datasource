@@ -886,7 +886,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         prev_str = _fmt_val(prev, unit, allow_est=True)
 
         if change not in ('N/A', None):
-            suffix = 'pp' if unit == '%' else unit
+            suffix = unit
             change_str = _fmt_val(f"{float(change):+.1f}", suffix, allow_est=True)
         else:
             change_str = NA_TEXT

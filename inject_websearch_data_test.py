@@ -5,6 +5,7 @@ AI WebSearch数据注入脚本 (测试版)
 将websearch_results注入到market_data_enhanced文件中
 """
 
+import argparse
 import json
 import re
 import sys
@@ -84,6 +85,21 @@ INDICATOR_CATEGORY = {
     "399001": "stock_indices",
     "399006": "stock_indices",
 }
+
+
+DEFAULT_SOURCE_LABEL = "websearch_manual"
+SOURCE_ANOMALY_LABEL = "异常零值-需核查"
+
+
+def _derive_date_compact(payload: Dict[str, Any], override: Optional[str] = None) -> str:
+    """从元数据推导 YYYYMMDD 字符串，支持外部覆盖。"""
+    if override:
+        return str(override).replace("-", "")
+    metadata = payload.get("metadata", {}) if isinstance(payload, dict) else {}
+    date_val = metadata.get("date") or metadata.get("end_date") or metadata.get("start_date")
+    if date_val:
+        return str(date_val).replace("-", "")
+    return datetime.now().strftime("%Y%m%d")
 
 
 def _normalize_keyed_list(payload: Any, key_field: str) -> list:
@@ -648,7 +664,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 _append_manual_skeleton(key, cat, task, extraction, "no_value_from_stage2", item)
                 seen_manual_keys.add(uniq_key)
             continue
-        source = extraction.get("source_url") or extraction.get("note") or "MCP WebSearch自动抽取"
+        source = extraction.get("source_url") or extraction.get("note") or "stage2_auto_extract"
         if cat == "commodities":
             _upsert(
                 schema["commodities"],
@@ -769,7 +785,15 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
     return {k: v for k, v in schema.items() if v}
 
 
-def inject_websearch_data(market_data_path, websearch_path, output_path, *, backfill_trend: bool = True):
+def inject_websearch_data(
+    market_data_path,
+    websearch_path,
+    output_path,
+    *,
+    backfill_trend: bool = True,
+    date_override: Optional[str] = None,
+    gap_monitor_path: Optional[Path] = None,
+):
     """
     将WebSearch结果注入到市场数据JSON中
 
@@ -1067,6 +1091,8 @@ def inject_websearch_data(market_data_path, websearch_path, output_path, *, back
     print(f"  - 输出文件: {output_path}")
     if quality_blockers:
         print(f"  [WARN] 质量阻断项: {len(quality_blockers)}（需通过 Stage2/Stage2.5 补齐真实值/对比值）")
+        for blocker in quality_blockers:
+            print(f"    - {blocker.get('category')}.{blocker.get('key')}: {blocker.get('reason')}")
 
     # Final write to trend_history (post Stage2.5)
     try:
@@ -1087,12 +1113,7 @@ def inject_websearch_data(market_data_path, websearch_path, output_path, *, back
         except Exception as exc:  # noqa: BLE001
             print(f"  [WARN] trend_history post-write backfill failed: {exc}")
 
-    date_val = (
-        market_data.get("metadata", {}).get("date")
-        or market_data.get("metadata", {}).get("end_date")
-        or market_data.get("metadata", {}).get("start_date")
-    )
-    date_compact = str(date_val).replace("-", "") if date_val else datetime.now().strftime("%Y%m%d")
+    date_compact = _derive_date_compact(market_data, date_override)
 
     # Refresh quality metrics after manual injection
     try:
@@ -1113,7 +1134,11 @@ def inject_websearch_data(market_data_path, websearch_path, output_path, *, back
 
     # Post-injection validation: check for remaining estimated values
     _post_injection_validation(market_data)
-    _sync_backfill_issues_to_logs(market_data)
+    _sync_backfill_issues_to_logs(
+        market_data,
+        date_override=date_override,
+        gap_monitor_path=gap_monitor_path,
+    )
 
     return output_path
 
@@ -1185,11 +1210,52 @@ def _coerce_float(value: Any) -> Optional[float]:
     return None
 
 
+def _calc_change_rate_pct(current_value: Optional[float], previous_value: Optional[float]) -> Optional[float]:
+    """按百分比口径计算变化率：(current - previous) / abs(previous) * 100。"""
+    if current_value is None or previous_value is None:
+        return None
+    try:
+        current = float(current_value)
+        previous = float(previous_value)
+        denominator = abs(previous)
+        if denominator < 1e-9:
+            return None
+        return round((current - previous) / denominator * 100.0, 4)
+    except Exception:
+        return None
+
+
+def _calc_previous_from_change_rate_pct(
+    current_value: Optional[float], change_rate_pct: Optional[float]
+) -> Optional[float]:
+    """按百分比口径反推前值：previous = current / (1 + change_rate/100)。"""
+    if current_value is None or change_rate_pct is None:
+        return None
+    try:
+        denominator = 1.0 + float(change_rate_pct) / 100.0
+        if abs(denominator) < 1e-9:
+            return None
+        return round(float(current_value) / denominator, 4)
+    except Exception:
+        return None
+
+
 def _format_source_label(raw_source: Optional[str]) -> str:
-    source_text = (raw_source or "MCP WebSearch").strip()
-    if "MCP WebSearch" in source_text:
+    source_text = str(raw_source or "").strip()
+    if not source_text:
+        return DEFAULT_SOURCE_LABEL
+    if source_text == SOURCE_ANOMALY_LABEL:
         return source_text
-    return f"MCP WebSearch实时获取({source_text})"
+    if source_text == DEFAULT_SOURCE_LABEL or source_text.startswith(f"{DEFAULT_SOURCE_LABEL}("):
+        return source_text
+    lower_source = source_text.lower()
+    if "manual_required" in lower_source or "websearch_manual" in lower_source:
+        return DEFAULT_SOURCE_LABEL
+    if "tavily" in lower_source or "deepseek" in lower_source or source_text == DEFAULT_SOURCE_LABEL:
+        return source_text
+    if source_text.startswith("http"):
+        return f"{DEFAULT_SOURCE_LABEL}({source_text})"
+    return f"{DEFAULT_SOURCE_LABEL}({source_text})"
 
 
 def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
@@ -1308,19 +1374,37 @@ def _apply_macro_entry(
         else:
             fallback_reason = hist_prev.get("reason")
 
-    # 兜底回填前值：若有 current_value + change_rate 但前值缺失，用差值推算；若连 change_rate 也无，则保持为空
+    # 兜底回填变化率：若有 current_value + previous_value 且 change_rate 缺失，自动按百分比补齐
+    if (
+        entry['change_rate'] is None
+        and entry['current_value'] is not None
+        and entry['previous_value'] is not None
+    ):
+        change_rate_pct = _calc_change_rate_pct(entry['current_value'], entry['previous_value'])
+        if change_rate_pct is not None:
+            entry['change_rate'] = change_rate_pct
+            if not entry.get('note'):
+                entry['note'] = ''
+            if entry['note']:
+                entry['note'] += '；'
+            entry['note'] += 'auto-backfilled change_rate% via (current-previous)/abs(previous)*100'
+        else:
+            fallback_reason = fallback_reason or "change_rate_pct_div_by_zero"
+
+    # 兜底回填前值：若有 current_value + change_rate(%) 但前值缺失，按百分比反推
     if entry['previous_value'] is None and entry['current_value'] is not None:
         if not entry.get('note'):
             entry['note'] = ''
         if entry['change_rate'] is not None:
-            try:
-                entry['previous_value'] = round(entry['current_value'] - entry['change_rate'], 4)
+            previous_value = _calc_previous_from_change_rate_pct(entry['current_value'], entry['change_rate'])
+            if previous_value is not None:
+                entry['previous_value'] = previous_value
                 if entry['note']:
                     entry['note'] += '；'
-                entry['note'] += 'auto-backfilled previous_value via current_value - change_rate'
+                entry['note'] += 'auto-backfilled previous_value via current/(1+change_rate/100)'
                 fallback_reason = fallback_reason or "no_previous_value"
-            except Exception:
-                pass
+            else:
+                fallback_reason = fallback_reason or "change_rate_pct_invalid_denominator"
         else:
             fallback_reason = fallback_reason or "manual_incomplete"
 
@@ -1345,7 +1429,7 @@ def _create_monetary_placeholder(key: str, payload: Dict[str, Any], metadata: Di
         "date": default_date,
         "as_of_date": payload.get('as_of_date'),
         "rrr_type": payload.get('rrr_type'),
-        "source": "待MCP WebSearch获取(websearch导入)",
+        "source": "待WebSearch补充(websearch导入)",
         "note": payload.get('note'),
         "is_estimated": True
     }
@@ -1365,7 +1449,7 @@ def _create_macro_placeholder(key: str, payload: Dict[str, Any], metadata: Dict[
         "date": default_date,
         "as_of_date": payload.get('as_of_date'),
         "value_type": payload.get('value_type'),
-        "source": "MCP WebSearch待补充",
+        "source": "待WebSearch补充",
         "note": payload.get('note'),
         "is_estimated": True,
     }
@@ -1473,7 +1557,7 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
 
     anomaly = any(value == 0 for value in (recent_value, total_value, current_value) if value is not None)
     anomaly = anomaly or _is_suspicious_fund_flow_pair(key, recent_value, total_value)
-    entry['source'] = "异常零值-需核查" if anomaly else "MCP WebSearch实时获取"
+    entry['source'] = SOURCE_ANOMALY_LABEL if anomaly else DEFAULT_SOURCE_LABEL
     entry['note'] = _build_fund_flow_note(payload, anomaly)
     if existing_suspicious:
         entry['note'] = (
@@ -1521,7 +1605,7 @@ def _infer_asset_trend(
     Returns:
         趋势描述字符串
     """
-    if raw_trend and raw_trend not in ('未知', '待MCP获取', '待 WebSearch'):
+    if raw_trend and raw_trend not in ('未知', '待WebSearch补充', '待 WebSearch'):
         return raw_trend
 
     # 债券特殊处理：收益率上行=熊市，下行=牛市
@@ -1917,7 +2001,11 @@ def _calc_prev_from_event_history(
         latest_val = parsed[-1][1]
         prev_val = parsed[-2][1] if abs(latest_val - float(current_value)) < 1e-6 else latest_val
         result["previous_value"] = prev_val
-        result["change_rate"] = float(current_value) - float(prev_val)
+        change_rate_pct = _calc_change_rate_pct(float(current_value), float(prev_val))
+        if change_rate_pct is None:
+            result["reason"] = "change_rate_pct_div_by_zero"
+        else:
+            result["change_rate"] = change_rate_pct
         return result
     for event in events:
         if not isinstance(event, dict):
@@ -1939,7 +2027,11 @@ def _calc_prev_from_event_history(
     prev_val = parsed[-2][1] if abs(latest_val - float(current_value)) < 1e-6 else latest_val
 
     result["previous_value"] = prev_val
-    result["change_rate"] = float(current_value) - float(prev_val)
+    change_rate_pct = _calc_change_rate_pct(float(current_value), float(prev_val))
+    if change_rate_pct is None:
+        result["reason"] = "change_rate_pct_div_by_zero"
+    else:
+        result["change_rate"] = change_rate_pct
     return result
 
 
@@ -2081,7 +2173,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
             _merge_trend_confidence(bond, confidence)
         if confidence_reason:
             _append_note(bond, confidence_reason)
-        if bond.get("trend") in (None, "未知", "待MCP获取", "待 WebSearch"):
+        if bond.get("trend") in (None, "未知", "待WebSearch补充", "待 WebSearch"):
             bond["trend"] = _infer_asset_trend(
                 None,
                 bond.get("change_5d_bp"),
@@ -2129,7 +2221,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
             _merge_trend_confidence(fx, confidence)
         if confidence_reason:
             _append_note(fx, confidence_reason)
-        if fx.get("trend") in (None, "未知", "待MCP获取", "待 WebSearch"):
+        if fx.get("trend") in (None, "未知", "待WebSearch补充", "待 WebSearch"):
             fx["trend"] = _infer_asset_trend(
                 None,
                 fx.get("daily_change"),
@@ -2176,7 +2268,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
             _merge_trend_confidence(comm, confidence)
         if confidence_reason:
             _append_note(comm, confidence_reason)
-        if comm.get("trend") in (None, "未知", "待MCP获取", "待 WebSearch"):
+        if comm.get("trend") in (None, "未知", "待WebSearch补充", "待 WebSearch"):
             comm["trend"] = _infer_asset_trend(
                 None,
                 comm.get("daily_change"),
@@ -2249,13 +2341,13 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
             stats["fund_flow"] += 1
 
         trend_base = flow.get("recent_5d")
-        if flow.get("trend") in (None, "未知", "待获取", "待MCP获取", "待 WebSearch"):
+        if flow.get("trend") in (None, "未知", "待获取", "待WebSearch补充", "待 WebSearch"):
             flow["trend"] = _infer_trend(flow.get("trend"), trend_base)
 
         anomaly = any(
             value == 0 for value in (flow.get("recent_5d"), flow.get("total_120d")) if value is not None
         )
-        flow["source"] = "异常零值-需核查" if anomaly else "MCP WebSearch实时获取"
+        flow["source"] = SOURCE_ANOMALY_LABEL if anomaly else DEFAULT_SOURCE_LABEL
         note_parts: List[str] = []
         existing_note = flow.get("note")
         if isinstance(existing_note, str) and existing_note:
@@ -2282,11 +2374,18 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
                 indicator["previous_value"] = hist_prev.get("previous_value")
             if change_missing and hist_prev.get("change_rate") is not None:
                 indicator["change_rate"] = hist_prev.get("change_rate")
+            reason = hist_prev.get("reason") or "manual_incomplete"
             if indicator.get("previous_value") is None:
-                reason = hist_prev.get("reason") or "manual_incomplete"
                 _append_note(indicator, f"reason={reason}")
                 _record_backfill_issue(metadata, "macro_indicators", key, "previous_value", reason)
-            else:
+            if indicator.get("change_rate") is None:
+                reason = hist_prev.get("reason") or "manual_incomplete"
+                _append_note(indicator, f"reason={reason}")
+                _record_backfill_issue(metadata, "macro_indicators", key, "change_rate", reason)
+            if (
+                indicator.get("previous_value") is not None
+                and indicator.get("change_rate") is not None
+            ):
                 _remove_note_markers(indicator, ("reason=no_previous_value", "无前值可比"))
             stats["macro_indicators"] += 1
 
@@ -2339,39 +2438,131 @@ def _run_post_write_trend_backfill(market_data: Dict[str, Any], output_path: Pat
     return stats
 
 
-def _sync_backfill_issues_to_logs(market_data: Dict[str, Any]) -> None:
-    """将趋势派生失败原因写入 gap_monitor/observability 的 data_quality_issues。"""
+def _issue_signature(issue: Dict[str, Any]) -> Tuple[Any, Any, Any, Any]:
+    return (issue.get("category"), issue.get("key"), issue.get("field"), issue.get("reason"))
+
+
+def _merge_quality_issues(base_issues: List[Dict[str, Any]], extra_issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: List[Dict[str, Any]] = []
+    seen = set()
+    for item in list(base_issues or []) + list(extra_issues or []):
+        if not isinstance(item, dict):
+            continue
+        sig = _issue_signature(item)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        merged.append(item)
+    return merged
+
+
+def _collect_unresolved_gap_items(market_data: Dict[str, Any]) -> List[str]:
+    """收集仍未补齐的缺口项，用于重写 gap_monitor.manual_required。"""
+    unresolved: List[str] = []
     metadata = market_data.get("metadata", {}) if isinstance(market_data, dict) else {}
-    issues = metadata.get("trend_backfill_issues")
+    metadata_missing = metadata.get("missing_items", {})
+    if isinstance(metadata_missing, dict):
+        for category, items in metadata_missing.items():
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict):
+                    key = item.get("key") or item.get("indicator_key")
+                else:
+                    key = item
+                if not key:
+                    continue
+                key_str = str(key)
+                if _is_missing_item_filled(market_data, category, key_str):
+                    continue
+                unresolved.append(key_str)
+
+    top_missing = market_data.get("missing_items", [])
+    if isinstance(top_missing, list):
+        for item in top_missing:
+            if isinstance(item, dict):
+                key = item.get("key") or item.get("indicator_key")
+            else:
+                key = item
+            if key:
+                unresolved.append(str(key))
+
+    deduped: List[str] = []
+    seen = set()
+    for key in unresolved:
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
+def _rewrite_gap_monitor_after_injection(
+    market_data: Dict[str, Any],
+    *,
+    date_override: Optional[str] = None,
+    gap_monitor_path: Optional[Path] = None,
+    extra_issues: Optional[List[Dict[str, Any]]] = None,
+) -> Path:
+    """按当前 market_data 状态重写 gap_monitor，避免遗留旧 manual_required。"""
+    date_compact = _derive_date_compact(market_data, date_override)
+    target_path = gap_monitor_path or (Path("reports") / f"gap_monitor_{date_compact}.json")
+
+    existing_payload: Dict[str, Any] = {}
+    if target_path.exists():
+        try:
+            existing_payload = json.loads(target_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            existing_payload = {}
+
+    existing_issues = existing_payload.get("data_quality_issues", [])
+    merged_issues = _merge_quality_issues(existing_issues, extra_issues or [])
+    unresolved = _collect_unresolved_gap_items(market_data)
+
+    payload: Dict[str, Any] = {
+        "generated_at": datetime.now().isoformat(),
+        "data_quality_issues": merged_issues,
+    }
+    if unresolved:
+        payload["manual_required"] = unresolved
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return target_path
+
+
+def _sync_backfill_issues_to_logs(
+    market_data: Dict[str, Any],
+    *,
+    date_override: Optional[str] = None,
+    gap_monitor_path: Optional[Path] = None,
+) -> None:
+    """将趋势派生失败原因写入 observability，并按当前状态重写当日 gap_monitor。"""
+    metadata = market_data.get("metadata", {}) if isinstance(market_data, dict) else {}
+    issues = metadata.get("trend_backfill_issues") or []
+    date_compact = _derive_date_compact(market_data, date_override)
+
+    _rewrite_gap_monitor_after_injection(
+        market_data,
+        date_override=date_override,
+        gap_monitor_path=gap_monitor_path,
+        extra_issues=issues,
+    )
+
     if not issues:
         return
-    date_val = metadata.get("date") or metadata.get("end_date") or metadata.get("start_date")
-    date_compact = str(date_val).replace("-", "") if date_val else datetime.now().strftime("%Y%m%d")
 
-    def _merge_quality_issues(path: Path) -> None:
-        payload: Dict[str, Any] = {}
-        if path.exists():
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8")) or {}
-            except Exception:
-                payload = {}
-        payload.setdefault("generated_at", datetime.now().isoformat())
-        payload.setdefault("data_quality_issues", [])
-        existing = {
-            (item.get("category"), item.get("key"), item.get("field"), item.get("reason"))
-            for item in payload.get("data_quality_issues", [])
-            if isinstance(item, dict)
-        }
-        for issue in issues:
-            sig = (issue.get("category"), issue.get("key"), issue.get("field"), issue.get("reason"))
-            if sig in existing:
-                continue
-            payload["data_quality_issues"].append(issue)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    _merge_quality_issues(Path("reports") / f"gap_monitor_{date_compact}.json")
-    _merge_quality_issues(Path("logs") / f"observability_{date_compact}.json")
+    observability_path = Path("logs") / f"observability_{date_compact}.json"
+    payload: Dict[str, Any] = {}
+    if observability_path.exists():
+        try:
+            payload = json.loads(observability_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            payload = {}
+    payload.setdefault("generated_at", datetime.now().isoformat())
+    payload["data_quality_issues"] = _merge_quality_issues(payload.get("data_quality_issues", []), issues)
+    observability_path.parent.mkdir(parents=True, exist_ok=True)
+    observability_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _merge_stock_index_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2634,50 +2825,100 @@ def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
         "source": _format_source_label(payload.get('source')),
     }
 
-if __name__ == '__main__':
-    # 默认路径
-    data_dir = Path(__file__).parent / 'data'
+def _default_cli_paths() -> Tuple[Path, Path, Path]:
+    data_dir = Path(__file__).parent / "data"
+    return (
+        data_dir / "20251114_market_data_enhanced_test.json",
+        data_dir / "websearch_results_20251114_test.json",
+        data_dir / "20251114_market_data_complete_test.json",
+    )
 
-    market_data_file = data_dir / '20251114_market_data_enhanced_test.json'
-    websearch_file = data_dir / 'websearch_results_20251114_test.json'
-    output_file = data_dir / '20251114_market_data_complete_test.json'
-    backfill_trend = True
 
-    # 如果提供了命令行参数，使用它们
-    raw_args = sys.argv[1:]
-    flags = {arg for arg in raw_args if arg.startswith("--")}
-    positional = [arg for arg in raw_args if not arg.startswith("--")]
-    if "--no-backfill-trend" in flags or "--disable-backfill-trend" in flags:
-        backfill_trend = False
-    if "--backfill-trend" in flags:
-        backfill_trend = True
+def parse_args() -> argparse.Namespace:
+    default_market, default_websearch, default_output = _default_cli_paths()
+    parser = argparse.ArgumentParser(
+        description="Stage2.5 WebSearch 数据注入脚本",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "market_data_path",
+        nargs="?",
+        default=str(default_market),
+        help="Stage2 产出的市场数据 JSON 路径",
+    )
+    parser.add_argument(
+        "websearch_path",
+        nargs="?",
+        default=str(default_websearch),
+        help="WebSearch 结果 JSON 路径（支持 Stage2 results 或 manual schema）",
+    )
+    parser.add_argument(
+        "output_path",
+        nargs="?",
+        default=str(default_output),
+        help="注入后的完整市场数据输出路径",
+    )
+    parser.add_argument(
+        "--date",
+        default=None,
+        help="覆盖日期（YYYY-MM-DD 或 YYYYMMDD），用于质量指标/gap_monitor 文件名",
+    )
+    parser.add_argument(
+        "--gap-monitor-path",
+        default=None,
+        help="指定重写的 gap_monitor 路径；不传则默认 reports/gap_monitor_<DATE>.json",
+    )
+    parser.add_argument(
+        "--backfill-trend",
+        dest="backfill_trend",
+        action="store_true",
+        default=True,
+        help="启用 trend_history 回填（默认开启）",
+    )
+    parser.add_argument(
+        "--no-backfill-trend",
+        "--disable-backfill-trend",
+        dest="backfill_trend",
+        action="store_false",
+        help="禁用 trend_history 回填",
+    )
+    return parser.parse_args()
 
-    if len(positional) > 0:
-        market_data_file = Path(positional[0])
-    if len(positional) > 1:
-        websearch_file = Path(positional[1])
-    if len(positional) > 2:
-        output_file = Path(positional[2])
 
-    # 检查文件是否存在
+def main() -> None:
+    args = parse_args()
+    market_data_file = Path(args.market_data_path).expanduser().resolve()
+    websearch_file = Path(args.websearch_path).expanduser().resolve()
+    output_file = Path(args.output_path).expanduser().resolve()
+    gap_monitor_path = (
+        Path(args.gap_monitor_path).expanduser().resolve()
+        if args.gap_monitor_path
+        else None
+    )
+
     if not market_data_file.exists():
         print(f"[ERROR] 市场数据文件不存在: {market_data_file}")
         sys.exit(1)
-
     if not websearch_file.exists():
         print(f"[ERROR] WebSearch结果文件不存在: {websearch_file}")
         sys.exit(1)
 
-    # 执行注入
     try:
         inject_websearch_data(
             market_data_path=market_data_file,
             websearch_path=websearch_file,
             output_path=output_file,
-            backfill_trend=backfill_trend,
+            backfill_trend=args.backfill_trend,
+            date_override=args.date,
+            gap_monitor_path=gap_monitor_path,
         )
-    except Exception as e:
-        print(f"\n[ERROR] 数据注入失败: {e}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n[ERROR] 数据注入失败: {exc}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

@@ -48,7 +48,7 @@ def test_apply_fund_flow_entry_normalizes_websearch_payload():
     assert entry["recent_5d"] == pytest.approx(140.0)
     assert entry["total_120d"] == pytest.approx(1800.0)
     assert entry["trend"] == "流入"
-    assert entry["source"] == "MCP WebSearch实时获取"
+    assert entry["source"] == "websearch_manual"
     assert "来源:东方财富网" in entry["note"]
     assert "原始5日:约140亿元" in entry["note"]
 
@@ -106,7 +106,7 @@ def test_apply_fund_flow_entry_overrides_suspicious_stage2_pair():
     assert updated is True
     assert entry["recent_5d"] == pytest.approx(268.5)
     assert entry["total_120d"] == pytest.approx(1320.2)
-    assert entry["source"] == "MCP WebSearch实时获取"
+    assert entry["source"] == "websearch_manual"
     assert entry["note"].startswith("覆盖Stage2可疑占位值")
 
 
@@ -140,7 +140,7 @@ def test_apply_monetary_entry_uses_change_rate_when_delta_missing():
     assert updated is True
     assert entry["current_value"] == pytest.approx(1.85)
     assert entry["change_from_120d"] == pytest.approx(-0.15)
-    assert entry["source"].startswith("MCP WebSearch实时获取")
+    assert entry["source"].startswith("websearch_manual(")
 
 
 def test_merge_bond_entry_marks_low_confidence_when_history_base_estimated(monkeypatch):
@@ -407,3 +407,165 @@ def test_enforce_quality_blockers_marks_missing_items():
     assert "monetary_policy" in metadata_missing
     assert "industrial" in market_data["missing_items"]
     assert "mlf" in market_data["missing_items"]
+
+
+def test_apply_macro_entry_autofills_change_rate_from_previous_value():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "2026-02-09",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.1",
+        "previous_value": "1.9",
+        "unit": "%",
+        "source": "国家统计局",
+    }
+
+    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-09")
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.1)
+    assert entry["previous_value"] == pytest.approx(1.9)
+    assert entry["change_rate"] == pytest.approx(10.5263)
+    assert "auto-backfilled change_rate% via (current-previous)/abs(previous)*100" in str(entry.get("note") or "")
+
+
+def test_apply_macro_entry_backfills_previous_from_change_rate_percent(monkeypatch):
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "2026-02-09",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.1",
+        "change_rate": "5.0",
+        "unit": "%",
+        "source": "国家统计局",
+    }
+    monkeypatch.setattr(
+        injector,
+        "_calc_prev_from_event_history",
+        lambda *args, **kwargs: {"previous_value": None, "change_rate": None, "reason": "no_previous_value"},
+    )
+
+    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-09")
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.1)
+    assert entry["previous_value"] == pytest.approx(2.0)
+    assert entry["change_rate"] == pytest.approx(5.0)
+    assert "auto-backfilled previous_value via current/(1+change_rate/100)" in str(entry.get("note") or "")
+
+
+def test_apply_macro_entry_marks_reason_when_previous_is_zero():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "2026-02-09",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.1",
+        "previous_value": "0",
+        "unit": "%",
+        "source": "国家统计局",
+    }
+
+    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-09")
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.1)
+    assert entry["previous_value"] == pytest.approx(0.0)
+    assert entry["change_rate"] is None
+    assert "reason=change_rate_pct_div_by_zero" in str(entry.get("note") or "")
+
+
+def test_rewrite_gap_monitor_after_injection_clears_stale_manual_required(tmp_path: Path):
+    gap_path = tmp_path / "gap_monitor_20260209.json"
+    gap_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-02-09T00:00:00",
+                "manual_required": ["northbound", "etf"],
+                "pending_tasks": ["northbound"],
+                "data_quality_issues": [
+                    {
+                        "category": "macro_indicators",
+                        "key": "industrial",
+                        "field": "previous_value",
+                        "reason": "no_previous_value",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    market_data = {
+        "metadata": {"date": "2026-02-09", "missing_items": {}, "trend_backfill_issues": []},
+        "missing_items": [],
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    injector._rewrite_gap_monitor_after_injection(
+        market_data,
+        gap_monitor_path=gap_path,
+        extra_issues=[],
+    )
+    payload = json.loads(gap_path.read_text(encoding="utf-8"))
+    assert "manual_required" not in payload
+    assert "pending_tasks" not in payload
+    assert len(payload.get("data_quality_issues", [])) == 1
+
+
+def test_sync_backfill_issues_to_logs_rewrites_gap_monitor_even_without_issues(tmp_path: Path):
+    gap_path = tmp_path / "gap_monitor_20260209.json"
+    gap_path.write_text(
+        json.dumps(
+            {
+                "generated_at": "2026-02-09T00:00:00",
+                "manual_required": ["USDCNY"],
+                "data_quality_issues": [],
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    market_data = {
+        "metadata": {"date": "2026-02-09", "missing_items": {}, "trend_backfill_issues": []},
+        "missing_items": [],
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    injector._sync_backfill_issues_to_logs(market_data, gap_monitor_path=gap_path)
+    payload = json.loads(gap_path.read_text(encoding="utf-8"))
+    assert "manual_required" not in payload
