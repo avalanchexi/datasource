@@ -101,12 +101,26 @@ class Stage2TaskPlanner:
         tasks: List[Dict[str, Any]] = []
         for item in payload.get("missing_items", []):
             if isinstance(item, dict):
-                indicator_key = item.get("key") or item
+                indicator_key = item.get("key") or item.get("indicator_key")
+                if not indicator_key:
+                    continue
                 phase = item.get("stage_phase") or self._infer_phase(indicator_key)
+                reason = str(item.get("reason") or "").lower()
+                trigger_reason = "stale_data" if "stale_data" in reason else "missing"
+                expected_period = item.get("expected_period")
             else:
                 indicator_key = item
                 phase = self._infer_phase(indicator_key)
-            tasks.append(self._new_task(indicator_key, phase))
+                trigger_reason = "missing"
+                expected_period = None
+            tasks.append(
+                self._new_task(
+                    indicator_key,
+                    phase,
+                    trigger_reason=trigger_reason,
+                    expected_period=expected_period,
+                )
+            )
         return tasks
 
     def _infer_phase(self, indicator_key: str) -> str:
@@ -120,12 +134,12 @@ class Stage2TaskPlanner:
         macro = payload.get("macro_indicators", {})
         for indicator_key, indicator_payload in macro.items():
             if self._is_placeholder(indicator_payload.get("current_value")):
-                tasks.append(self._new_task(indicator_key, "essential"))
+                tasks.append(self._new_task(indicator_key, "essential", trigger_reason="placeholder"))
 
         monetary = payload.get("monetary_policy", {})
         for policy_key, policy_payload in monetary.items():
             if self._is_placeholder(policy_payload.get("current_value")):
-                tasks.append(self._new_task(policy_key, "essential"))
+                tasks.append(self._new_task(policy_key, "essential", trigger_reason="placeholder"))
 
         fund_flow = payload.get("fund_flow", {})
         for flow_key, flow_payload in fund_flow.items():
@@ -134,7 +148,42 @@ class Stage2TaskPlanner:
             ):
                 source_hint = None
                 backend = self.fund_flow_backend
-                tasks.append(self._new_task(flow_key, "assets", source_hint=source_hint, backend=backend))
+                tasks.append(
+                    self._new_task(
+                        flow_key,
+                        "assets",
+                        source_hint=source_hint,
+                        backend=backend,
+                        trigger_reason="placeholder",
+                    )
+                )
+        return tasks
+
+    def _scan_stale_entries(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        tasks: List[Dict[str, Any]] = []
+        macro = payload.get("macro_indicators", {})
+        for indicator_key, indicator_payload in macro.items():
+            if isinstance(indicator_payload, dict) and bool(indicator_payload.get("is_stale")):
+                tasks.append(
+                    self._new_task(
+                        indicator_key,
+                        "essential",
+                        trigger_reason="stale_data",
+                        expected_period=indicator_payload.get("expected_period"),
+                    )
+                )
+
+        monetary = payload.get("monetary_policy", {})
+        for policy_key, policy_payload in monetary.items():
+            if isinstance(policy_payload, dict) and bool(policy_payload.get("is_stale")):
+                tasks.append(
+                    self._new_task(
+                        policy_key,
+                        "essential",
+                        trigger_reason="stale_data",
+                        expected_period=policy_payload.get("expected_period"),
+                    )
+                )
         return tasks
 
     def _new_task(
@@ -143,6 +192,8 @@ class Stage2TaskPlanner:
         phase: str,
         source_hint: Optional[str] = None,
         backend: Optional[str] = None,
+        trigger_reason: str = "missing",
+        expected_period: Optional[str] = None,
     ) -> Dict[str, Any]:
         profile = SEARCH_PROFILES.get(indicator_key, {})
         query = self._apply_query_templates(profile.get("query"))
@@ -174,22 +225,33 @@ class Stage2TaskPlanner:
             "low_score_threshold": profile.get("low_score_threshold"),
             "allow_low_score_extract": profile.get("allow_low_score_extract", False),
             "source_hint": source_hint,
+            "trigger_reason": trigger_reason,
+            "expected_period": expected_period,
             "retry_count": 0,
             "created_at": int(time.time()),
         }
 
     def build_tasks(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         self.query_context = self._build_query_context(payload)
-        tasks = self._from_missing_items(payload) + self._scan_placeholders(payload)
+        tasks = self._from_missing_items(payload) + self._scan_placeholders(payload) + self._scan_stale_entries(payload)
         # 去重：同一 indicator_key 只保留一条，避免 basic/advanced 双倍调用
-        seen = set()
-        unique_tasks = []
+        seen: Dict[str, int] = {}
+        priority = {"stale_data": 3, "placeholder": 2, "missing": 1}
+        unique_tasks: List[Dict[str, Any]] = []
         for task in tasks:
             key = task["indicator_key"]
-            if key in seen:
+            reason = str(task.get("trigger_reason") or "missing")
+            score = priority.get(reason, 0)
+            if key not in seen:
+                seen[key] = score
+                unique_tasks.append(task)
                 continue
-            seen.add(key)
-            unique_tasks.append(task)
+            if score > seen[key]:
+                seen[key] = score
+                for idx, old_task in enumerate(unique_tasks):
+                    if old_task.get("indicator_key") == key:
+                        unique_tasks[idx] = task
+                        break
         if self.stage_phase != "all":
             unique_tasks = [t for t in unique_tasks if t["stage_phase"] == self.stage_phase]
         logger.info(f"[Stage2TaskPlanner] 生成 {len(unique_tasks)} 条任务")

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
+from datasource.utils.policy_rules import load_policy_rules
 
 MIN_COMPLETENESS_DEFAULT = 0.80
 
@@ -105,11 +106,37 @@ def _collect_compare_gaps(market_payload: Dict[str, Any]) -> List[str]:
     return gaps
 
 
+def _collect_stale_items(market_payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """收集被标记为 stale 的宏观/货币指标。"""
+    stale_items: List[Dict[str, Any]] = []
+    for category in ("macro_indicators", "monetary_policy"):
+        section = market_payload.get(category, {})
+        if not isinstance(section, dict):
+            continue
+        for key, entry in section.items():
+            if not isinstance(entry, dict):
+                continue
+            if not entry.get("is_stale"):
+                continue
+            stale_items.append(
+                {
+                    "category": category,
+                    "key": str(key),
+                    "date": entry.get("date"),
+                    "expected_period": entry.get("expected_period"),
+                    "reason": entry.get("stale_reason") or "actual_period_behind_expected",
+                }
+            )
+    return stale_items
+
+
 def _require_data_completeness(
     market_payload: Dict[str, Any],
     min_completeness: float,
     allow_estimated: bool = False,
     skip_fund_flow_check: bool = False,
+    block_on_stale: bool = True,
+    critical_stale_keys: Optional[List[str]] = None,
 ) -> None:
     """在开始 Stage3 之前阻断缺失数据的情形。"""
     metadata = market_payload.get("metadata", {})
@@ -117,6 +144,7 @@ def _require_data_completeness(
     missing_items = _flatten_missing_items(market_payload)
     compare_gaps = _collect_compare_gaps(market_payload)
     estimated_items = _collect_estimated_items(market_payload)
+    stale_items = _collect_stale_items(market_payload)
 
     if estimated_items and not allow_estimated:
         raise RuntimeError(
@@ -131,6 +159,21 @@ def _require_data_completeness(
             f"\n缺口: {', '.join(compare_gaps)}"
             "\n请通过 Stage2/Stage2.5 补齐 previous_value/change 后重试。"
         )
+
+    if block_on_stale and stale_items:
+        critical = {str(k).lower() for k in (critical_stale_keys or ["cpi", "ppi", "pmi", "m1", "m2", "tsf"])}
+        critical_stale = [item for item in stale_items if item.get("key", "").lower() in critical]
+        if critical_stale:
+            details = []
+            for item in critical_stale:
+                details.append(
+                    f"{item.get('category')}.{item.get('key')} actual={item.get('date')} expected={item.get('expected_period')} reason={item.get('reason')}"
+                )
+            raise RuntimeError(
+                "检测到关键月度指标过期(stale)，禁止进入 Stage3。"
+                "\n请先通过 Stage2/Stage2.5 覆盖到预期期次。"
+                f"\nstale项: {'; '.join(details)}"
+            )
 
     # 若允许估算值，自动忽略那些已经被估算填充但仍留在 missing 列表中的条目
     if allow_estimated:
@@ -295,11 +338,16 @@ async def _run_analysis(
             try:
                 policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
                 if policy_payload.get("block_stage3"):
-                    blockers.append(f"policy: redlist={policy_payload.get('redlist')}")
+                    blockers.append(
+                        f"policy: redlist={policy_payload.get('redlist')}, stale_redlist={policy_payload.get('stale_redlist')}"
+                    )
             except Exception as exc:  # noqa: BLE001
                 print(f"[WARN] policy_evaluation check skipped: {exc}")
 
     # 2) completeness gate
+    policy_rules = load_policy_rules()
+    block_on_stale = bool(policy_rules.get("block_on_stale", True))
+    critical_stale_keys = policy_rules.get("critical_stale_keys", ["cpi", "ppi", "pmi", "m1", "m2", "tsf"])
     completeness_error: Optional[str] = None
     try:
         _require_data_completeness(
@@ -307,6 +355,8 @@ async def _run_analysis(
             min_completeness,
             allow_estimated=allow_estimated,
             skip_fund_flow_check=skip_fund_flow_check,
+            block_on_stale=block_on_stale,
+            critical_stale_keys=critical_stale_keys if isinstance(critical_stale_keys, list) else None,
         )
     except RuntimeError as exc:
         completeness_error = str(exc)

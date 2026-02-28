@@ -495,6 +495,66 @@ def test_apply_macro_entry_marks_reason_when_previous_is_zero():
     assert "reason=change_rate_pct_div_by_zero" in str(entry.get("note") or "")
 
 
+def test_apply_macro_entry_skips_non_stale_existing_value():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": 2.1,
+        "previous_value": 1.9,
+        "change_rate": 10.5,
+        "unit": "%",
+        "date": "2026-01",
+        "source": "TuShare cn_cpi",
+        "is_stale": False,
+        "expected_period": "2026-01",
+        "stale_reason": None,
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.0",
+        "previous_value": "1.8",
+        "change_rate": "11.1",
+        "unit": "%",
+        "date": "2026-01",
+        "source": "国家统计局",
+    }
+    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-27")
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(2.1)
+    assert entry["is_stale"] is False
+
+
+def test_apply_macro_entry_overrides_stale_and_clears_flag():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": 0.8,
+        "previous_value": 0.6,
+        "change_rate": 0.2,
+        "unit": "%",
+        "date": "2025-12",
+        "source": "TuShare cn_cpi",
+        "is_stale": True,
+        "expected_period": "2026-01",
+        "stale_reason": "actual_period_behind_expected",
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "0.2",
+        "previous_value": "0.8",
+        "change_rate": "-0.6",
+        "unit": "%",
+        "date": "2026-01",
+        "source": "国家统计局",
+    }
+    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-27", override_stale=True)
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(0.2)
+    assert entry["date"] == "2026-01"
+    assert entry["is_stale"] is False
+    assert entry["stale_reason"] is None
+
+
 def test_rewrite_gap_monitor_after_injection_clears_stale_manual_required(tmp_path: Path):
     gap_path = tmp_path / "gap_monitor_20260209.json"
     gap_path.write_text(

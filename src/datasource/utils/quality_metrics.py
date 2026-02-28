@@ -112,6 +112,28 @@ def build_quality_metrics(market_payload: Dict[str, Any]) -> Dict[str, Any]:
         if not _is_filled(recent) or not _is_filled(total_val):
             anomalies.append({"category": "fund_flow", "key": key, "reason": "missing_or_zero"})
 
+    stale_items: List[Dict[str, Any]] = []
+    stale_by_category: Dict[str, int] = {"macro_indicators": 0, "monetary_policy": 0}
+    for category in ("macro_indicators", "monetary_policy"):
+        section = market_payload.get(category, {}) or {}
+        if not isinstance(section, dict):
+            continue
+        for key, item in section.items():
+            if not isinstance(item, dict):
+                continue
+            if not item.get("is_stale"):
+                continue
+            stale_items.append(
+                {
+                    "category": category,
+                    "key": key,
+                    "date": item.get("date"),
+                    "expected_period": item.get("expected_period"),
+                    "reason": item.get("stale_reason"),
+                }
+            )
+            stale_by_category[category] = stale_by_category.get(category, 0) + 1
+
     # volatility threshold checks (simple)
     thresholds = _load_thresholds(Path("config/quality_thresholds.json"))
     vol_pct = thresholds.get("volatility_pct", {}) if isinstance(thresholds.get("volatility_pct"), dict) else {}
@@ -183,6 +205,9 @@ def build_quality_metrics(market_payload: Dict[str, Any]) -> Dict[str, Any]:
         "completeness_by_category": completeness_by_category,
         "missing_items": metadata.get("missing_items", {}),
         "anomalies": anomalies,
+        "stale_count": len(stale_items),
+        "stale_items": stale_items,
+        "stale_by_category": stale_by_category,
         "source_levels": source_levels,
         "thresholds": thresholds,
     }

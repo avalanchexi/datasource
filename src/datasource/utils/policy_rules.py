@@ -13,6 +13,8 @@ DEFAULT_RULES = {
     "extract_422_cooldown_sec": 300,
     "low_score_threshold": 0.2,
     "critical_missing_keys": ["dxy", "bdi", "rrr", "mlf"],
+    "block_on_stale": True,
+    "critical_stale_keys": ["cpi", "ppi", "pmi", "m1", "m2", "tsf"],
     "min_trading_days": 100,
 }
 
@@ -39,7 +41,15 @@ def _simple_yaml_load(path: Path) -> Dict[str, Any]:
                 try:
                     data[key] = int(value)
                 except Exception:
-                    data[key] = value
+                    # cast float / bool if possible
+                    lowered = value.lower()
+                    if lowered in {"true", "false"}:
+                        data[key] = lowered == "true"
+                    else:
+                        try:
+                            data[key] = float(value)
+                        except Exception:
+                            data[key] = value
                 current_key = None
         elif line.startswith("-") and current_key:
             item = line.lstrip("-").strip()
@@ -66,6 +76,7 @@ def evaluate_policy(
     missing = metadata.get("missing_items", {}) if isinstance(metadata.get("missing_items", {}), dict) else {}
 
     critical_keys = set(k.lower() for k in rules.get("critical_missing_keys", []))
+    critical_stale_keys = set(k.lower() for k in rules.get("critical_stale_keys", []))
     redlist = []
     for category, items in missing.items():
         for item in items:
@@ -73,7 +84,30 @@ def evaluate_policy(
             if key and key.lower() in critical_keys:
                 redlist.append({"key": key, "category": category})
 
-    block_stage3 = bool(redlist)
+    stale_redlist = []
+    block_on_stale = bool(rules.get("block_on_stale", True))
+    for category in ("macro_indicators", "monetary_policy"):
+        section = market_payload.get(category, {})
+        if not isinstance(section, dict):
+            continue
+        for key, payload in section.items():
+            if not isinstance(payload, dict):
+                continue
+            if not payload.get("is_stale"):
+                continue
+            if key.lower() not in critical_stale_keys:
+                continue
+            stale_redlist.append(
+                {
+                    "key": key,
+                    "category": category,
+                    "date": payload.get("date"),
+                    "expected_period": payload.get("expected_period"),
+                    "reason": payload.get("stale_reason"),
+                }
+            )
+
+    block_stage3 = bool(redlist) or (block_on_stale and bool(stale_redlist))
 
     extract_422_threshold = rules.get("extract_422_threshold", 3)
     extract_422_count = 0
@@ -84,6 +118,8 @@ def evaluate_policy(
         "generated_at": datetime.now().isoformat(),
         "date": metadata.get("date") or metadata.get("end_date") or metadata.get("start_date"),
         "redlist": redlist,
+        "stale_redlist": stale_redlist,
+        "block_on_stale": block_on_stale,
         "block_stage3": block_stage3,
         "extract_422_count": extract_422_count,
         "extract_422_threshold": extract_422_threshold,

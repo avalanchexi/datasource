@@ -244,6 +244,8 @@ def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str
             return False
         if not _has_valid_value(entry.get('current_value')):
             return False
+        if entry.get("is_stale"):
+            return False
         if entry.get('is_estimated'):
             return False
         if category == 'macro_indicators':
@@ -793,6 +795,8 @@ def inject_websearch_data(
     backfill_trend: bool = True,
     date_override: Optional[str] = None,
     gap_monitor_path: Optional[Path] = None,
+    override_stale: bool = True,
+    force_override: bool = False,
 ):
     """
     将WebSearch结果注入到市场数据JSON中
@@ -857,7 +861,15 @@ def inject_websearch_data(
         if key not in macro_section:
             # 缺失即创建占位，避免 industrial_sales 等被跳过
             macro_section[key] = _create_macro_placeholder(key, payload, metadata)
-        if _apply_macro_entry(key, macro_section[key], payload, metadata.get('date'), is_manual=is_manual):
+        if _apply_macro_entry(
+            key,
+            macro_section[key],
+            payload,
+            metadata.get('date'),
+            is_manual=is_manual,
+            override_stale=override_stale,
+            force_override=force_override,
+        ):
             inject_count += 1
             print(f"  [OK] {payload.get('indicator_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'macro_indicators', key)
@@ -870,7 +882,15 @@ def inject_websearch_data(
         key = MONETARY_KEY_MAP.get(raw_key, raw_key)
         if key not in monetary_section:
             monetary_section[key] = _create_monetary_placeholder(key, payload, metadata)
-        if _apply_monetary_entry(key, monetary_section[key], payload, metadata.get('date'), is_manual=is_manual):
+        if _apply_monetary_entry(
+            key,
+            monetary_section[key],
+            payload,
+            metadata.get('date'),
+            is_manual=is_manual,
+            override_stale=override_stale,
+            force_override=force_override,
+        ):
             inject_count += 1
             print(f"  [OK] {payload.get('policy_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'monetary_policy', key)
@@ -1288,14 +1308,22 @@ def _apply_macro_entry(
     reference_date: Optional[str],
     *,
     is_manual: bool = False,
+    override_stale: bool = True,
+    force_override: bool = False,
 ) -> bool:
     if not isinstance(entry, dict):
+        return False
+    existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
+    existing_stale = bool(entry.get("is_stale"))
+    if not force_override and not existing_placeholder and not (override_stale and existing_stale):
         return False
     entry['indicator_name'] = payload.get('indicator_name', entry.get('indicator_name'))
     entry['unit'] = payload.get('unit', entry.get('unit', ''))
     incoming_date = payload.get('date') or payload.get('as_of_date') or payload.get('report_period')
     if incoming_date:
         entry['date'] = incoming_date
+    if payload.get("expected_period"):
+        entry["expected_period"] = payload.get("expected_period")
     entry['as_of_date'] = payload.get('as_of_date') or payload.get('report_period') or entry.get('as_of_date')
     entry['source'] = _format_source_label(payload.get('source'))
     # 确保 note 为字符串，避免 None 参与字符串拼接时报错
@@ -1415,6 +1443,8 @@ def _apply_macro_entry(
     # 若仍无有效 current_value，则视为缺失，抛出异常阻断流程，避免 Stage3 出现 N/A
     if entry['current_value'] is None:
         raise ValueError(f"macro_indicators.{entry.get('indicator_name', 'unknown')} current_value is missing after injection")
+    entry["is_stale"] = False
+    entry["stale_reason"] = None
     return True
 
 
@@ -1431,7 +1461,10 @@ def _create_monetary_placeholder(key: str, payload: Dict[str, Any], metadata: Di
         "rrr_type": payload.get('rrr_type'),
         "source": "待WebSearch补充(websearch导入)",
         "note": payload.get('note'),
-        "is_estimated": True
+        "is_estimated": True,
+        "is_stale": False,
+        "expected_period": payload.get("expected_period"),
+        "stale_reason": None,
     }
 
 
@@ -1452,6 +1485,9 @@ def _create_macro_placeholder(key: str, payload: Dict[str, Any], metadata: Dict[
         "source": "待WebSearch补充",
         "note": payload.get('note'),
         "is_estimated": True,
+        "is_stale": False,
+        "expected_period": payload.get("expected_period"),
+        "stale_reason": None,
     }
 
 
@@ -1462,8 +1498,14 @@ def _apply_monetary_entry(
     reference_date: Optional[str],
     *,
     is_manual: bool = False,
+    override_stale: bool = True,
+    force_override: bool = False,
 ) -> bool:
     if not isinstance(entry, dict):
+        return False
+    existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
+    existing_stale = bool(entry.get("is_stale"))
+    if not force_override and not existing_placeholder and not (override_stale and existing_stale):
         return False
     entry['policy_name'] = payload.get('policy_name', entry.get('policy_name'))
     incoming_value = _coerce_float(payload.get('current_value'))
@@ -1473,6 +1515,8 @@ def _apply_monetary_entry(
     incoming_date = payload.get('date') or payload.get('as_of_date') or payload.get('report_period')
     if incoming_date:
         entry['date'] = incoming_date
+    if payload.get("expected_period"):
+        entry["expected_period"] = payload.get("expected_period")
     entry['as_of_date'] = payload.get('as_of_date') or entry.get('as_of_date')
     entry['source'] = _format_source_label(payload.get('source'))
     note_val = payload.get('note', entry.get('note'))
@@ -1521,6 +1565,9 @@ def _apply_monetary_entry(
             note_val += '；'
         note_val += f"reason={fallback_reason}"
         entry['note'] = note_val
+    if entry.get("current_value") is not None:
+        entry["is_stale"] = False
+        entry["stale_reason"] = None
     return True
 
 
@@ -2882,6 +2929,25 @@ def parse_args() -> argparse.Namespace:
         action="store_false",
         help="禁用 trend_history 回填",
     )
+    parser.add_argument(
+        "--override-stale",
+        dest="override_stale",
+        action="store_true",
+        default=True,
+        help="允许手工注入覆盖 is_stale=True 的宏观/货币字段（默认开启）",
+    )
+    parser.add_argument(
+        "--no-override-stale",
+        dest="override_stale",
+        action="store_false",
+        help="禁用 stale 覆盖，仅填充 current_value 为空的字段",
+    )
+    parser.add_argument(
+        "--force-override",
+        action="store_true",
+        default=False,
+        help="强制覆盖已有值（应急模式，谨慎使用）",
+    )
     return parser.parse_args()
 
 
@@ -2911,6 +2977,8 @@ def main() -> None:
             backfill_trend=args.backfill_trend,
             date_override=args.date,
             gap_monitor_path=gap_monitor_path,
+            override_stale=args.override_stale,
+            force_override=args.force_override,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"\n[ERROR] 数据注入失败: {exc}")

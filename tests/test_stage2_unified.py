@@ -29,6 +29,35 @@ def test_task_planner_detects_missing_and_placeholders(tmp_path: Path):
     assert {"cpi", "pmi_new_orders", "ppi", "m2"} <= indicator_keys
 
 
+def test_task_planner_picks_stale_entries(tmp_path: Path):
+    payload = {
+        "missing_items": [],
+        "macro_indicators": {
+            "cpi": {"current_value": 0.8, "is_stale": True, "expected_period": "2026-01"},
+        },
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+    task_map = {t["indicator_key"]: t for t in tasks}
+    assert "cpi" in task_map
+    assert task_map["cpi"]["trigger_reason"] == "stale_data"
+    assert task_map["cpi"]["expected_period"] == "2026-01"
+
+
+def test_task_planner_dedupe_prefers_stale_reason(tmp_path: Path):
+    payload = {
+        "missing_items": [{"key": "cpi", "reason": "manual_missing"}],
+        "macro_indicators": {
+            "cpi": {"current_value": 7.13, "is_stale": True, "expected_period": "2026-01"},
+        },
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+    cpi_tasks = [t for t in tasks if t["indicator_key"] == "cpi"]
+    assert len(cpi_tasks) == 1
+    assert cpi_tasks[0]["trigger_reason"] == "stale_data"
+
+
 def test_flag_fund_flow_anomalies_marks_zero_values():
     payload = {
         "fund_flow": {

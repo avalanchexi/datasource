@@ -32,15 +32,17 @@ cp .env.example .env  # 编辑填入 TUSHARE_TOKEN, TAVILY_API_KEY, DEEPSEEK_API
 
 # 验证安装
 python -c "from datasource import get_manager; print('OK')"
+datasource-test  # CLI 入口（等价于 python -m datasource.cli test_command）
 
-# 预检（每次运行流水线前必跑）
+# 预检（每次运行流水线前必跑；验证三个 API key ≥20字符 + 清代理）
 bash run_preflight.sh
 ```
 
 ### 推荐运行方式
 
-优先使用 `run_clean.sh` 包装器执行所有脚本（自动 activate venv、source .env、清代理、设 PYTHONPATH）：
+**所有脚本统一通过 `run_clean.sh` 执行**（自动 activate venv、source .env、unset 代理、PYTHONPATH=./src）：
 ```bash
+bash run_clean.sh python scripts/stage1_data_collector.py --date 2025-06-01
 bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
 bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
 ```
@@ -50,12 +52,14 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
 ## Testing
 
 ```bash
-pytest -q                                # 快速测试
+pytest -q                                # 快速测试（conftest.py 自动添加 ROOT/src 到 sys.path）
 pytest tests/test_file.py::test_name -v  # 单测
-pytest tests/integration/                # 集成测试套件
-python tests/test_datasource.py          # 数据源集成测试
+pytest tests/integration/                # 集成测试（enhanced_pring, 120d, background_scan）
+python tests/test_datasource.py          # 数据源连通性集成测试
 black src/ tests/ scripts/ && flake8 src/ && mypy src/datasource/  # 代码质量
 ```
+
+**测试文件结构**: 单元测试 `tests/test_*.py`（stage1/2/3、trend_history、policy_rules、fund_flow 等），集成测试 `tests/integration/`，测试夹具 `tests/test_data_sources/`，Stage4 报告生成脚本 `tests/scripts/`。
 
 ## Daily Report Pipeline
 
@@ -69,6 +73,10 @@ env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
 PYTHONPATH=./src python scripts/stage1_data_collector.py \
   --date "$DATE" \
   --output data/${DATE_NH}_market_data.json
+
+# Stage 1 后必跑：月度新鲜度检查（防止 TuShare 月度表滞后被误判为"完整"）
+PYTHONPATH=./src python scripts/check_monthly_freshness.py data/${DATE_NH}_market_data.json
+# 若输出 STALE/MISSING（典型：cpi/ppi/pmi/m1/m2/tsf），必须经 Stage2/Stage2.5 补齐后才能进入 Stage3
 
 # Stage 2: Tavily+DeepSeek 增强（当日只跑1次！）
 PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
@@ -156,18 +164,27 @@ src/datasource/
 ├── agents/          # AI 代理 (background_scan with config/templates)
 ├── analyzers/       # 长期分析、国际对比、行业轮动、政策追踪、风险监控等
 └── manager.py       # DataSourceManager 单例入口
+
+standalone/          # 独立分析脚本（不依赖主流水线，自包含，含独立输出目录）
+scripts/temp/        # 一次性/临时脚本（不纳入主流水线，可随时清理）
 ```
 
 **关键文件**:
-- `src/datasource/models/market_data_contract.py`: 数据契约定义（WebSearch JSON 必须匹配此 schema）
-- `src/datasource/config/search_profiles.py`: Tavily 搜索配置（query/域名/阈值）
-- `config/policy_rules.yaml`: 策略规则（422 阈值、关键缺失字段）
+- `src/datasource/models/market_data_contract.py`: Pydantic 数据契约（StockIndex/Commodity/Forex/Bond/FundFlow/Macro/MonetaryPolicy）；FundFlowData 内置 `_parse_amount()` 处理万亿/千亿/亿单位转换
+- `src/datasource/config/search_profiles.py`: Tavily 搜索配置（query/域名/阈值），26KB
+- `src/datasource/config/indices_config.py`: 技术指标映射配置，32KB
+- `src/datasource/engines/deepseek_reasoner.py`: DeepSeek LLM 抽取引擎
+- `src/datasource/engines/stage2_task_planner.py`: Stage2 任务分解与调度
+
+**配置文件**:
+- `config/policy_rules.yaml`: 策略规则 — `extract_422_threshold: 1`, `low_score_threshold: 0.2`, `critical_missing_keys: [dxy, bdi, rrr, mlf]`, `min_trading_days: 100`
+- `config/quality_thresholds.json`: 数据质量阈值 — 波动率(商品10%/外汇2%/股指8%)、债券50bp、过期时间(商品外汇1h/债券6h/宏观720h)
 
 **关键数据路径**:
 - `data/trend_history/min/series/{category}/{symbol}.json`: 滚动时序数据
 - `data/trend_history/min/events/{indicator}.json`: 宏观事件序列
 - `reports/tavily_cache.sqlite`: Tavily 搜索缓存（跨日复用）
-- `logs/observability_*.json`: Stage2 指标级耗时/来源统计
+- `logs/observability_*.json`: Stage2 指标级耗时/来源统计（score_filtered_drop, cache_hit_rate, avg_elapsed_ms 等）
 
 ### Key Patterns
 
@@ -240,7 +257,9 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback
 
 > 完整故障排除表见 AGENTS.md "Troubleshooting 速查表"
 
-**诊断工具**: `PYTHONPATH=./src python3 scripts/stage2_low_score_audit.py --date YYYY-MM-DD` 可审计低分仍进入抽取的指标。
+**诊断工具**:
+- `bash run_clean.sh python scripts/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
+- `bash run_clean.sh python scripts/stage2_low_score_audit.py --date YYYY-MM-DD` — 审计低分仍进入抽取的指标
 
 ## Output Files
 
@@ -261,6 +280,7 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback
 - **Python**: ≥3.7, 4-space indent, UTF-8, async-first
 - **Naming**: `lower_snake_case` (functions/vars), `CamelCase` (classes)
 - **Commits**: Conventional (`feat:`, `fix:`, `refactor:`)
+- **PR 提交**: 需通过 `.github/pull_request_template.md` 检查清单（pytest、AGENTS.md 合规、black/flake8、夹具更新）
 - **详细规范**: 见 AGENTS.md
 
 ## Key Documentation

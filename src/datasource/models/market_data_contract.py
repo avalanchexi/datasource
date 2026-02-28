@@ -143,6 +143,9 @@ class MacroIndicatorData(BaseModel):
     value_type: Optional[str] = None    # 口径标记: yoy_month/yoy_ytd 等
     source: str
     is_estimated: bool = False
+    is_stale: bool = False
+    expected_period: Optional[str] = None
+    stale_reason: Optional[str] = None
     stage_task_id: Optional[str] = None
     note: Optional[str] = None
 
@@ -158,6 +161,9 @@ class MonetaryPolicyData(BaseModel):
     rrr_type: Optional[str] = None      # 存准率口径: weighted/statutory 等
     source: str
     is_estimated: bool = False
+    is_stale: bool = False
+    expected_period: Optional[str] = None
+    stale_reason: Optional[str] = None
     note: Optional[str] = None
     stage_task_id: Optional[str] = None
 

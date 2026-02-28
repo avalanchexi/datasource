@@ -70,6 +70,28 @@ def test_require_data_completeness_fail_on_missing_compare_values():
         s3._require_data_completeness(payload, 0.8)
 
 
+def test_require_data_completeness_fail_on_stale_critical_items():
+    payload = {
+        "metadata": {"data_completeness": 0.9},
+        "missing_items": [],
+        "macro_indicators": {
+            "cpi": {
+                "current_value": 0.2,
+                "previous_value": 0.8,
+                "change_rate": -0.6,
+                "is_estimated": False,
+                "is_stale": True,
+                "date": "2025-12",
+                "expected_period": "2026-01",
+                "stale_reason": "actual_period_behind_expected",
+            }
+        },
+    }
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(payload, 0.8, block_on_stale=True, critical_stale_keys=["cpi"])
+    assert "expected=2026-01" in str(exc.value)
+
+
 def test_resolve_gap_monitor_prefers_dated_file(tmp_path: Path, monkeypatch):
     reports = tmp_path / "reports"
     reports.mkdir(parents=True, exist_ok=True)

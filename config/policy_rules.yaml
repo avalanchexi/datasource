@@ -7,4 +7,12 @@ critical_missing_keys:
   - bdi
   - rrr
   - mlf
+block_on_stale: true
+critical_stale_keys:
+  - cpi
+  - ppi
+  - pmi
+  - m1
+  - m2
+  - tsf
 min_trading_days: 100

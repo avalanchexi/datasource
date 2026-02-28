@@ -157,6 +157,11 @@
     --output "data/${DATE_NH}_market_data.json"
   ```
   - 商品行情不走 Yahoo/Investing 兜底；北向/南向/ETF 资金流写占位符，后续必补。
+  - **Stage1 后必须跑月度新鲜度检查**（防止 TuShare 月度表滞后被误判为“完整”）：
+  ```bash
+  PYTHONPATH=./src python3 scripts/check_monthly_freshness.py data/${DATE_NH}_market_data.json
+  ```
+  - 若输出 `STALE/MISSING`（典型：`cpi/ppi/pmi/m1/m2/tsf`），必须继续 Stage2/Stage2.5 补齐，未清零不得进入 Stage3。
 
 - **Stage2** Tavily 增强（首次运行推荐精度优先；同日只跑 1 次 Tavily，失败转 Stage2.5 补数）：
   ```bash
@@ -210,6 +215,7 @@
     reports/websearch_results_${DATE_NH}_manual.json \
     data/${DATE_NH}_market_data_complete.json
   ```
+  - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；如需仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`（谨慎）。
   - 成功后 `metadata.missing_items`、`reports/gap_monitor_${DATE_NH}.json` 应为空；零值标记 `异常零值-需核查`。
   - 若输入是 Stage2 自动结果（`results` 数组），脚本会自动转换为 schema，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`）。
   - `metadata.manual_required` 按 `category:indicator_key` 去重，避免人工项重复。
@@ -234,7 +240,7 @@
     reports/${DATE}-背景扫描120.md
   ```
 
-- **收尾校验**：确认 `reports/gap_monitor_${DATE_NH}.json` 为空，报告内无 “N/A（待 WebSearch）”，并检查 `is_estimated=True`（宏观/货币政策/债券）。
+- **收尾校验**：确认 `reports/gap_monitor_${DATE_NH}.json` 为空，报告内无 “N/A（待 WebSearch）”，并检查 `is_estimated=True`（宏观/货币政策/债券）与关键月度字段 `is_stale=False`。
 
 ## Stage2 额外产出（自动落盘）
 - `reports/quality_metrics_${DATE}.json`（质量指标）与 `reports/quality_trend.csv`（可选累积）
@@ -394,6 +400,7 @@ If proxy required, pass `proxies` explicitly in the check.
 | Stage2 DeepSeek 持续超时 | API 响应慢或网络问题 | `--extraction-backend regex --disable-extract`，或降低 `--deepseek-timeout` 并串行关键指标 |
 | Tavily extract 422 | API 参数/限制 | 默认回退 DeepSeek 解析 snippets；仍不稳用 `--disable-extract` 或缩小 `--extract-topk` |
 | 搜索相关性低（低分全体） | 结果 `score_max < low_score_threshold` | 调整 `search_profiles.queries/exclude_domains`，必要时提高阈值并转人工补数 |
+| 宏观/货币显示旧月份（如 2025-12） | TuShare 月度表入库滞后，Stage1 虽有值但 `is_stale=true` | 先跑 `python3 scripts/check_monthly_freshness.py data/${DATE_NH}_market_data.json`，再走 Stage2/Stage2.5 覆盖 stale 字段（默认 `--override-stale`） |
 | Stage3 完整度 <80% 报错 | 关键字段为 null | 检查 macro/monetary/stock_indices，手动补数据后重注入 |
 | 注入时 KeyError: 'symbol' | WebSearch JSON 缺必填字段 | 参照 WebSearch JSON Schema 补全字段 |
 | 报告出现 N/A | 数据未注入或格式错误 | 查 gap_monitor，确认数字字段为可解析数值 |

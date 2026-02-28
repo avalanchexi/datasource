@@ -38,6 +38,23 @@ class _FakeManager:
         return payload
 
 
+class _MacroLagManager(_FakeManager):
+    async def get_ppi_data(self, *_args, **_kwargs):
+        payload = type("Resp", (), {})()
+        payload.data = pd.DataFrame({"month": ["202511", "202512"], "ppi_yoy": [-2.1, -1.9]})
+        return payload
+
+    async def get_cpi_data(self, *_args, **_kwargs):
+        payload = type("Resp", (), {})()
+        payload.data = pd.DataFrame({"month": ["202511", "202512"], "cpi_yoy": [0.6, 0.8]})
+        return payload
+
+    async def get_pmi_data(self, *_args, **_kwargs):
+        payload = type("Resp", (), {})()
+        payload.data = pd.DataFrame({"month": ["202511", "202512"], "pmi010100": [50.1, 50.8]})
+        return payload
+
+
 def test_fetch_gdp_uses_delta_change_rate(monkeypatch):
     monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-02-06")
@@ -47,3 +64,48 @@ def test_fetch_gdp_uses_delta_change_rate(monkeypatch):
     assert payload["current_value"] == pytest.approx(5.0)
     assert payload["previous_value"] == pytest.approx(5.2)
     assert payload["change_rate"] == pytest.approx(-0.2)
+
+
+def test_apply_monthly_freshness_marks_stale_for_lagging_month(monkeypatch):
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-02-27")
+    payload = {"date": "2025-12", "current_value": 0.8}
+    marked = collector._apply_monthly_freshness(payload, "cpi")
+    assert marked is not None
+    assert marked["expected_period"] == "2026-01"
+    assert marked["is_stale"] is True
+    assert marked["stale_reason"] == "actual_period_behind_expected"
+
+
+def test_apply_monthly_freshness_pmi_uses_current_month_after_month_end(monkeypatch):
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-02-28")
+    payload = {"date": "2026-01", "current_value": 50.2}
+    marked = collector._apply_monthly_freshness(payload, "pmi")
+    assert marked is not None
+    assert marked["expected_period"] == "2026-02"
+    assert marked["is_stale"] is True
+
+
+def test_apply_monthly_freshness_respects_release_lag_before_mid_month(monkeypatch):
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-02-10")
+    payload = {"date": "2025-12", "current_value": 0.8}
+    marked = collector._apply_monthly_freshness(payload, "cpi")
+    assert marked is not None
+    assert marked["expected_period"] == "2025-12"
+    assert marked["is_stale"] is False
+
+
+def test_collect_macro_indicators_records_stale_items(monkeypatch):
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _MacroLagManager())
+    collector = MarketDataCollector("2026-02-27")
+    result = asyncio.run(collector.collect_macro_indicators())
+    assert result["cpi"].is_stale is True
+    assert result["cpi"].expected_period == "2026-01"
+    stale_keys = {
+        item.get("key")
+        for item in collector.missing_items.get("macro_indicators", [])
+        if isinstance(item, dict) and "stale_data" in str(item.get("reason"))
+    }
+    assert {"cpi", "ppi", "pmi"} <= stale_keys

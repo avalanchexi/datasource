@@ -1098,6 +1098,20 @@ class MarketDataCollector:
             entry.date = payload.get("date", entry.date)
             entry.source = payload.get("source", entry.source)
             entry.is_estimated = False
+            entry.expected_period = payload.get("expected_period")
+            entry.is_stale = bool(payload.get("is_stale", False))
+            entry.stale_reason = payload.get("stale_reason")
+            if entry.is_stale:
+                config = next((cfg for cfg in indicators if cfg.get("key") == key), {})
+                self._record_stale_missing(
+                    category="macro_indicators",
+                    key=key,
+                    name=entry.indicator_name,
+                    payload=payload,
+                    search_query=config.get("search_query"),
+                    source_hint=config.get("source_hint"),
+                    preferred_source="tushare",
+                )
 
         for item in pending_tushare_missing:
             entry = macro_dict.get(item["key"])
@@ -1181,6 +1195,20 @@ class MarketDataCollector:
                 entry.source = payload.get("source", entry.source)
                 entry.note = payload.get("note", entry.note)
                 entry.is_estimated = False
+                entry.expected_period = payload.get("expected_period")
+                entry.is_stale = bool(payload.get("is_stale", False))
+                entry.stale_reason = payload.get("stale_reason")
+                if entry.is_stale:
+                    config = next((cfg for cfg in self.monetary_policy_config if cfg.get("key") == key), {})
+                    self._record_stale_missing(
+                        category="monetary_policy",
+                        key=key,
+                        name=entry.policy_name,
+                        payload=payload,
+                        search_query=config.get("search_query"),
+                        source_hint=config.get("source_hint"),
+                        preferred_source="tushare",
+                    )
 
         for item in pending_tushare_missing:
             entry = monetary_dict.get(item["key"])
@@ -1354,6 +1382,7 @@ class MarketDataCollector:
         self,
         *,
         method_name: str,
+        indicator_key: str,
         indicator_name: str,
         value_candidates: List[str],
         unit: str,
@@ -1381,11 +1410,106 @@ class MarketDataCollector:
                 source_label=source_label
             )
             if payload:
-                return payload
+                return self._apply_monthly_freshness(payload, indicator_key)
             if idx == 0:
                 print(f"    [WARN] {indicator_name} TuShare返回为空，尝试回退至上一统计月 ({fallback_month})")
 
         return None
+
+    def _expected_monthly_period(self, indicator_key: str) -> Optional[str]:
+        """按指标发布节奏估算“当前运行日应可获得的最新期次”."""
+        try:
+            end_dt = datetime.strptime(self.end_date, "%Y-%m-%d")
+        except Exception:
+            return None
+        key = str(indicator_key or "").lower()
+        # PMI通常在当月月末发布，若运行日已到月末可期望当月数据。
+        if key in {"pmi", "pmi_new_orders", "pmi_production"}:
+            month_end = (pd.Timestamp(end_dt) + pd.offsets.MonthEnd(0)).to_pydatetime()
+            target = end_dt if end_dt.date() >= month_end.date() else (end_dt - pd.DateOffset(months=1)).to_pydatetime()
+            return pd.Timestamp(target).strftime("%Y-%m")
+        # CPI/PPI/M1/M2/TSF 常在次月上旬至中旬发布，15号前默认上上月可得，15号后默认上月可得。
+        if key in {"cpi", "ppi", "m0", "m1", "m2", "tsf"}:
+            lag_months = 1 if end_dt.day >= 15 else 2
+            return pd.Timestamp(end_dt - pd.DateOffset(months=lag_months)).strftime("%Y-%m")
+        # 其余月度宏观/货币指标默认应至少更新到上一个自然月。
+        return pd.Timestamp(end_dt - pd.DateOffset(months=1)).strftime("%Y-%m")
+
+    @staticmethod
+    def _period_to_key(period: Optional[str]) -> Optional[int]:
+        if not period:
+            return None
+        text = str(period).strip().replace("/", "-")
+        if len(text) >= 7:
+            text = text[:7]
+        parts = text.split("-")
+        if len(parts) != 2:
+            return None
+        try:
+            year = int(parts[0])
+            month = int(parts[1])
+            if month < 1 or month > 12:
+                return None
+            return year * 12 + month
+        except Exception:
+            return None
+
+    def _apply_monthly_freshness(
+        self,
+        payload: Optional[Dict[str, Any]],
+        indicator_key: str,
+    ) -> Optional[Dict[str, Any]]:
+        """为月度指标补充时效标记，供 Stage2/Stage3 统一处理."""
+        if not payload:
+            return payload
+        expected_period = self._expected_monthly_period(indicator_key)
+        actual_period = str(payload.get("date") or "").strip()
+        if len(actual_period) >= 7:
+            actual_period = actual_period[:7].replace("/", "-")
+        payload["expected_period"] = expected_period
+        stale_reason = None
+        is_stale = False
+        expected_key = self._period_to_key(expected_period)
+        actual_key = self._period_to_key(actual_period)
+        if expected_key is not None:
+            if actual_key is None:
+                is_stale = True
+                stale_reason = "actual_period_missing"
+            elif actual_key < expected_key:
+                is_stale = True
+                stale_reason = "actual_period_behind_expected"
+        payload["is_stale"] = is_stale
+        if stale_reason:
+            payload["stale_reason"] = stale_reason
+        else:
+            payload.pop("stale_reason", None)
+        return payload
+
+    def _record_stale_missing(
+        self,
+        *,
+        category: str,
+        key: str,
+        name: str,
+        payload: Dict[str, Any],
+        search_query: Optional[str],
+        source_hint: Optional[str],
+        preferred_source: str = "tushare",
+    ) -> None:
+        actual_period = payload.get("date") or "unknown"
+        expected_period = payload.get("expected_period") or "unknown"
+        stale_reason = payload.get("stale_reason") or "actual_period_behind_expected"
+        self._record_missing(
+            category,
+            key,
+            name,
+            f"stale_data: actual={actual_period}, expected={expected_period}, reason={stale_reason}",
+            search_query=search_query,
+            source_hint=source_hint,
+            preferred_source=preferred_source,
+            attempted_tushare=True,
+            expected_period=expected_period,
+        )
 
     def _parse_monthly_indicator_dataframe(
         self,
@@ -1439,6 +1563,7 @@ class MarketDataCollector:
     async def _fetch_ppi_from_tushare(self) -> Optional[Dict[str, Any]]:
         return await self._fetch_monthly_indicator_series(
             method_name="get_ppi_data",
+            indicator_key="ppi",
             indicator_name="PPI",
             value_candidates=["ppi_yoy", "ppi"],
             unit="%",
@@ -1448,6 +1573,7 @@ class MarketDataCollector:
     async def _fetch_cpi_from_tushare(self) -> Optional[Dict[str, Any]]:
         return await self._fetch_monthly_indicator_series(
             method_name="get_cpi_data",
+            indicator_key="cpi",
             indicator_name="CPI",
             value_candidates=["cpi_yoy", "nt_yoy", "cpi", "nt_val"],
             unit="%",
@@ -1533,7 +1659,7 @@ class MarketDataCollector:
                 change = None
                 if not base_row.empty:
                     change = target - float(base_row.iloc[-1][col_name])
-                return {
+                payload = {
                     "policy_name": f"{label.upper()}增速",
                     "current_value": target,
                     "change_from_120d": change,
@@ -1543,6 +1669,7 @@ class MarketDataCollector:
                     "note": f"TuShare cn_m 数据（{label.upper()}同比增速）",
                     "is_estimated": False
                 }
+                return self._apply_monthly_freshness(payload, label)
 
             payloads["m0"] = _build_payload("m0", "m0_yoy" if "m0_yoy" in df.columns else "m0")
             payloads["m1"] = _build_payload("m1", "m1_yoy" if "m1_yoy" in df.columns else "m1")
@@ -1599,7 +1726,7 @@ class MarketDataCollector:
             if base_yoy is not None:
                 change = latest_yoy - base_yoy
 
-            return {
+            payload = {
                 "policy_name": "TSF社融增速",
                 "current_value": round(latest_yoy, 2),
                 "change_from_120d": round(change, 2) if change is not None else None,
@@ -1609,6 +1736,7 @@ class MarketDataCollector:
                 "note": "根据社融存量计算的同比增速",
                 "is_estimated": False
             }
+            return self._apply_monthly_freshness(payload, "tsf")
         except Exception:
             return None
 
@@ -1701,7 +1829,7 @@ class MarketDataCollector:
                 change_rate = None
                 if prev_row is not None:
                     change_rate = float(latest_row["value"]) - prev_value
-                results[key] = {
+                payload = {
                     "indicator_name": label,
                     "current_value": float(latest_row["value"]),
                     "previous_value": prev_value,
@@ -1711,6 +1839,7 @@ class MarketDataCollector:
                     "source": f"TuShare cn_pmi({col_name})",
                     "is_estimated": False
                 }
+                results[key] = self._apply_monthly_freshness(payload, key) or payload
 
             pmi_col = _resolve_column("pmi", [['manufacturing'], ['manu'], ['pmi']])
             new_order_col = _resolve_column("pmi_new_orders", [['new', 'order'], ['neworder'], ['dingdan']])
@@ -1971,6 +2100,7 @@ class MarketDataCollector:
         source_hint: Optional[str] = "tavily",
         preferred_source: str = "tushare",
         attempted_tushare: bool = False,
+        expected_period: Optional[str] = None,
     ) -> None:
         """记录缺失数据,供Stage 2回填"""
         self.missing_items[category].append(
@@ -1982,6 +2112,7 @@ class MarketDataCollector:
                 "search_query": search_query,
                 "source_hint": source_hint,
                 "attempted_tushare": attempted_tushare,
+                "expected_period": expected_period,
             }
         )
 
