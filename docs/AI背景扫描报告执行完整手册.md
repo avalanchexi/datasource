@@ -100,8 +100,8 @@
 - **MCP混合获取，准确性90%+** ✨增强
 - 当前收益率、变动基点、趋势方向
 
-**资金流向** (V2.2 MCP WebSearch Only)：
-- **北向/南向/ETF/融资融券**: 100% MCP WebSearch实时获取，禁止调用 AKShare
+**资金流向** (V2.2 历史 MCP WebSearch Only)：
+- **北向/南向/ETF/融资融券**: 历史口径曾使用 MCP WebSearch；当前按 Stage2.5 manual JSON 注入
 - **异常零值处理**: 任一值=0 时自动标记“异常零值-需核查”，并触发二次 WebSearch 复核
 - **数据时效性**: WebSearch≤5分钟
 - **智能容错**: 所有占位符都由 WebSearch 注入脚本自动解析为浮点+来源标签
@@ -298,7 +298,7 @@ reports/
 ## ⚠️ 注意事项
 
 ### V2.1数据获取优化与限制（历史）
-- **MCP数据时效性**: WebFetch获取延迟≤5分钟，显著优于传统方案
+- **历史 MCP数据时效性**: 旧流程曾记录 WebFetch 延迟≤5分钟
 - **网络依赖性**: MCP工具依赖网络，但具备多源故障转移能力
 - **数据完整性保证**: MCP工具确保汇率、美股、债券数据100%覆盖
 - **智能故障转移**: 传统API失败<5秒切换MCP工具，用户无感知
@@ -914,10 +914,10 @@ asyncio.run(validate_strict_data_policy())
 - 中国10Y国开债
 
 **资金流向** (V2.2 历史 MCP WebSearch Only):
-- 北向资金 (MCP WebSearch实时获取 + 异常零值检测)
-- 南向资金 (MCP WebSearch实时获取 + 异常零值检测)
-- 融资融券余额 (MCP WebSearch实时获取)
-- ETF资金流 (100% MCP WebSearch实时获取)
+- 北向资金 (历史 MCP WebSearch + 异常零值检测)
+- 南向资金 (历史 MCP WebSearch + 异常零值检测)
+- 融资融券余额 (历史 MCP WebSearch)
+- ETF资金流 (历史 MCP WebSearch)
 
 ### AI执行指令
 
@@ -1129,7 +1129,7 @@ python scripts/utility/data_completion_checker.py
 
 #### 数据完整性
 - [ ] 股票指数表格: 5个A股指数完整
-- [ ] 美股指数: 标普500+纳斯达克（WebFetch获取）
+- [ ] 美股指数: 标普500+纳斯达克（按当前 Stage2/Stage2.5 来源标注）
 - [ ] 商品期货表格: 6个品种无"-"
   - COMEX黄金
   - WTI原油
@@ -1145,20 +1145,20 @@ python scripts/utility/data_completion_checker.py
   - 中国10Y国债
   - 美国10Y国债
   - 中国10Y国开债
-- [ ] 资金流向: 4类资金数据完整 (V2.2 WebSearch策略)
-  - 北向资金 (MCP WebSearch实时获取 + 异常零值检测)
-  - 南向资金 (MCP WebSearch实时获取 + 异常零值检测)
-  - ETF资金流 (100% MCP WebSearch实时获取)
-  - 融资融券余额 (MCP WebSearch实时获取)
+- [ ] 资金流向: 4类资金数据完整，0/None/窗口缺失均进入 Stage2.5 manual_required
+  - 北向资金（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
+  - 南向资金（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
+  - ETF资金流（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
+  - 融资融券余额（TuShare 可得字段或 Stage2.5 manual 注入）
 
-#### MCP数据质量
-- [ ] 商品数据: 标注"MCP WebSearch实时获取"
-- [ ] 汇率数据: 标注"MCP WebSearch实时获取"
-- [ ] 债券数据: 标注"MCP WebSearch实时获取"
-- [ ] 财经要闻: 标注"MCP WebSearch实时获取"
-- [ ] 资金流向: 标注"MCP WebSearch实时获取"或"异常零值-需人工核查"
+#### 当前数据质量
+- [ ] 商品数据: 标注 Tavily/DeepSeek 或 Stage2.5 `source_url`
+- [ ] 汇率数据: 标注 Tavily/DeepSeek 或 Stage2.5 `source_url`
+- [ ] 债券数据: 标注 Tavily/DeepSeek 或 Stage2.5 `source_url`
+- [ ] 财经要闻: 标注来源网站与发布时间
+- [ ] 资金流向: 标注 `source_url`，异常零值标记为 `异常零值-需核查`
 - [ ] 资讯来源: 标注具体网站（Trading Economics, Bloomberg等）
-- [ ] 数据时效: 标注"2025-10-XX日"
+- [ ] 数据时效: 标注实际 `as_of_date` / `report_period`
 
 #### 格式规范
 - [ ] 百分比: 保留1位小数（+12.8%）
@@ -1491,7 +1491,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 **2. 数据完整性保证**
 - 汇率数据: 100%通过MCP获取
-- 美股指数: 100%通过WebFetch获取
+- 美股指数: 历史口径曾通过 WebFetch 获取
 - 债券收益率: MCP混合获取，准确性90%+
 - 资金流向: MCP WebSearch Only + 异常零值检测 (V2.2增强)
   - 北向/南向/ETF/融资融券: WebSearch实时获取 + 零值复核
@@ -1576,15 +1576,15 @@ Collection (收集) → Validation (验证) → Analysis (分析)
 ---
 
 **📌 重要提醒**:
-- 本文档是AI执行与用户使用的统一权威手册
-- AI执行时应严格遵循5阶段流程
+- 本文档为 V2.1/V3.1 历史归档参考；当前执行以 `AGENTS.md` 为准
+- AI执行时应遵循 `AGENTS.md` 的 Stage1 → Stage2 unified → Stage2.5 → Stage3 → Stage4
 - Todo List在执行过程中实时更新状态
-- 所有验证清单项必须逐一检查确认
-- MCP工具使用情况应详细记录在数据说明中
-- 资金流向数据应标注来源（MCP WebSearch实时获取或异常零值-需核查）
+- 当前验证以 `gap_monitor.json`、`quality_metrics.json`、Stage3 policy gate 和报告 N/A 检查为准
+- Stage2.5 手工补数必须记录 `source_url` 或在 `source`/`note` 中包含 URL
+- 资金流向数据应标注来源；异常零值标记为 `异常零值-需核查`
 
 ---
 
-**📋 本手册整合了用户指南和AI执行手册，提供完整的使用和执行指导**
-**🤖 适用于Claude Code AI + MCP服务增强执行**
-**⚡ V2.1一键生成，MCP智能补充，数据质量显著提升**
+**📋 本手册仅保留历史用户指南和AI执行手册内容，用于回溯旧流程**
+**🤖 当前执行请使用 AGENTS.md 中的 Stage1 → Stage4 流水线**
+**⚡ 旧 V2.1/MCP 一键生成口径已归档，不作为当前日报生成路径**
