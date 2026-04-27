@@ -56,12 +56,17 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--disable-mcp", action="store_true", help="禁用 MCP（调试/排障时使用）")
     parser.add_argument(
-        "--disable-yahoo-fallback",
+        "--enable-yahoo-fallback",
         action="store_true",
         help=(
-            "禁用 legacy Yahoo Finance diagnostic fallback；当前生产流程不依赖 "
-            "Yahoo 回填，缺口应转 scripts/stage2_5_injector.py"
+            "显式启用 legacy Yahoo Finance diagnostic fallback；"
+            "默认禁用，当前生产流程应转 scripts/stage2_5_injector.py 注入。"
         ),
+    )
+    parser.add_argument(
+        "--disable-yahoo-fallback",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--regenerate-report",
@@ -301,7 +306,7 @@ async def main_async() -> None:
     if args.regenerate_report and (pring_path is None or report_output is None):
         raise ValueError("--regenerate-report 需要提供 --pring-result 和 --report-output")
 
-    yahoo_enabled = not args.disable_yahoo_fallback
+    yahoo_enabled = bool(args.enable_yahoo_fallback)
     _print_banner(
         market_data_path,
         output_path,
@@ -342,11 +347,17 @@ async def main_async() -> None:
             )
             notes.append(note)
         else:
-            notes.append("Stage2: Yahoo Fallback 调用失败，仍存在商品/债券缺口。")
+            notes.append(
+                "Stage2: legacy Yahoo Fallback 调用失败，仍存在商品/债券缺口；"
+                "请写入 Stage2.5 manual/WebSearch JSON，并通过 scripts/stage2_5_injector.py 注入。"
+            )
 
         pending_after_yahoo = _needs_yahoo_fallback(market_payload)
         if pending_after_yahoo:
-            notes.append("Stage2: Yahoo Fallback 后仍检测到商品/债券缺口，请执行 WebSearch 或手工补数。")
+            notes.append(
+                "Stage2: legacy Yahoo Fallback 后仍检测到商品/债券缺口；"
+                "请写入 Stage2.5 manual/WebSearch JSON，并通过 scripts/stage2_5_injector.py 注入。"
+            )
     else:
         pending_after_yahoo = pending_after_enhance
         if pending_after_enhance and not yahoo_enabled:
