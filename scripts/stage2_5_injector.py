@@ -17,7 +17,8 @@ from typing import Any, Dict, Optional, List, Tuple
 from datasource.models.market_data_contract import FundFlowData
 from datasource.utils.trend_history_store import write_from_market_data, DEFAULT_BASE_DIR, SERIES_WINDOWS
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
-from datasource.utils.quality_metrics import write_quality_metrics
+from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
+from datasource.utils.quality_metrics import build_quality_metrics
 from datasource.utils.coercion import is_legacy_713_placeholder, is_stage2_number_placeholder
 from datasource.utils.key_aliases import (
     MONETARY_KEY_ALIASES,
@@ -28,8 +29,6 @@ from datasource.utils.missing_items import (
     append_missing_item,
 )
 from datasource.utils.policy_rules import (
-    evaluate_policy,
-    write_policy_evaluation,
     load_policy_rules,
     is_estimated_allowlisted,
     get_non_blocking_warning_rules,
@@ -280,6 +279,18 @@ def _attach_source_url(payload: Dict[str, Any]) -> None:
         payload["source"] = f"{source} | {url}"
     else:
         payload["source"] = url
+
+
+def _copy_payload_metadata_fields(target: Dict[str, Any], payload: Dict[str, Any], fields: Tuple[str, ...]) -> None:
+    for field in fields:
+        if field in payload and payload.get(field) is not None:
+            target[field] = payload.get(field)
+
+
+def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    url = payload.get("source_url") or payload.get("url")
+    if isinstance(url, str) and url.strip():
+        target["source_url"] = url.strip()
 
 
 def _collect_missing_source_urls(websearch_data: Dict[str, Any]) -> List[str]:
@@ -588,6 +599,70 @@ def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str
     return blockers
 
 
+def _apply_pipeline_quality_state(
+    market_data: Dict[str, Any],
+    *,
+    allow_estimated: bool = False,
+) -> Dict[str, Any]:
+    state = build_pipeline_quality_state(
+        market_data,
+        policy_rules=_policy_rules(),
+        stage="stage2_5",
+        allow_estimated=allow_estimated,
+    )
+    metadata = market_data.setdefault("metadata", {})
+    metadata["missing_items"] = state["missing_items"] or {}
+    metadata["quality_blockers"] = state["quality_blockers"]
+    metadata["source_url_issues"] = state["source_url_issues"]
+    metadata["window_metric_issues"] = state["window_metric_issues"]
+    metadata["manual_required"] = state["manual_required"]
+    market_data["missing_items"] = list(state.get("gap_monitor_view", {}).get("manual_required", []))
+    if not market_data["missing_items"]:
+        market_data["missing_items"] = []
+    return state
+
+
+def _write_unified_quality_artifacts(
+    market_data: Dict[str, Any],
+    state: Dict[str, Any],
+    *,
+    quality_metrics_path: Path,
+    policy_evaluation_path: Path,
+    gap_monitor_path: Optional[Path],
+) -> None:
+    gap_view = state.get("gap_monitor_view", {}) if isinstance(state, dict) else {}
+    gap_payload = {
+        "generated_at": datetime.now().isoformat(),
+        "manual_required": list(gap_view.get("manual_required") or []),
+        "pending_tasks": list(gap_view.get("pending_tasks") or []),
+        "data_quality_issues": list(state.get("quality_blockers") or []),
+        "quality_blockers": list(state.get("quality_blockers") or []),
+    }
+    if gap_monitor_path is not None:
+        gap_monitor_path.parent.mkdir(parents=True, exist_ok=True)
+        gap_monitor_path.write_text(json.dumps(gap_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    quality_payload = build_quality_metrics(market_data)
+    quality_payload.update(
+        {
+            "missing_items": state.get("missing_items") or {},
+            "quality_blockers": state.get("quality_blockers") or [],
+            "source_url_issues": state.get("source_url_issues") or [],
+            "window_metric_issues": state.get("window_metric_issues") or [],
+            "manual_required": state.get("manual_required") or [],
+            "policy_evaluation": state.get("policy_evaluation") or {},
+        }
+    )
+    quality_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    quality_metrics_path.write_text(json.dumps(quality_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    policy_evaluation_path.parent.mkdir(parents=True, exist_ok=True)
+    policy_evaluation_path.write_text(
+        json.dumps(state.get("policy_evaluation") or {}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def _cleanup_monetary_aliases(market_data: Dict[str, Any], metadata: Dict[str, Any]) -> None:
     """清理货币政策别名重复项（canonical 有值、alias 仍为占位时删除 alias）。"""
     section = market_data.get('monetary_policy', {}) if isinstance(market_data, dict) else {}
@@ -616,6 +691,18 @@ def _normalize_fund_flow_payload(raw_key: str, payload: Dict[str, Any]) -> Dict[
         normalized.setdefault('note', normalized.get('ratio'))
         normalized.setdefault('recent_5d', None)
     return normalized
+
+
+def _default_fund_flow_metric_basis(key: str, payload: Dict[str, Any]) -> str:
+    if payload.get("metric_basis"):
+        return str(payload.get("metric_basis"))
+    if key in {"northbound", "southbound"}:
+        return "net_flow_sum"
+    if key == "margin":
+        return "balance_delta"
+    if key == "etf":
+        return "estimated_net_flow" if _coerce_bool(payload.get("is_estimated")) else "net_flow_sum"
+    return "net_flow_sum"
 
 
 def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -1310,12 +1397,13 @@ def inject_websearch_data(
     for idx in market_data.get('stock_indices', []):
         _remove_top_missing(market_data, idx.get('symbol'))
     _cleanup_metadata_missing(metadata, market_data)
-    quality_blockers = _enforce_quality_blockers(market_data)
-    if not market_data.get('missing_items'):
-        market_data['missing_items'] = []
+    quality_state = _apply_pipeline_quality_state(market_data)
+    quality_blockers = quality_state.get("quality_blockers") or []
 
     gap_summary = _refresh_stage2_gap_monitor(market_data)
     _refresh_stage2_notes(metadata, gap_summary)
+    quality_state = _apply_pipeline_quality_state(market_data)
+    quality_blockers = quality_state.get("quality_blockers") or []
 
     # 保存到输出文件
     print(f"\n[INFO] 保存完整数据到: {output_path}")
@@ -1363,25 +1451,29 @@ def inject_websearch_data(
                 print(f"  - trend_history post-write backfill: {post_stats}")
             else:
                 print("  - trend_history post-write backfill: no updates")
+            quality_state = _apply_pipeline_quality_state(market_data)
+            quality_blockers = quality_state.get("quality_blockers") or []
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(market_data, f, ensure_ascii=False, indent=2)
         except Exception as exc:  # noqa: BLE001
             print(f"  [WARN] trend_history post-write backfill failed: {exc}")
 
-    # Refresh quality metrics after manual injection
+    # Refresh unified quality artifacts after manual injection
     try:
         quality_path = run_paths.quality_metrics
-        write_quality_metrics(market_data, quality_path)
-        print(f"  - quality_metrics refreshed: {quality_path}")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  - quality_metrics refresh failed: {exc}")
-
-    # Refresh policy evaluation after manual injection
-    try:
         policy_path = run_paths.policy_evaluation
-        policy_payload = evaluate_policy(market_data, stage2_summary=None)
-        write_policy_evaluation(policy_payload, policy_path)
+        target_gap_path = gap_monitor_path or run_paths.gap_monitor
+        _write_unified_quality_artifacts(
+            market_data,
+            quality_state,
+            quality_metrics_path=quality_path,
+            policy_evaluation_path=policy_path,
+            gap_monitor_path=target_gap_path,
+        )
+        print(f"  - quality_metrics refreshed: {quality_path}")
         print(f"  - policy_evaluation refreshed: {policy_path}")
     except Exception as exc:  # noqa: BLE001
-        print(f"  - policy_evaluation refresh failed: {exc}")
+        print(f"  - unified quality artifacts refresh failed: {exc}")
 
     # Post-injection validation: check for remaining estimated values
     _post_injection_validation(market_data)
@@ -1553,6 +1645,8 @@ def _apply_macro_entry(
         entry["expected_period"] = payload.get("expected_period")
     entry['as_of_date'] = payload.get('as_of_date') or payload.get('report_period') or entry.get('as_of_date')
     entry['source'] = _format_source_label(payload.get('source'))
+    _copy_source_url(entry, payload)
+    _copy_payload_metadata_fields(entry, payload, ("estimation_method", "metric_basis", "confidence"))
     # 确保 note 为字符串，避免 None 参与字符串拼接时报错
     note_val = payload.get('note', entry.get('note'))
     if is_manual and 'note' not in payload:
@@ -1756,6 +1850,8 @@ def _apply_monetary_entry(
         entry["expected_period"] = payload.get("expected_period")
     entry['as_of_date'] = payload.get('as_of_date') or entry.get('as_of_date')
     entry['source'] = _format_source_label(payload.get('source'))
+    _copy_source_url(entry, payload)
+    _copy_payload_metadata_fields(entry, payload, ("estimation_method", "metric_basis", "confidence"))
     note_val = payload.get('note', entry.get('note'))
     if is_manual and 'note' not in payload:
         note_val = ""
@@ -1852,6 +1948,13 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
     anomaly = anomaly or _is_suspicious_fund_flow_pair(key, recent_value, total_value)
     entry['source'] = SOURCE_ANOMALY_LABEL if anomaly else DEFAULT_SOURCE_LABEL
     entry['note'] = _build_fund_flow_note(payload, anomaly)
+    _copy_source_url(entry, payload)
+    _copy_payload_metadata_fields(
+        entry,
+        payload,
+        ("is_estimated", "estimation_method", "confidence"),
+    )
+    entry["metric_basis"] = _default_fund_flow_metric_basis(key, payload)
     if existing_suspicious:
         entry['note'] = (
             f"覆盖Stage2可疑占位值；{entry['note']}" if entry.get('note') else "覆盖Stage2可疑占位值"
@@ -2736,7 +2839,7 @@ def _run_post_write_trend_backfill(
     gap_summary = _refresh_stage2_gap_monitor(market_data)
     _refresh_stage2_notes(metadata, gap_summary)
     _cleanup_metadata_missing(metadata, market_data)
-    _enforce_quality_blockers(market_data)
+    _apply_pipeline_quality_state(market_data)
 
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(market_data, f, ensure_ascii=False, indent=2)
@@ -2817,23 +2920,17 @@ def _rewrite_gap_monitor_after_injection(
     )
     target_path = gap_monitor_path or run_paths.gap_monitor
 
-    existing_payload: Dict[str, Any] = {}
-    if target_path.exists():
-        try:
-            existing_payload = json.loads(target_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            existing_payload = {}
-
-    existing_issues = existing_payload.get("data_quality_issues", [])
-    merged_issues = _merge_quality_issues(existing_issues, extra_issues or [])
-    unresolved = _collect_unresolved_gap_items(market_data)
+    state = _apply_pipeline_quality_state(market_data)
+    merged_issues = _merge_quality_issues(state.get("quality_blockers", []), extra_issues or [])
+    gap_view = state.get("gap_monitor_view", {}) if isinstance(state, dict) else {}
 
     payload: Dict[str, Any] = {
         "generated_at": datetime.now().isoformat(),
+        "manual_required": list(gap_view.get("manual_required") or []),
+        "pending_tasks": list(gap_view.get("pending_tasks") or []),
         "data_quality_issues": merged_issues,
+        "quality_blockers": list(state.get("quality_blockers") or []),
     }
-    if unresolved:
-        payload["manual_required"] = unresolved
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -2995,6 +3092,8 @@ def _merge_bond_entry(
     else:
         merged['change_5d_bp'] = _coerce_float(payload.get('change_5d_bp')) or existing.get('change_5d_bp', 0.0)
         merged['change_120d_bp'] = _coerce_float(payload.get('change_120d_bp')) or existing.get('change_120d_bp', 0.0)
+    _copy_source_url(merged, payload)
+    _copy_payload_metadata_fields(merged, payload, ("estimation_method", "metric_basis", "confidence"))
 
     # 自动推断债券趋势（基于bp变化）
     raw_trend = payload.get('trend', existing.get('trend'))
@@ -3066,6 +3165,12 @@ def _merge_commodity_entry(
     else:
         merged['daily_change'] = _coerce_percent(payload.get('daily_change')) or existing.get('daily_change', 0.0)
         merged['ytd_change'] = _coerce_percent(payload.get('ytd_change')) or existing.get('ytd_change', 0.0)
+    _copy_source_url(merged, payload)
+    _copy_payload_metadata_fields(
+        merged,
+        payload,
+        ("is_estimated", "estimation_method", "metric_basis", "confidence"),
+    )
 
     # 自动推断商品趋势（基于涨跌幅）
     raw_trend = payload.get('trend', existing.get('trend'))
@@ -3140,6 +3245,12 @@ def _merge_forex_entry(
     else:
         merged['daily_change'] = _coerce_percent(payload.get('daily_change')) or orig.get('daily_change', 0.0)
         merged['change_120d'] = _coerce_percent(payload.get('change_120d')) or orig.get('change_120d', 0.0)
+    _copy_source_url(merged, payload)
+    _copy_payload_metadata_fields(
+        merged,
+        payload,
+        ("is_estimated", "estimation_method", "metric_basis", "confidence"),
+    )
 
     # 自动推断外汇趋势（基于涨跌幅）
     raw_trend = payload.get('trend', orig.get('trend'))
@@ -3178,7 +3289,7 @@ def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optio
 
     daily_change_val = daily_change or 0.0
     change_120d_val = change_120d or 0.0
-    return {
+    entry = {
         "pair": pair,
         "name": payload.get('name', pair),
         "current_rate": current_rate,
@@ -3187,6 +3298,13 @@ def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optio
         "trend": _infer_asset_trend(payload.get('trend'), daily_change_val, change_120d_val, "forex"),
         "source": _format_source_label(payload.get('source')),
     }
+    _copy_source_url(entry, payload)
+    _copy_payload_metadata_fields(
+        entry,
+        payload,
+        ("is_estimated", "estimation_method", "metric_basis", "confidence"),
+    )
+    return entry
 
 def _default_cli_paths() -> Tuple[Path, Path, Path]:
     run_paths = build_run_paths_from_reference(fallback_to_today=True)

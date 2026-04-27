@@ -687,9 +687,9 @@ def test_rewrite_gap_monitor_after_injection_clears_stale_manual_required(tmp_pa
         extra_issues=[],
     )
     payload = json.loads(gap_path.read_text(encoding="utf-8"))
-    assert "manual_required" not in payload
-    assert "pending_tasks" not in payload
-    assert len(payload.get("data_quality_issues", [])) == 1
+    assert payload.get("manual_required", []) == []
+    assert payload.get("pending_tasks", []) == []
+    assert payload.get("data_quality_issues", []) == []
 
 
 def test_sync_backfill_issues_to_logs_rewrites_gap_monitor_even_without_issues(tmp_path: Path):
@@ -720,4 +720,164 @@ def test_sync_backfill_issues_to_logs_rewrites_gap_monitor_even_without_issues(t
 
     injector._sync_backfill_issues_to_logs(market_data, gap_monitor_path=gap_path)
     payload = json.loads(gap_path.read_text(encoding="utf-8"))
-    assert "manual_required" not in payload
+    assert payload.get("manual_required", []) == []
+    assert payload.get("pending_tasks", []) == []
+
+
+def test_stage25_writes_unified_quality_state_files(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260427"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+    gap_path = run_dir / "gap_monitor.json"
+
+    market_path.write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "date": "2026-04-27",
+                    "missing_items": {"macro_indicators": [{"key": "industrial", "reason": "old"}]},
+                    "quality_blockers": [{"category": "macro_indicators", "key": "industrial", "reason": "old"}],
+                },
+                "missing_items": ["industrial"],
+                "macro_indicators": {
+                    "industrial": {
+                        "indicator_name": "industrial",
+                        "current_value": None,
+                        "previous_value": None,
+                        "change_rate": None,
+                        "source": "placeholder",
+                    }
+                },
+                "monetary_policy": {},
+                "bonds": [],
+                "forex": [],
+                "commodities": [],
+                "stock_indices": [],
+                "fund_flow": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manual_path.write_text(
+        json.dumps(
+            {
+                "macro_indicators": {
+                    "industrial": {
+                        "indicator_name": "industrial",
+                        "current_value": 5.8,
+                        "previous_value": 5.2,
+                        "change_rate": 11.54,
+                        "unit": "%",
+                        "date": "2026-03",
+                        "source": "manual",
+                        "source_url": "https://example.com/industrial",
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    injector.inject_websearch_data(
+        market_path,
+        manual_path,
+        output_path,
+        backfill_trend=False,
+        disable_trend_history_write=True,
+        gap_monitor_path=gap_path,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["metadata"].get("missing_items") in ({}, None)
+    assert output.get("missing_items") == []
+    assert output["metadata"].get("quality_blockers") == []
+
+    gap_payload = json.loads(gap_path.read_text(encoding="utf-8"))
+    assert gap_payload.get("manual_required", []) == []
+    assert gap_payload.get("pending_tasks", []) == []
+    assert gap_payload.get("quality_blockers", []) == []
+
+    policy_payload = json.loads((run_dir / "policy_evaluation.json").read_text(encoding="utf-8"))
+    assert policy_payload.get("block_stage3") is False
+
+
+def test_stage25_preserves_manual_source_url_and_fund_flow_metric_basis(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260427"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    market_path.write_text(
+        json.dumps(
+            {
+                "metadata": {"date": "2026-04-27", "missing_items": {}},
+                "missing_items": [],
+                "macro_indicators": {},
+                "monetary_policy": {},
+                "bonds": [],
+                "forex": [],
+                "commodities": [
+                    {"symbol": "GC=F", "name": "COMEX黄金", "current_price": None, "source": "placeholder"}
+                ],
+                "stock_indices": [],
+                "fund_flow": {
+                    "northbound": {
+                        "type": "northbound",
+                        "recent_5d": None,
+                        "total_120d": None,
+                        "trend": "待获取",
+                        "source": "placeholder",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manual_path.write_text(
+        json.dumps(
+            {
+                "commodities": [
+                    {
+                        "symbol": "GC=F",
+                        "name": "COMEX黄金",
+                        "current_price": 3350.5,
+                        "unit": "$/oz",
+                        "source": "manual",
+                        "source_url": "https://example.com/gold",
+                    }
+                ],
+                "fund_flow": {
+                    "northbound": {
+                        "recent_5d": 85.6,
+                        "total_120d": 1250.0,
+                        "trend": "流入",
+                        "source": "manual",
+                        "source_url": "https://example.com/northbound",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    injector.inject_websearch_data(
+        market_path,
+        manual_path,
+        output_path,
+        backfill_trend=False,
+        disable_trend_history_write=True,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["commodities"][0]["source_url"] == "https://example.com/gold"
+    assert output["fund_flow"]["northbound"]["source_url"] == "https://example.com/northbound"
+    assert output["fund_flow"]["northbound"]["metric_basis"] == "net_flow_sum"
