@@ -55,7 +55,7 @@ def _build_monetary_summary_text(details: Dict[str, str], stage: str, equity_bia
     return prefix + "货币指标待补数。"
 
 def _build_stage_summary_text(
-    final_stage: PringStage,
+    final_stage: Any,
     confidence: float,
     inventory_stage: str,
     monetary_stage: str,
