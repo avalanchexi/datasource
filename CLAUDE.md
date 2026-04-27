@@ -148,7 +148,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - 解法：直接 Python 编辑 complete.json：
   ```bash
   python3 -c “
-  import json; p='data/runs/${DATE_NH}/market_data_complete.json'
+  import json; p='data/${DATE_NH}_market_data_complete.json'
   d=json.load(open(p))
   d['macro_indicators']['bdi']['is_estimated']=False
   # 同时从顶层 missing_items 移除 bdi
@@ -189,7 +189,7 @@ json.dump(gm,open('data/runs/${DATE_NH}/gap_monitor.json','w'),ensure_ascii=Fals
 ```bash
 python -c "
 import json
-d = json.load(open('data/runs/${DATE_NH}/market_data_complete.json'))
+d = json.load(open('data/${DATE_NH}_market_data_complete.json'))
 comp = d.get('metadata',{}).get('data_completeness', 0)
 print(f'数据完整度: {comp*100:.1f}%')
 if comp < 0.8:
