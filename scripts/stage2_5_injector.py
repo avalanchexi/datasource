@@ -19,6 +19,14 @@ from datasource.utils.trend_history_store import write_from_market_data, DEFAULT
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
 from datasource.utils.quality_metrics import write_quality_metrics
 from datasource.utils.coercion import is_legacy_713_placeholder, is_stage2_number_placeholder
+from datasource.utils.key_aliases import (
+    MONETARY_KEY_ALIASES,
+    canonical_monetary_key,
+    normalize_monetary_section,
+)
+from datasource.utils.missing_items import (
+    append_missing_item,
+)
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -34,14 +42,7 @@ FUND_FLOW_KEY_MAP = {
     "margin_trading": "margin",
 }
 
-MONETARY_KEY_MAP = {
-    "reverse_repo_7d": "reverse_repo",
-    "mlf_rate": "mlf",
-    "tsf_growth": "tsf",
-    "m1_growth": "m1",
-    "m2_growth": "m2",
-    "rrr": "reserve_ratio",
-}
+MONETARY_KEY_MAP = MONETARY_KEY_ALIASES
 
 # 宏观指标键名映射：注入脚本键名 → Stage2/market_data 规范键名
 MACRO_KEY_MAP = {
@@ -234,6 +235,26 @@ def _normalize_keyed_list(payload: Any, key_field: str) -> list:
     return []
 
 
+def _normalize_monetary_payload(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    normalized: Dict[str, Any] = {}
+    for raw_key, value in payload.items():
+        key = canonical_monetary_key(raw_key)
+        if key not in normalized:
+            normalized[key] = value
+            continue
+        existing = normalized[key] if isinstance(normalized[key], dict) else {}
+        incoming = value if isinstance(value, dict) else {}
+        existing_value = existing.get("current_value")
+        incoming_value = incoming.get("current_value")
+        if _has_valid_value(existing_value):
+            continue
+        if _has_valid_value(incoming_value) or raw_key == key:
+            normalized[key] = value
+    return normalized
+
+
 def _extract_source_url(payload: Dict[str, Any]) -> Optional[str]:
     for key in ("source_url", "sourceUrl", "url"):
         url = payload.get(key)
@@ -313,14 +334,19 @@ def _remove_missing_item(metadata: Dict[str, Any], category: str, key: str) -> N
     missing = metadata.get('missing_items')
     if not missing or category not in missing:
         return
+    targets = {str(key)}
+    if category == "monetary_policy":
+        canonical = canonical_monetary_key(key)
+        targets.add(canonical)
+        targets.update(alias for alias, mapped in MONETARY_KEY_MAP.items() if mapped == canonical)
     cleaned = []
     for item in missing[category]:
         if isinstance(item, dict):
             item_key = item.get('key') or item.get('indicator_key')
-            if item_key == key:
+            if str(item_key) in targets:
                 continue
         else:
-            if item == key:
+            if str(item) in targets:
                 continue
         cleaned.append(item)
     if cleaned:
@@ -334,12 +360,17 @@ def _remove_top_missing(market_data: Dict[str, Any], key: str) -> None:
     missing = market_data.get('missing_items')
     if not isinstance(missing, list):
         return
+    targets = {str(key)}
+    canonical = canonical_monetary_key(key)
+    targets.add(canonical)
+    targets.update(alias for alias, mapped in MONETARY_KEY_MAP.items() if mapped == canonical)
     filtered = []
     for item in missing:
         if isinstance(item, dict):
-            if item.get('key') == key or item.get('indicator_key') == key:
+            item_key = item.get('key') or item.get('indicator_key')
+            if str(item_key) in targets:
                 continue
-        elif item == key:
+        elif str(item) in targets:
             continue
         filtered.append(item)
     market_data['missing_items'] = filtered
@@ -444,7 +475,8 @@ def _cleanup_metadata_missing(metadata: Dict[str, Any], market_data: Dict[str, A
                 key = item.get('key') or item.get('indicator_key')
             elif isinstance(item, str):
                 key = item
-            if key and _is_missing_item_filled(market_data, category, key):
+            check_key = canonical_monetary_key(key) if category == "monetary_policy" else key
+            if key and _is_missing_item_filled(market_data, category, check_key):
                 continue
             if item:
                 kept.append(item)
@@ -458,31 +490,8 @@ def _cleanup_metadata_missing(metadata: Dict[str, Any], market_data: Dict[str, A
 
 def _append_missing_item(market_data: Dict[str, Any], category: str, key: str, reason: str) -> None:
     """将质量阻断项写回 metadata/top-level missing_items，确保 Stage3 能硬阻断。"""
-    metadata = market_data.setdefault("metadata", {})
-    missing = metadata.setdefault("missing_items", {})
-    category_items = missing.setdefault(category, [])
-    seen_keys = set()
-    for item in category_items:
-        if isinstance(item, dict):
-            item_key = item.get("key") or item.get("indicator_key")
-        else:
-            item_key = item
-        if item_key:
-            seen_keys.add(str(item_key))
-    if key not in seen_keys:
-        category_items.append({"key": key, "reason": reason})
-
-    top_missing = market_data.setdefault("missing_items", [])
-    top_keys = set()
-    for item in top_missing:
-        if isinstance(item, dict):
-            item_key = item.get("key") or item.get("indicator_key")
-        else:
-            item_key = item
-        if item_key:
-            top_keys.add(str(item_key))
-    if key not in top_keys:
-        top_missing.append(key)
+    canonical_key = canonical_monetary_key(key) if category == "monetary_policy" else key
+    append_missing_item(market_data, category, canonical_key, reason)
 
 
 def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -952,6 +961,8 @@ def inject_websearch_data(
     gap_monitor_path: Optional[Path] = None,
     override_stale: bool = True,
     force_override: bool = False,
+    trend_history_base_dir: Optional[Path] = None,
+    disable_trend_history_write: bool = False,
 ):
     """
     将WebSearch结果注入到市场数据JSON中
@@ -967,12 +978,15 @@ def inject_websearch_data(
     with open(market_data_path, 'r', encoding='utf-8') as f:
         market_data = json.load(f)
     metadata = market_data.setdefault('metadata', {})
+    if isinstance(market_data.get("monetary_policy"), dict):
+        market_data["monetary_policy"] = normalize_monetary_section(market_data.get("monetary_policy"))
     run_paths = build_run_paths_from_reference(
         date=date_override,
         payload=market_data,
         path=market_data_path,
         fallback_to_today=True,
     )
+    trend_base_dir = trend_history_base_dir or DEFAULT_BASE_DIR
 
     # 读取WebSearch结果
     print(f"[INFO] 读取WebSearch结果: {websearch_path}")
@@ -986,6 +1000,7 @@ def inject_websearch_data(
     websearch_data['bonds'] = _normalize_keyed_list(websearch_data.get('bonds'), 'symbol')
     websearch_data['commodities'] = _normalize_keyed_list(websearch_data.get('commodities'), 'symbol')
     websearch_data['stock_indices'] = _normalize_keyed_list(websearch_data.get('stock_indices'), 'symbol')
+    websearch_data['monetary_policy'] = _normalize_monetary_payload(websearch_data.get('monetary_policy'))
 
     gc_warnings: List[Dict[str, Any]] = []
     if is_stage2_results:
@@ -1035,6 +1050,7 @@ def inject_websearch_data(
             is_manual=is_manual,
             override_stale=override_stale,
             force_override=force_override,
+            trend_history_base_dir=trend_base_dir,
         )
         if updated:
             inject_count += 1
@@ -1059,6 +1075,7 @@ def inject_websearch_data(
             is_manual=is_manual,
             override_stale=override_stale,
             force_override=force_override,
+            trend_history_base_dir=trend_base_dir,
         )
         if updated:
             inject_count += 1
@@ -1068,6 +1085,7 @@ def inject_websearch_data(
         else:
             _remove_top_missing_on_skip(market_data, key, monetary_section.get(key))
     _cleanup_monetary_aliases(market_data, metadata)
+    market_data["monetary_policy"] = normalize_monetary_section(market_data.get("monetary_policy"))
 
     # 3. 注入资金流向（标准化为浮点+统一来源）
     print("\n[STEP 3] 注入资金流向数据...")
@@ -1097,11 +1115,16 @@ def inject_websearch_data(
         updated = False
         for i, item in enumerate(market_forex):
             if item.get('pair') == pair:
-                market_forex[i] = _merge_forex_entry(item, fx, is_manual=is_manual)
+                market_forex[i] = _merge_forex_entry(
+                    item,
+                    fx,
+                    is_manual=is_manual,
+                    trend_history_base_dir=trend_base_dir,
+                )
                 updated = True
                 break
         if not updated:
-            market_forex.append(_build_forex_entry(fx))
+            market_forex.append(_build_forex_entry(fx, trend_history_base_dir=trend_base_dir))
         inject_count += 1
         print(f"  [OK] {fx.get('name', pair)}: {fx.get('current_rate')} (source={fx.get('source')})")
         _remove_missing_item(metadata, 'forex', pair)
@@ -1151,7 +1174,12 @@ def inject_websearch_data(
         updated = False
         for i, bond in enumerate(market_data['bonds']):
             if bond.get('symbol') == symbol:
-                market_data['bonds'][i] = _merge_bond_entry(bond, bond_data, is_manual=is_manual)
+                market_data['bonds'][i] = _merge_bond_entry(
+                    bond,
+                    bond_data,
+                    is_manual=is_manual,
+                    trend_history_base_dir=trend_base_dir,
+                )
                 inject_count += 1
                 print(f"  [OK] {bond_data['name']}: {bond_data['current_yield']}%")
                 _remove_missing_item(metadata, 'bonds', symbol)
@@ -1159,7 +1187,12 @@ def inject_websearch_data(
                 updated = True
                 break
         if not updated:
-            merged_entry = _merge_bond_entry({}, bond_data, is_manual=is_manual)
+            merged_entry = _merge_bond_entry(
+                {},
+                bond_data,
+                is_manual=is_manual,
+                trend_history_base_dir=trend_base_dir,
+            )
             market_data.setdefault('bonds', []).append(merged_entry)
             inject_count += 1
             _remove_missing_item(metadata, 'bonds', symbol)
@@ -1183,11 +1216,23 @@ def inject_websearch_data(
         updated = False
         for i, commodity in enumerate(market_data['commodities']):
             if commodity.get('symbol') == symbol:
-                market_data['commodities'][i] = _merge_commodity_entry(commodity, commodity_data, is_manual=is_manual)
+                market_data['commodities'][i] = _merge_commodity_entry(
+                    commodity,
+                    commodity_data,
+                    is_manual=is_manual,
+                    trend_history_base_dir=trend_base_dir,
+                )
                 updated = True
                 break
         if not updated:
-            market_data.setdefault('commodities', []).append(_merge_commodity_entry({}, commodity_data, is_manual=is_manual))
+            market_data.setdefault('commodities', []).append(
+                _merge_commodity_entry(
+                    {},
+                    commodity_data,
+                    is_manual=is_manual,
+                    trend_history_base_dir=trend_base_dir,
+                )
+            )
         inject_count += 1
         price_val = commodity_data.get('current_price') or 0.0
         ytd_val = commodity_data.get('ytd_change') or 0.0
@@ -1198,7 +1243,7 @@ def inject_websearch_data(
     # 注入完成后回读 trend_history 补齐缺失变化值（默认开启）
     if backfill_trend:
         try:
-            backfill_stats = _backfill_trend_changes(market_data)
+            backfill_stats = _backfill_trend_changes(market_data, base_dir=trend_base_dir)
             total_backfilled = sum(backfill_stats.values())
             if total_backfilled:
                 print(f"  - trend_history backfill: {backfill_stats}")
@@ -1291,16 +1336,28 @@ def inject_websearch_data(
         for warning in gc_warnings:
             print(f"    - {warning.get('code')}: {warning.get('message')}")
     # Final write to trend_history (post Stage2.5)
-    try:
-        write_count = write_from_market_data(market_data, is_partial=False, source_path=output_path)
-        print(f"  - trend_history final write: {write_count} items")
-    except Exception as exc:  # noqa: BLE001
-        print(f"  - trend_history final write failed: {exc}")
+    if disable_trend_history_write:
+        print("  - trend_history final write: disabled")
+    else:
+        try:
+            write_count = write_from_market_data(
+                market_data,
+                is_partial=False,
+                source_path=output_path,
+                base_dir=trend_base_dir,
+            )
+            print(f"  - trend_history final write: {write_count} items")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  - trend_history final write failed: {exc}")
 
     # Post-write backfill: use freshly written trend_history details to recompute change fields.
     if backfill_trend:
         try:
-            post_stats = _run_post_write_trend_backfill(market_data, Path(output_path))
+            post_stats = _run_post_write_trend_backfill(
+                market_data,
+                Path(output_path),
+                base_dir=trend_base_dir,
+            )
             post_total = sum(post_stats.values())
             if post_total:
                 print(f"  - trend_history post-write backfill: {post_stats}")
@@ -1479,6 +1536,7 @@ def _apply_macro_entry(
     is_manual: bool = False,
     override_stale: bool = True,
     force_override: bool = False,
+    trend_history_base_dir: Optional[Path] = None,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -1563,7 +1621,12 @@ def _apply_macro_entry(
 
     # 先尝试事件序列回填 previous_value / change_rate（工业增加值仅在当月同比可用时回填）
     if entry['previous_value'] is None and entry['current_value'] is not None:
-        hist_prev = _calc_prev_from_event_history(indicator_key, entry['current_value'], reference_date)
+        hist_prev = _calc_prev_from_event_history(
+            indicator_key,
+            entry['current_value'],
+            reference_date,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
         if hist_prev.get("previous_value") is not None:
             entry['previous_value'] = hist_prev.get("previous_value")
             if entry['change_rate'] is None and hist_prev.get("change_rate") is not None:
@@ -1669,6 +1732,7 @@ def _apply_monetary_entry(
     is_manual: bool = False,
     override_stale: bool = True,
     force_override: bool = False,
+    trend_history_base_dir: Optional[Path] = None,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -1719,7 +1783,12 @@ def _apply_monetary_entry(
 
     fallback_reason = None
     if entry['change_from_120d'] is None and entry['current_value'] is not None:
-        hist = _calc_change_from_event_history(indicator_key, entry['current_value'], reference_date)
+        hist = _calc_change_from_event_history(
+            indicator_key,
+            entry['current_value'],
+            reference_date,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
         if hist.get("change_from_120d") is not None:
             entry['change_from_120d'] = hist.get("change_from_120d")
         else:
@@ -2332,7 +2401,11 @@ def _derive_trend_confidence(
     return "medium", "trend_history_partial_window"
 
 
-def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
+def _backfill_trend_changes(
+    market_data: Dict[str, Any],
+    *,
+    base_dir: Path = DEFAULT_BASE_DIR,
+) -> Dict[str, int]:
     """对全量指标回读 trend_history，补齐缺失的变化值。"""
     stats = {
         "bonds": 0,
@@ -2355,7 +2428,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
         current = _coerce_float(bond.get("current_yield"))
         if not symbol or current is None:
             continue
-        hist = _calc_change_from_trend_history("bonds", symbol, current, reference_date=reference_date)
+        hist = _calc_change_from_trend_history("bonds", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
         used_hist_5d = False
         if _should_backfill_numeric(bond.get("change_120d_bp")):
@@ -2402,8 +2475,8 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
         current = _coerce_float(fx.get("current_rate"))
         if not symbol or current is None:
             continue
-        hist = _calc_change_from_trend_history("forex", symbol, current, reference_date=reference_date)
-        daily_hist = _calc_daily_change_from_trend_history("forex", symbol, current, reference_date=reference_date)
+        hist = _calc_change_from_trend_history("forex", symbol, current, base_dir=base_dir, reference_date=reference_date)
+        daily_hist = _calc_daily_change_from_trend_history("forex", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
         used_hist_1d = False
         if _should_backfill_numeric(fx.get("change_120d")):
@@ -2450,7 +2523,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
         current = _coerce_float(comm.get("current_price"))
         if not symbol or current is None:
             continue
-        hist = _calc_change_from_trend_history("commodities", symbol, current, reference_date=reference_date)
+        hist = _calc_change_from_trend_history("commodities", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
         used_hist_5d = False
         if _should_backfill_numeric(comm.get("ytd_change")):
@@ -2497,7 +2570,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
         current = _coerce_float(idx.get("current_price"))
         if not symbol or current is None:
             continue
-        hist = _calc_change_from_trend_history("stock_indices", symbol, current, reference_date=reference_date)
+        hist = _calc_change_from_trend_history("stock_indices", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
         used_hist_5d = False
         if _should_backfill_numeric(idx.get("change_120d")):
@@ -2538,7 +2611,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
             continue
         if not (_should_backfill_numeric(flow.get("recent_5d")) or _should_backfill_numeric(flow.get("total_120d"))):
             continue
-        daily_series = load_daily_series(key, base_dir=DEFAULT_BASE_DIR)
+        daily_series = load_daily_series(key, base_dir=base_dir)
         if not daily_series:
             continue
 
@@ -2585,7 +2658,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
         prev_missing = indicator.get("previous_value") is None
         change_missing = indicator.get("change_rate") is None
         if prev_missing or change_missing:
-            hist_prev = _calc_prev_from_event_history(key, current, reference_date)
+            hist_prev = _calc_prev_from_event_history(key, current, reference_date, base_dir=base_dir)
             if prev_missing and hist_prev.get("previous_value") is not None:
                 indicator["previous_value"] = hist_prev.get("previous_value")
             if change_missing and hist_prev.get("change_rate") is not None:
@@ -2613,7 +2686,7 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
         if current is None:
             continue
         if policy.get("change_from_120d") is None:
-            hist = _calc_change_from_event_history(key, current, reference_date)
+            hist = _calc_change_from_event_history(key, current, reference_date, base_dir=base_dir)
             used_hist_120d = False
             if hist.get("change_from_120d") is not None:
                 policy["change_from_120d"] = hist.get("change_from_120d")
@@ -2638,12 +2711,20 @@ def _backfill_trend_changes(market_data: Dict[str, Any]) -> Dict[str, int]:
     return stats
 
 
-def _run_post_write_trend_backfill(market_data: Dict[str, Any], output_path: Path) -> Dict[str, int]:
+def _run_post_write_trend_backfill(
+    market_data: Dict[str, Any],
+    output_path: Path,
+    *,
+    base_dir: Optional[Path] = None,
+) -> Dict[str, int]:
     """在 trend_history 最终写入后，基于最新明细再回填一轮变化值。"""
     metadata = market_data.setdefault("metadata", {})
     metadata["trend_backfill_issues"] = []
 
-    stats = _backfill_trend_changes(market_data)
+    if base_dir is None:
+        stats = _backfill_trend_changes(market_data)
+    else:
+        stats = _backfill_trend_changes(market_data, base_dir=base_dir)
     gap_summary = _refresh_stage2_gap_monitor(market_data)
     _refresh_stage2_notes(metadata, gap_summary)
     _cleanup_metadata_missing(metadata, market_data)
@@ -2851,6 +2932,7 @@ def _merge_bond_entry(
     payload: Dict[str, Any],
     *,
     is_manual: bool = False,
+    trend_history_base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     merged = dict(existing)
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
@@ -2871,7 +2953,12 @@ def _merge_bond_entry(
     used_hist_5d = False
     used_hist_120d = False
     if current_yield and symbol:
-        hist_changes = _calc_change_from_trend_history("bonds", symbol, current_yield)
+        hist_changes = _calc_change_from_trend_history(
+            "bonds",
+            symbol,
+            current_yield,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
         merged['change_5d_bp'] = _coerce_float(payload.get('change_5d_bp'))
         if merged['change_5d_bp'] is None:
             hist_5d = _coerce_float(hist_changes.get('change_5d_bp'))
@@ -2921,6 +3008,7 @@ def _merge_commodity_entry(
     payload: Dict[str, Any],
     *,
     is_manual: bool = False,
+    trend_history_base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     merged = dict(existing)
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
@@ -2934,7 +3022,12 @@ def _merge_commodity_entry(
     used_hist_5d = False
     used_hist_120d = False
     if current_price and symbol:
-        hist_changes = _calc_change_from_trend_history("commodities", symbol, current_price)
+        hist_changes = _calc_change_from_trend_history(
+            "commodities",
+            symbol,
+            current_price,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
         # daily_change 优先使用 payload，否则用历史计算的 change_5d
         merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
         if merged['daily_change'] is None:
@@ -2983,6 +3076,7 @@ def _merge_forex_entry(
     payload: Dict[str, Any],
     *,
     is_manual: bool = False,
+    trend_history_base_dir: Optional[Path] = None,
 ) -> Dict[str, Any]:
     merged = dict(orig)
     merged['pair'] = payload.get('pair', orig.get('pair'))
@@ -2995,8 +3089,18 @@ def _merge_forex_entry(
     used_hist_1d = False
     used_hist_120d = False
     if current_rate and symbol:
-        hist_changes = _calc_change_from_trend_history("forex", symbol, current_rate)
-        daily_hist = _calc_daily_change_from_trend_history("forex", symbol, current_rate)
+        hist_changes = _calc_change_from_trend_history(
+            "forex",
+            symbol,
+            current_rate,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
+        daily_hist = _calc_daily_change_from_trend_history(
+            "forex",
+            symbol,
+            current_rate,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
         merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
         if merged['daily_change'] is None:
             hist_1d = _coerce_float(daily_hist.get('change_1d'))
@@ -3039,7 +3143,7 @@ def _merge_forex_entry(
     return merged
 
 
-def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optional[Path] = None) -> Dict[str, Any]:
     pair = payload.get('pair') or payload.get('symbol') or 'UNKNOWN'
     current_rate = _coerce_float(payload.get('current_rate'))
 
@@ -3047,8 +3151,18 @@ def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
     daily_change = _coerce_percent(payload.get('daily_change'))
     change_120d = _coerce_percent(payload.get('change_120d'))
     if current_rate and pair:
-        hist_changes = _calc_change_from_trend_history("forex", pair, current_rate)
-        daily_hist = _calc_daily_change_from_trend_history("forex", pair, current_rate)
+        hist_changes = _calc_change_from_trend_history(
+            "forex",
+            pair,
+            current_rate,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
+        daily_hist = _calc_daily_change_from_trend_history(
+            "forex",
+            pair,
+            current_rate,
+            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+        )
         if daily_change is None:
             daily_change = daily_hist.get('change_1d') or 0.0
         if change_120d is None:
@@ -3142,6 +3256,17 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="强制覆盖已有值（应急模式，谨慎使用）",
     )
+    parser.add_argument(
+        "--trend-history-base-dir",
+        default=None,
+        help="指定 trend_history/min 基础目录；测试夹具可传入临时目录隔离真实历史",
+    )
+    parser.add_argument(
+        "--disable-trend-history-write",
+        action="store_true",
+        default=False,
+        help="禁用 Stage2.5 最终 trend_history 写入；只影响写入，不放松 Stage3/Stage4 gate",
+    )
     return parser.parse_args()
 
 
@@ -3153,6 +3278,11 @@ def main() -> None:
     gap_monitor_path = (
         Path(args.gap_monitor_path).expanduser().resolve()
         if args.gap_monitor_path
+        else None
+    )
+    trend_history_base_dir = (
+        Path(args.trend_history_base_dir).expanduser().resolve()
+        if args.trend_history_base_dir
         else None
     )
 
@@ -3173,6 +3303,8 @@ def main() -> None:
             gap_monitor_path=gap_monitor_path,
             override_stale=args.override_stale,
             force_override=args.force_override,
+            trend_history_base_dir=trend_history_base_dir,
+            disable_trend_history_write=args.disable_trend_history_write,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"\n[ERROR] 数据注入失败: {exc}")

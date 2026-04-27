@@ -56,6 +56,8 @@ from datasource.utils.quality_metrics import write_quality_metrics
 from datasource.utils.observability import build_observability_log, write_observability_log
 from datasource.utils.coercion import is_stage2_number_placeholder
 from datasource.utils.json_io import dump_json, load_json_strict
+from datasource.utils.key_aliases import canonical_monetary_key, normalize_monetary_section
+from datasource.utils.missing_items import remove_missing_item, sync_top_level_missing_view
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -86,35 +88,7 @@ def _load_json(path: Path) -> Dict[str, Any]:
 
 def _merge_missing_items(market_payload: Dict[str, Any]) -> None:
     """把 metadata.missing_items(dict) 扁平化到顶层 missing_items(list)，便于 Stage2 扫描"""
-    top = market_payload.get("missing_items")
-    merged: List[Any] = []
-    if isinstance(top, list):
-        merged.extend(top)
-    metadata_missing = market_payload.get("metadata", {}).get("missing_items", {})
-    if isinstance(metadata_missing, dict):
-        for category, items in metadata_missing.items():
-            if not isinstance(items, list):
-                continue
-            for it in items:
-                if isinstance(it, dict):
-                    if "stage_category" not in it:
-                        it = {**it, "stage_category": category}
-                    merged.append(it)
-                else:
-                    merged.append({"key": it, "stage_category": category})
-    # 去重按 key+category
-    seen = set()
-    unique = []
-    for it in merged:
-        key = it.get("key") if isinstance(it, dict) else it
-        cat = it.get("stage_category") if isinstance(it, dict) else ""
-        sig = (key, cat)
-        if sig in seen:
-            continue
-        seen.add(sig)
-        unique.append(it)
-    if unique:
-        market_payload["missing_items"] = unique
+    sync_top_level_missing_view(market_payload)
 
 
 def _apply_aliases(market_payload: Dict[str, Any], alias_map: Dict[str, str]) -> None:
@@ -1088,8 +1062,9 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         return "macro_indicators"
 
     monetary = market_payload.setdefault("monetary_policy", {})
-    if indicator_key in monetary:
-        entry = monetary[indicator_key]
+    monetary_key = canonical_monetary_key(indicator_key)
+    if monetary_key in monetary:
+        entry = monetary[monetary_key]
         _write_common_fields(entry, "current_value")
         if report_period and not entry.get("report_period"):
             entry["report_period"] = report_period
@@ -1226,40 +1201,10 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
 
 
 def _update_missing_items(market_payload: Dict[str, Any], indicator_key: str) -> None:
-    missing = market_payload.get("missing_items", [])
-    if isinstance(missing, list):
-        filtered = []
-        for item in missing:
-            if isinstance(item, dict):
-                key = item.get("key", "")
-                if key and key != indicator_key:
-                    filtered.append(item)
-            else:
-                if item != indicator_key:
-                    filtered.append(item)
-        market_payload["missing_items"] = filtered
-
-    metadata = market_payload.get("metadata", {}) if isinstance(market_payload, dict) else {}
-    metadata_missing = metadata.get("missing_items") if isinstance(metadata, dict) else None
-    if not isinstance(metadata_missing, dict):
-        return
-
-    cleaned: Dict[str, List[Any]] = {}
-    for category, items in metadata_missing.items():
-        if not isinstance(items, list):
-            continue
-        remained: List[Any] = []
-        for item in items:
-            if isinstance(item, dict):
-                key = item.get("key") or item.get("indicator_key")
-            else:
-                key = item
-            if str(key) == str(indicator_key):
-                continue
-            remained.append(item)
-        if remained:
-            cleaned[category] = remained
-    metadata["missing_items"] = cleaned
+    remove_missing_item(market_payload, None, indicator_key)
+    canonical_key = canonical_monetary_key(indicator_key)
+    if canonical_key != indicator_key:
+        remove_missing_item(market_payload, None, canonical_key)
 
 
 def _append_gap_monitor(output_path: Path, pending: List[str], manual: Optional[List[str]] = None) -> None:
@@ -3287,6 +3232,8 @@ async def main() -> int:
     log_output = Path(args.log_output) if args.log_output else run_paths.stage2_log
     gap_monitor_path = Path(args.gap_monitor) if args.gap_monitor else run_paths.gap_monitor
     _apply_aliases(market_payload, {"industrial_output": "industrial"})
+    if isinstance(market_payload.get("monetary_policy"), dict):
+        market_payload["monetary_policy"] = normalize_monetary_section(market_payload.get("monetary_policy"))
     _merge_missing_items(market_payload)
 
     # 先校验密钥并加载 .env，避免在初始化 TavilyClient 时 api_key 为空

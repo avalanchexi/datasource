@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
+from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
 from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
 from datasource.utils.run_paths import build_run_paths_from_reference
 
@@ -28,37 +29,7 @@ MIN_COMPLETENESS_DEFAULT = 0.80
 
 def _flatten_missing_items(market_payload: Dict[str, Any]) -> List[str]:
     """提取并扁平化缺口列表，兼容 metadata.missing_items 与顶层 missing_items。"""
-    missing: List[str] = []
-    top_level = market_payload.get("missing_items", [])
-    if isinstance(top_level, list):
-        for item in top_level:
-            if isinstance(item, dict):
-                key = item.get("key") or item.get("indicator_key")
-                if key:
-                    missing.append(str(key))
-            else:
-                missing.append(str(item))
-    metadata_missing = market_payload.get("metadata", {}).get("missing_items", {})
-    if isinstance(metadata_missing, dict):
-        for _, items in metadata_missing.items():
-            if not isinstance(items, list):
-                continue
-            for it in items:
-                if isinstance(it, dict):
-                    key = it.get("key") or it.get("indicator_key")
-                    if key:
-                        missing.append(str(key))
-                else:
-                    missing.append(str(it))
-    # 去重保持顺序
-    seen = set()
-    unique = []
-    for k in missing:
-        if k in seen:
-            continue
-        seen.add(k)
-        unique.append(k)
-    return unique
+    return _shared_flatten_missing_items(market_payload)
 
 
 def _iter_estimated_entries(market_payload: Dict[str, Any]) -> List[tuple[str, str, Dict[str, Any]]]:

@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from datasource.utils.key_aliases import MONETARY_KEY_ALIASES
+
 SearchProfile = Dict[str, object]
 
 
@@ -38,12 +40,7 @@ KEY_ALIASES: Dict[str, str] = {
     "industrial_production": "industrial",  # 注入脚本 → Stage2
     "industrial": "industrial",             # 自身映射（规范键名）
     # 货币政策
-    "rrr": "reserve_ratio",
-    "reserve_ratio": "reserve_ratio",
-    "reverse_repo_7d": "reverse_repo",
-    "reverse_repo": "reverse_repo",
-    "mlf": "mlf_rate",
-    "mlf_rate": "mlf_rate",
+    **MONETARY_KEY_ALIASES,
 }
 
 
