@@ -6,6 +6,7 @@ from datasource.utils.coercion import (
     is_stage2_task_placeholder,
     to_float,
 )
+from datasource.utils.text_markers import contains_ytd_marker
 
 
 @pytest.mark.parametrize(
@@ -46,3 +47,22 @@ def test_stage2_task_placeholder_keeps_legacy_713_semantics(value):
 @pytest.mark.parametrize("value", ["", "N/A", "abc", 1.0])
 def test_stage2_task_placeholder_does_not_copy_stage25_non_numeric_semantics(value):
     assert is_stage2_task_placeholder(value) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "今年累计净流入 123 亿元",
+        "年初至今收益率为 8%",
+        "YTD return improved",
+        "year-to-date performance",
+        "1-3月累计值",
+    ],
+)
+def test_contains_ytd_marker_detects_supported_markers(text):
+    assert contains_ytd_marker(text) is True
+
+
+@pytest.mark.parametrize("text", ["普通文本", "", None])
+def test_contains_ytd_marker_rejects_plain_text(text):
+    assert contains_ytd_marker(text) is False
