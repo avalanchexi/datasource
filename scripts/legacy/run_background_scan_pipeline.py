@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Unified 120-day background scan pipeline runner.
+"""Archived 120-day background scan pipeline runner.
 
-This helper script stitches together the execution phases defined in
-``docs/AI_EXECUTION_WORKFLOW.md`` and ``120背景扫描方案.md``. It performs the
+This legacy helper is retained only for historical/manual comparison. The
+supported daily pipeline is Stage1 -> Stage2 unified enhancer -> Stage2.5
+injection -> Stage3 Pring analysis -> Stage4 report generation.
+
+Historically this script stitched together the execution phases defined in
+``docs/AI_EXECUTION_WORKFLOW.md`` and ``120背景扫描方案.md``. It performed the
 following steps for a given target date:
 
 1. Executes the enhanced background scan generator to produce the raw report
@@ -145,7 +149,7 @@ def run_data_completion(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the full 120-day background scan pipeline")
+    parser = argparse.ArgumentParser(description="Archived 120-day background scan pipeline runner")
     parser.add_argument("--date", required=True, help="Target report date (YYYY-MM-DD)")
     parser.add_argument(
         "--skip-validation",
@@ -160,9 +164,23 @@ def main() -> None:
     parser.add_argument(
         "--use-mcp",
         action="store_true",
-        help="Allow the completion helper to invoke MCP WebFetch/WebSearch when available",
+        help="Historical only: allow the completion helper to invoke MCP-style adapters when available",
+    )
+    parser.add_argument(
+        "--run-archived",
+        action="store_true",
+        help="Explicitly run this archived legacy pipeline for historical comparison",
     )
     args = parser.parse_args()
+
+    if not args.run_archived:
+        print(
+            "[ARCHIVED] scripts/legacy/run_background_scan_pipeline.py 已停用为归档工具。\n"
+            "当前报告生成请使用 AGENTS.md 中的 Stage1 -> Stage2 -> Stage2.5 -> Stage3 -> Stage4 主链路。\n"
+            "如仅需历史比对，可显式添加 --run-archived。",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     try:
         report_end = datetime.strptime(args.date, "%Y-%m-%d")
@@ -172,11 +190,11 @@ def main() -> None:
     start_date = compute_start_date(report_end)
     date_compact = report_end.strftime("%Y%m%d")
 
-    reports_dir = PROJECT_ROOT / "reports"
+    reports_dir = PROJECT_ROOT / "reports" / "archive"
     reports_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_report = reports_dir / f"{date_compact}背景扫描120_raw.md"
-    final_report = reports_dir / f"{date_compact}背景扫描120.md"
+    raw_report = reports_dir / f"{date_compact}背景扫描120_archived_raw.md"
+    final_report = reports_dir / f"{date_compact}背景扫描120_archived.md"
 
     # 1. 生成初稿
     run_command(
@@ -187,6 +205,7 @@ def main() -> None:
             args.date,
             "--output",
             str(raw_report),
+            "--run-archived",
         ]
     )
 
@@ -218,7 +237,7 @@ def main() -> None:
         except Exception as validation_error:
             raise SystemExit(str(validation_error))
 
-    print("\n[Pipeline] 120背景扫描流程完成 ✅")
+    print("\n[Pipeline] 归档120背景扫描流程完成")
     print(f"  报告窗口: {start_date.strftime('%Y-%m-%d')} → {args.date}")
     print(f"  报告文件: {final_report}")
     if not args.skip_validation:

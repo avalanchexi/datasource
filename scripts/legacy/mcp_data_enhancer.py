@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Stage 2a: MCP Data Enhancer - Essential Data Only (V3.3混合架构)
+Archived Stage 2a MCP Data Enhancer - Essential Data Only (V3.3混合架构)
+当前补数入口为 Stage2 unified enhancer + Stage2.5 manual/WebSearch JSON 注入。
+本脚本仅保留历史比对用途，默认禁止直接运行。
+
 职责: 在Pring分析前,填充关键占位符数据(仅Pring分析必需项)
 输入: market_data.json (from Stage 1)
 输出: market_data_enhanced.json + enhancement_log.json
@@ -1248,7 +1251,7 @@ class MCPDataEnhancer:
 async def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description='Stage 2a/4: MCP Data Enhancer',
+        description='Archived Stage 2a/4: MCP Data Enhancer',
         epilog='Stage 2a模式(默认): 只填充债券+商品\nStage 4模式(--full): 填充所有数据'
     )
     parser.add_argument('--market-data', required=True, help='Path to market_data.json from Stage 1')
@@ -1257,6 +1260,8 @@ async def main():
     parser.add_argument('--disable-mcp', action='store_true', help='Disable MCP tools')
     parser.add_argument('--log-output', help='Path to save enhancement log')
     parser.add_argument('--websearch-results', help='手动WebSearch结果JSON，用于写入真实数据')
+    parser.add_argument('--run-archived', action='store_true',
+                        help='显式运行归档工具，仅用于历史比对；当前补数请使用 Stage2/Stage2.5 主链路')
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('--full', action='store_true',
                        help='Stage 2a????: ??+??+??+??')
@@ -1264,6 +1269,15 @@ async def main():
                        help='Stage 4????: ?????+????')
 
     args = parser.parse_args()
+
+    if not args.run_archived:
+        print(
+            "[ARCHIVED] scripts/legacy/mcp_data_enhancer.py 已停用为归档工具。\n"
+            "当前补数请使用 scripts/stage2_unified_enhancer.py 与 scripts/stage2_5_injector.py。\n"
+            "如仅需历史比对，可显式添加 --run-archived。",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     # 创建增强器
     enhancer = MCPDataEnhancer(
