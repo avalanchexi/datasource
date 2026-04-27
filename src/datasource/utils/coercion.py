@@ -8,7 +8,7 @@ from typing import Any, Optional
 def to_float(value: Any) -> Optional[float]:
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 

@@ -20,7 +20,7 @@ def load_json_optional(path: Path) -> Optional[Any]:
         return None
     try:
         return json.loads(target.read_text(encoding="utf-8"))
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
 
@@ -29,7 +29,7 @@ def dump_json(payload: Any, path: Path, backup: bool = False) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     if backup and target.exists():
         backup_path = target.with_name(target.name + ".bak")
-        timestamp_path = target.with_name(f"{target.stem}_{datetime.now():%Y%m%d%H%M%S}{target.suffix}")
+        timestamp_path = target.with_name(f"{target.stem}_{datetime.now():%Y%m%d%H%M%S%f}{target.suffix}")
         shutil.copy2(target, backup_path)
         shutil.copy2(target, timestamp_path)
     target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -30,3 +30,19 @@ def test_dump_json_creates_parent_and_backup(tmp_path):
     dump_json({"a": 2}, path, backup=True)
     assert json.loads(path.read_text(encoding="utf-8")) == {"a": 2}
     assert (path.with_name(path.name + ".bak")).exists()
+
+
+def test_dump_json_repeated_backup_keeps_distinct_timestamp_files(tmp_path):
+    path = tmp_path / "payload.json"
+    dump_json({"a": 1}, path)
+    dump_json({"a": 2}, path, backup=True)
+    dump_json({"a": 3}, path, backup=True)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"a": 3}
+    assert (path.with_name(path.name + ".bak")).exists()
+    timestamp_backups = [
+        backup
+        for backup in tmp_path.glob("payload_*.json")
+        if backup.name != path.name + ".bak"
+    ]
+    assert len(timestamp_backups) >= 2
