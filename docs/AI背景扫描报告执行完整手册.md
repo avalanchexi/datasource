@@ -66,7 +66,7 @@
 | 1️⃣ | `scripts/stage1_data_collector.py` | 30-40s | API数据收集（TuShare first） | `market_data.json` |
 | 2️⃣ | `scripts/stage2_unified_enhancer.py` | 90-150s | Tavily+DeepSeek增强（forex/bonds/commodities/fund_flow） | `market_data_stage2.json` |
 | 2+️⃣ | `scripts/stage2_5_injector.py` | 10-20s | WebSearch结果注入（补完缺口） | `market_data_complete.json` |
-| 3️⃣ | `stage3_pring_analyzer.py` | 15-25s | Pring三层框架分析 | `pring_result.json` |
+| 3️⃣ | `scripts/stage3_pring_analyzer.py` | 15-25s | Pring三层框架分析 | `pring_result.json` |
 | 4️⃣ | `scripts/stage4_report_generator.py` | 10-15s | Markdown报告生成 | `DATE背景扫描120.md` |
 
 **当前总时间**: 3-5分钟 | **数据完整度**: 85-95% | **自动化程度**: 高

@@ -350,7 +350,10 @@ async def main_async() -> None:
     else:
         pending_after_yahoo = pending_after_enhance
         if pending_after_enhance and not yahoo_enabled:
-            notes.append("Stage2: 检测到商品/债券缺口，但已禁用 Yahoo Fallback，请运行 scripts/fill_market_data_from_yahoo.py 或手动补数。")
+            notes.append(
+                "Stage2: 检测到商品/债券缺口，但已禁用 Yahoo Fallback；"
+                "请写入 Stage2.5 manual/WebSearch JSON，并通过 scripts/stage2_5_injector.py 注入。"
+            )
 
     if notes:
         for note in notes:

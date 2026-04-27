@@ -158,8 +158,13 @@ asyncio.run(get_daily_data())
 ### 统一报告生成（V2.0重构）
 
 ```bash
-# 统一报告生成器 - 集成多数据源的综合报告
-python generate_report_simple.py
+# 当前报告生成入口（Stage4）
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md"
+
+# 历史简单报告脚本：generate_report_simple.py（诊断/回溯用，不在当前流程执行）
 
 # 历史扫描器（已迁入 legacy，如需回溯老流程）
 python scripts/legacy/market_scanner_unified.py
@@ -191,8 +196,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 # 工具脚本 (移动到 scripts/utility/)
 python scripts/utility/get_real_economic_data.py     # 获取最新经济数据用于库存周期验证
 python scripts/utility/calculate_na_data.py         # 基于最新数据计算NA值填充
-python scripts/utility/generate_background_scan.py  # 背景市场扫描报告生成
-python scripts/utility/background_scan_120d_generator.py  # 历史/手工分析用，不作为补数入口
+# scripts/utility/generate_background_scan.py  # 历史/诊断背景扫描，不在当前流程执行
+# scripts/utility/background_scan_120d_generator.py  # 历史/手工分析用，不作为补数入口
 ```
 
 **V2.0 重构特色功能**：
