@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-120日背景扫描报告生成器 - 修复版本
-基于120背景扫描方案.md V3.1规范
-修复了数据获取和处理问题
+Archived 120-day background scan generator.
+
+This utility is retained only for historical/manual comparison. The supported
+daily pipeline is Stage1 -> Stage2 unified enhancer -> Stage2.5 injection ->
+Stage3 Pring analysis -> Stage4 report generation.
 """
 import asyncio
 import sys
@@ -40,7 +42,7 @@ class BackgroundScan120DGeneratorFixed:
         self.technical_calc = TechnicalIndicatorCalculator()
         self.pring_analyzer = PringAnalyzer(self.manager)
 
-        print("[INFO] AKShare数据源已下线，使用 TuShare + MCP/Tavily 策略")
+        print("[INFO] 归档工具仅供历史比对；当前补数以 Stage2/Stage2.5 为准")
         self.manager.set_primary_source('tushare')
 
         # 数据窗口：根据传入的end_date计算120天前的start_date
@@ -74,7 +76,7 @@ class BackgroundScan120DGeneratorFixed:
             "GSG": "GSG商品ETF"
         }
 
-        # 使用MCP WebSearch获取的商品
+        # 历史配置：商品缺口应转 Stage2.5 manual/WebSearch JSON 注入
         self.websearch_commodities = ["BCOM"]  # Bloomberg商品指数
 
     async def collect_market_data(self) -> Dict[str, Any]:
@@ -322,7 +324,7 @@ class BackgroundScan120DGeneratorFixed:
             }
 
     async def _get_fund_flow_websearch(self, fund_type: str) -> Optional[Dict[str, Any]]:
-        """使用MCP WebSearch获取资金流向数据
+        """历史占位：资金流缺口应通过 Stage2.5 JSON 注入
 
         Args:
             fund_type: 资金类型（'北向资金', '南向资金', 'ETF资金流'）
@@ -331,8 +333,8 @@ class BackgroundScan120DGeneratorFixed:
             资金流向数据字典，失败返回None
         """
         try:
-            # 注意: 这是一个占位符方法，实际执行时Claude Code会使用WebSearch工具
-            # 此方法的目的是提供WebSearch数据获取的接口
+            # 注意: 这是一个归档占位符方法；现行流程不在该脚本内直接搜索补数。
+            # 缺口统一进入 gap_monitor/manual_required，再通过 Stage2.5 注入。
 
             # 构建搜索查询
             query_map = {
@@ -347,22 +349,21 @@ class BackgroundScan120DGeneratorFixed:
                 print(f"    [WARNING] 未知资金类型: {fund_type}")
                 return None
 
-            # 实际执行时，这里会被Claude Code的WebSearch工具调用替代
-            # 返回格式示例:
+            # 历史返回格式示例；当前应写入 websearch_results_manual.json 后注入。
             # {
             #     'recent_5d': 123.45,  # 近5日流向(亿元)
             #     'total_120d': 456.78,  # 近120日累计(亿元)
             #     'trend': '流入' or '流出',
-            #     'source': 'MCP WebSearch',
+            #     'source': 'stage2.5_manual',
             #     'note': '来源:东方财富网/同花顺'
             # }
 
-            print(f"    [WebSearch] 查询: {query}")
-            print(f"    [WARNING] WebSearch功能需要在Claude Code环境中执行")
+            print(f"    [Stage2.5] 待补查询: {query}")
+            print("    [WARNING] 归档脚本不直接补数，请写入 websearch_results_manual.json 后运行 stage2_5_injector.py")
             return None
 
         except Exception as e:
-            print(f"    [WARNING] WebSearch获取{fund_type}失败: {e}")
+            print(f"    [WARNING] Stage2.5占位生成{fund_type}失败: {e}")
             return None
 
     async def collect_commodity_data(self) -> Dict[str, Any]:
@@ -389,22 +390,22 @@ class BackgroundScan120DGeneratorFixed:
             try:
                 print(f"  获取 {commodity_name} 数据...")
 
-                # 注意: 实际执行时，这里会被Claude Code使用WebFetch/WebSearch工具
-                # 这是一个占位符方法，用于说明数据获取逻辑
+                # 归档占位：现行流程不在该脚本内直接抓取商品数据。
+                # 商品缺口应进入 Stage2.5 manual/WebSearch JSON 注入。
 
-                # 方式1: 尝试通过manager的国际金融适配器获取(如果已实现)
-                # 方式2: 提示需要通过MCP WebFetch获取
+                # 方式1: 尝试通过manager的现有适配器获取(历史兼容)
+                # 方式2: 标记为 Stage2.5 手工补数
 
-                print(f"    [WebFetch] 需要MCP获取: Investing.com或Yahoo Finance")
+                print("    [Stage2.5] 商品缺口需通过 websearch_results_manual.json 注入")
                 print(f"    查询符号: {config['yahoo_symbol']}, 单位: {config['unit']}")
 
                 # 占位符: 实际执行时会被替换为真实数据
                 commodity_data[commodity_name] = {
-                    'price': 'MCP_REQUIRED',
-                    'daily_change': 'MCP_REQUIRED',
-                    'ytd_change': 'MCP_REQUIRED',
-                    'trend': 'MCP_REQUIRED',
-                    'source': 'MCP WebFetch待获取',
+                    'price': 'STAGE25_REQUIRED',
+                    'daily_change': 'STAGE25_REQUIRED',
+                    'ytd_change': 'STAGE25_REQUIRED',
+                    'trend': 'STAGE25_REQUIRED',
+                    'source': 'Stage2.5 manual待补',
                     'unit': config['unit'],
                     'query_symbol': config['yahoo_symbol']
                 }
@@ -489,14 +490,14 @@ class BackgroundScan120DGeneratorFixed:
 
                     print(f"    [OK] {forex_name}: {latest_rate:.4f}, 120日变化{change_120d:+.2f}%")
                 else:
-                    # 数据获取失败，提示使用MCP
-                    print(f"    [WARNING] {forex_name} 数据获取失败，需要MCP WebFetch补充")
+                    # 数据获取失败，转 Stage2.5 补数
+                    print(f"    [WARNING] {forex_name} 数据获取失败，需要 Stage2.5 manual 注入")
                     forex_data[forex_name] = {
-                        'rate': 'MCP_REQUIRED',
-                        'change_5d': 'MCP_REQUIRED',
-                        'change_120d': 'MCP_REQUIRED',
-                        'trend': 'MCP_REQUIRED',
-                        'source': 'MCP WebFetch待获取',
+                        'rate': 'STAGE25_REQUIRED',
+                        'change_5d': 'STAGE25_REQUIRED',
+                        'change_120d': 'STAGE25_REQUIRED',
+                        'trend': 'STAGE25_REQUIRED',
+                        'source': 'Stage2.5 manual待补',
                         'display_name': config['display'],
                         'query_symbol': config['yahoo_symbol']
                     }
@@ -581,14 +582,14 @@ class BackgroundScan120DGeneratorFixed:
 
                     print(f"    [OK] {bond_name}: {latest_yield:.3f}%, 120日变化{change_120d_bp:+.1f}bp")
                 else:
-                    # 数据获取失败，提示使用MCP
-                    print(f"    [WARNING] {bond_name} 数据获取失败，需要MCP WebFetch补充")
+                    # 数据获取失败，转 Stage2.5 补数
+                    print(f"    [WARNING] {bond_name} 数据获取失败，需要 Stage2.5 manual 注入")
                     bond_data[bond_name] = {
-                        'yield': 'MCP_REQUIRED',
-                        'change_5d_bp': 'MCP_REQUIRED',
-                        'change_120d_bp': 'MCP_REQUIRED',
-                        'trend': 'MCP_REQUIRED',
-                        'source': 'MCP WebFetch待获取',
+                        'yield': 'STAGE25_REQUIRED',
+                        'change_5d_bp': 'STAGE25_REQUIRED',
+                        'change_120d_bp': 'STAGE25_REQUIRED',
+                        'trend': 'STAGE25_REQUIRED',
+                        'source': 'Stage2.5 manual待补',
                         'display_name': config['display'],
                         'query_symbol': config.get('yahoo_symbol', config.get('proxy_etf', ''))
                     }
@@ -607,8 +608,8 @@ class BackgroundScan120DGeneratorFixed:
         return bond_data
 
     async def collect_fund_flow_data(self) -> Dict[str, Any]:
-        """收集资金流向数据 - V2.1 MCP WebSearch优先"""
-        print("收集资金流向数据 (MCP WebSearch优先)...")
+        """收集资金流向数据 - 归档占位，缺口转 Stage2.5"""
+        print("收集资金流向数据 (归档占位，缺口转 Stage2.5)...")
 
         fund_flow_data = {
             'northbound': None,
@@ -618,38 +619,38 @@ class BackgroundScan120DGeneratorFixed:
         }
 
         try:
-            # 1. 北向资金 - 优先使用MCP WebSearch
-            print("  获取北向资金数据 (MCP WebSearch优先)...")
+            # 1. 北向资金 - 缺口转 Stage2.5
+            print("  获取北向资金数据 (缺口转 Stage2.5)...")
             northbound_data = await self._get_fund_flow_websearch('北向资金')
 
             if northbound_data:
                 fund_flow_data['northbound'] = northbound_data
-                print(f"    [OK] 北向资金(WebSearch): 5日{northbound_data['recent_5d']}亿, 120日{northbound_data['total_120d']}亿")
+                print(f"    [OK] 北向资金(Stage2.5): 5日{northbound_data['recent_5d']}亿, 120日{northbound_data['total_120d']}亿")
             else:
-                print("    [WARNING] WebSearch失败，北向资金数据缺失")
+                print("    [WARNING] 北向资金数据缺失，需 Stage2.5 manual 补充")
                 fund_flow_data['northbound'] = {
                     'recent_5d': 'N/A',
                     'total_120d': 'N/A',
                     'trend': 'N/A',
-                    'source': 'WebSearch失败',
-                    'note': 'WebSearch失败，需人工补充'
+                    'source': 'stage2.5_manual_required',
+                    'note': '需 Stage2.5 manual 补充'
                 }
 
-            # 2. 南向资金 - 优先使用MCP WebSearch
-            print("  获取南向资金数据 (MCP WebSearch优先)...")
+            # 2. 南向资金 - 缺口转 Stage2.5
+            print("  获取南向资金数据 (缺口转 Stage2.5)...")
             southbound_data = await self._get_fund_flow_websearch('南向资金')
 
             if southbound_data:
                 fund_flow_data['southbound'] = southbound_data
-                print(f"    [OK] 南向资金(WebSearch): 5日{southbound_data['recent_5d']}亿, 120日{southbound_data['total_120d']}亿")
+                print(f"    [OK] 南向资金(Stage2.5): 5日{southbound_data['recent_5d']}亿, 120日{southbound_data['total_120d']}亿")
             else:
-                print("    [WARNING] WebSearch失败，南向资金数据缺失")
+                print("    [WARNING] 南向资金数据缺失，需 Stage2.5 manual 补充")
                 fund_flow_data['southbound'] = {
                     'recent_5d': 'N/A',
                     'total_120d': 'N/A',
                     'trend': 'N/A',
-                    'source': 'WebSearch失败',
-                    'note': 'WebSearch失败，需人工补充'
+                    'source': 'stage2.5_manual_required',
+                    'note': '需 Stage2.5 manual 补充'
                 }
 
             # 3. 融资融券
@@ -658,18 +659,18 @@ class BackgroundScan120DGeneratorFixed:
                 self.start_date, self.end_date, 'both'
             )
             if margin_response.error or margin_response.data is None:
-                print("    [WARNING] 融资融券 TuShare 数据缺失，尝试 WebSearch...")
+                print("    [WARNING] 融资融券 TuShare 数据缺失，转 Stage2.5...")
                 margin_websearch = await self._get_fund_flow_websearch('融资融券')
                 if margin_websearch:
                     fund_flow_data['margin'] = margin_websearch
-                    print(f"    [OK] 融资融券(WebSearch): 余额{margin_websearch.get('latest_balance', 'N/A')}亿")
+                    print(f"    [OK] 融资融券(Stage2.5): 余额{margin_websearch.get('latest_balance', 'N/A')}亿")
                 else:
                     fund_flow_data['margin'] = {
                         'recent_5d': 'N/A',
                         'total_120d': 'N/A',
                         'trend': 'N/A',
-                        'source': 'WebSearch失败',
-                        'note': 'TuShare不可用且WebSearch失败，需人工补充'
+                        'source': 'stage2.5_manual_required',
+                        'note': 'TuShare不可用，需 Stage2.5 manual 补充'
                     }
                 margin_response = None  # 跳过后续基于 dataframe 的计算
 
@@ -705,19 +706,19 @@ class BackgroundScan120DGeneratorFixed:
                         }
                         print(f"    [OK] 融资融券: 5日变化{recent_5d_change:.2f}亿, 120日变化{balance_change:.2f}亿")
 
-            # 4. ETF资金流 - 使用MCP WebSearch获取
-            print("  获取ETF资金流数据 (MCP WebSearch)...")
+            # 4. ETF资金流 - 缺口转 Stage2.5
+            print("  获取ETF资金流数据 (缺口转 Stage2.5)...")
             etf_flow_data = await self._get_fund_flow_websearch('ETF资金流')
 
             if etf_flow_data:
                 fund_flow_data['etf_flow'] = etf_flow_data
-                print(f"    [OK] ETF资金流(WebSearch): 5日{etf_flow_data['recent_5d']}亿, 120日{etf_flow_data['total_120d']}亿")
+                print(f"    [OK] ETF资金流(Stage2.5): 5日{etf_flow_data['recent_5d']}亿, 120日{etf_flow_data['total_120d']}亿")
             else:
                 fund_flow_data['etf_flow'] = {
                     'recent_5d': 'N/A',
                     'total_120d': 'N/A',
                     'trend': 'N/A',
-                    'note': 'MCP WebSearch获取失败',
+                    'note': '需 Stage2.5 manual 补充',
                     'source': 'N/A'
                 }
                 print("    [WARNING] ETF资金流数据获取失败")
@@ -839,14 +840,14 @@ class BackgroundScan120DGeneratorFixed:
             if commodity_name in commodity_data:
                 data = commodity_data[commodity_name]
 
-                # 处理不同类型的值(实际数据 vs MCP_REQUIRED vs 错误)
-                if data.get('price') == 'MCP_REQUIRED':
-                    # 需要MCP补充
-                    price = f"待MCP获取"
+                # 处理不同类型的值(实际数据 vs STAGE25_REQUIRED vs 错误)
+                if data.get('price') == 'STAGE25_REQUIRED':
+                    # 需要 Stage2.5 补充
+                    price = "待Stage2.5补数"
                     daily_change = 'N/A'
                     ytd_change = 'N/A'
                     trend = 'N/A'
-                    source = f"MCP WebFetch({data.get('query_symbol', 'N/A')})"
+                    source = f"Stage2.5 manual({data.get('query_symbol', 'N/A')})"
                 elif data.get('price') == '数据获取失败':
                     # 获取失败
                     price = '数据获取失败'
@@ -887,13 +888,13 @@ class BackgroundScan120DGeneratorFixed:
                 data = forex_data[forex_name]
 
                 # 处理不同类型的值
-                if data.get('rate') == 'MCP_REQUIRED':
-                    # 需要MCP补充
-                    rate = f"待MCP获取"
+                if data.get('rate') == 'STAGE25_REQUIRED':
+                    # 需要 Stage2.5 补充
+                    rate = "待Stage2.5补数"
                     change_5d = 'N/A'
                     change_120d = 'N/A'
                     trend = 'N/A'
-                    source = f"MCP WebFetch({data.get('query_symbol', 'N/A')})"
+                    source = f"Stage2.5 manual({data.get('query_symbol', 'N/A')})"
                 elif data.get('rate') == '数据获取失败':
                     # 获取失败
                     rate = '数据获取失败'
@@ -934,13 +935,13 @@ class BackgroundScan120DGeneratorFixed:
                 data = bond_data[bond_name]
 
                 # 处理不同类型的值
-                if data.get('yield') == 'MCP_REQUIRED':
-                    # 需要MCP补充
-                    bond_yield = f"待MCP获取"
+                if data.get('yield') == 'STAGE25_REQUIRED':
+                    # 需要 Stage2.5 补充
+                    bond_yield = "待Stage2.5补数"
                     change_5d = 'N/A'
                     change_120d = 'N/A'
                     trend = 'N/A'
-                    source = f"MCP WebFetch({data.get('query_symbol', 'N/A')})"
+                    source = f"Stage2.5 manual({data.get('query_symbol', 'N/A')})"
                 elif data.get('yield') == '数据获取失败':
                     # 获取失败
                     bond_yield = '数据获取失败'
@@ -979,16 +980,16 @@ class BackgroundScan120DGeneratorFixed:
             recent = f"{north['recent_5d']:+.2f}" if isinstance(north['recent_5d'], (int, float)) else north['recent_5d']
             total = f"{north['total_120d']:+.2f}" if isinstance(north['total_120d'], (int, float)) else north['total_120d']
             # 自动识别数据来源
-            source = north.get('source', 'AKShare数据')
+            source = north.get('source', 'Stage2.5 manual待补')
             note = north.get('note', '')
             if 'WebSearch' in source:
-                source_label = f"MCP WebSearch实时获取{' - ' + note if note else ''}"
+                source_label = f"Stage2.5 WebSearch/manual{' - ' + note if note else ''}"
             elif '异常零值' in source:
                 source_label = f"{source} - {note}"
             elif '备用' in source:
-                source_label = source.replace('(备用)', '(AKShare备用)')
+                source_label = source.replace('(备用)', '(历史备用)')
             else:
-                source_label = "AKShare数据"
+                source_label = source
             rows.append(f"| 北向资金 | {recent} | {total} | {north['trend']} | {source_label} |")
         else:
             rows.append("| 北向资金 | N/A | N/A | N/A | 数据获取失败 |")
@@ -999,16 +1000,16 @@ class BackgroundScan120DGeneratorFixed:
             recent = f"{south['recent_5d']:+.2f}" if isinstance(south['recent_5d'], (int, float)) else south['recent_5d']
             total = f"{south['total_120d']:+.2f}" if isinstance(south['total_120d'], (int, float)) else south['total_120d']
             # 自动识别数据来源
-            source = south.get('source', 'AKShare数据')
+            source = south.get('source', 'Stage2.5 manual待补')
             note = south.get('note', '')
             if 'WebSearch' in source:
-                source_label = f"MCP WebSearch实时获取{' - ' + note if note else ''}"
+                source_label = f"Stage2.5 WebSearch/manual{' - ' + note if note else ''}"
             elif '异常零值' in source:
                 source_label = f"{source} - {note}"
             elif '备用' in source:
-                source_label = source.replace('(备用)', '(AKShare备用)')
+                source_label = source.replace('(备用)', '(历史备用)')
             else:
-                source_label = "AKShare数据"
+                source_label = source
             rows.append(f"| 南向资金 | {recent} | {total} | {south['trend']} | {source_label} |")
         else:
             rows.append("| 南向资金 | N/A | N/A | N/A | 数据获取失败 |")
@@ -1027,7 +1028,7 @@ class BackgroundScan120DGeneratorFixed:
             source = etf.get('source', 'N/A')
             note = etf.get('note', '')
             if 'WebSearch' in source:
-                source_label = f"MCP WebSearch实时获取{' - ' + note if note else ''}"
+                source_label = f"Stage2.5 WebSearch/manual{' - ' + note if note else ''}"
             elif note:
                 source_label = note
             else:
@@ -1041,7 +1042,7 @@ class BackgroundScan120DGeneratorFixed:
         if margin:
             recent = f"{margin['recent_5d']:+.2f}" if isinstance(margin['recent_5d'], (int, float)) else margin['recent_5d']
             total = f"{margin['total_120d']:+.2f}" if isinstance(margin['total_120d'], (int, float)) else margin['total_120d']
-            balance_note = f"余额{margin['latest_balance']:.2f}亿" if 'latest_balance' in margin else "AKShare数据"
+            balance_note = f"余额{margin['latest_balance']:.2f}亿" if 'latest_balance' in margin else "TuShare/Stage2.5"
             rows.append(f"| 融资融券余额 | {recent} | {total} | {margin['trend']} | {balance_note} |")
         else:
             rows.append("| 融资融券余额 | N/A | N/A | N/A | 数据获取失败 |")
@@ -1116,12 +1117,12 @@ class BackgroundScan120DGeneratorFixed:
 ### 改进建议
 
 **立即行动**:
-1. **检查数据源连接**: 验证AKShare和TuShare API可用性
+1. **检查数据源连接**: 验证 TuShare、Tavily 和 DeepSeek API 可用性
 2. **查看数据收集日志**: 定位具体缺失的数据项
-3. **补充货币周期数据**: 考虑使用WebSearch从央行公告获取M2/逆回购/MLF/降准/TSF数据
+3. **补充货币周期数据**: 写入 websearch_results_manual.json 后通过 Stage2.5 注入
 
 **后续步骤**:
-- 等待数据源恢复后重新生成报告
+- 等待数据源恢复后按 Stage1 到 Stage4 主链路重新生成报告
 - 或使用历史数据作为临时替代方案
 - 参考其他信息源（如行业报告、新闻资讯）进行综合判断
 
@@ -1280,7 +1281,7 @@ class BackgroundScan120DGeneratorFixed:
 
 {self.generate_stock_market_table(market_data)}
 
-**数据说明**: 基于TuShare/AKShare数据源，计算窗口为120个自然日。趋势评分采用-2至+2评分体系，综合收益趋势、均线位置、中期趋势和短期动量四个维度。
+**数据说明**: 基于TuShare及现行Stage2/Stage2.5补数口径，计算窗口为120个自然日。趋势评分采用-2至+2评分体系，综合收益趋势、均线位置、中期趋势和短期动量四个维度。
 
 ---
 
@@ -1291,10 +1292,10 @@ class BackgroundScan120DGeneratorFixed:
 {self.generate_commodity_table(commodity_data)}
 
 **数据说明**:
-- **数据来源**: 优先使用国际金融API，备用MCP WebFetch实时数据（Investing.com, Yahoo Finance）
+- **数据来源**: 当前主链路为 TuShare(Stage1)、Tavily/DeepSeek(Stage2) 与 Stage2.5 manual/WebSearch JSON 注入
 - **品种说明**: COMEX黄金、WTI/Brent原油、COMEX铜为全球商品定价基准；BCOM/GSG为综合商品指数
 - **指数构成**: BCOM指数包含24个商品期货（能源、农产品、工业金属、贵金属、畜牧）
-- **MCP补充**: 标注"待MCP获取"的数据需要在Claude Code环境中使用WebFetch/WebSearch工具补充
+- **Stage2.5补充**: 标注"待Stage2.5补数"的数据必须通过 websearch_results_manual.json 注入
 - **降级逻辑**: 数据获取失败时显示明确错误信息，而非N/A占位符
 
 ---
@@ -1306,11 +1307,11 @@ class BackgroundScan120DGeneratorFixed:
 {self.generate_forex_table(forex_data)}
 
 **数据说明** (V2.1 数据增强):
-- **数据来源**: 优先使用InternationalFinance适配器，备用MCP WebFetch(Investing.com)
+- **数据来源**: 当前主链路为 TuShare(Stage1)、Tavily/DeepSeek(Stage2) 与 Stage2.5 manual/WebSearch JSON 注入
 - **USD/CNY**: 美元兑人民币在岸价，数据源自中国外汇交易中心
 - **USD/CNH**: 美元兑人民币离岸价，反映香港市场汇率
 - **美元指数(DXY)**: 衡量美元对一篮子主要货币的强弱
-- **MCP补充**: 标注"待MCP获取"的数据需要在Claude Code环境中补充
+- **Stage2.5补充**: 标注"待Stage2.5补数"的数据必须通过 websearch_results_manual.json 注入
 
 ---
 
@@ -1321,12 +1322,12 @@ class BackgroundScan120DGeneratorFixed:
 {self.generate_bond_table(bond_data)}
 
 **数据说明** (V2.1 数据增强):
-- **数据来源**: 优先使用InternationalFinance适配器，备用MCP WebFetch(Investing.com)
-- **美国10Y国债**: 数据源自FRED/Yahoo Finance，反映美国长期利率水平
+- **数据来源**: 当前主链路为 TuShare(Stage1)、Tavily/DeepSeek(Stage2) 与 Stage2.5 manual/WebSearch JSON 注入
+- **美国10Y国债**: 以可审计实时来源或Stage2.5注入结果为准，反映美国长期利率水平
 - **中国10Y国债**: 数据源自中债估值，部分日期可能延迟1天
 - **中国10Y国开债**: 使用ETF代理(019950)或历史利差估算
 - **bp说明**: 1bp = 0.01%，用于衡量债券收益率微小变化
-- **MCP补充**: 标注"待MCP获取"的数据需要在Claude Code环境中补充
+- **Stage2.5补充**: 标注"待Stage2.5补数"的数据必须通过 websearch_results_manual.json 注入
 
 ---
 
@@ -1336,15 +1337,15 @@ class BackgroundScan120DGeneratorFixed:
 
 {self.generate_fund_flow_table(fund_flow_data)}
 
-**数据说明** (V2.1 MCP WebSearch优先):
-- **数据获取策略**: 优先使用MCP WebSearch实时获取 → AKShare备用 → 异常零值检测与验证
-- **北向资金/南向资金**: MCP WebSearch实时获取(东方财富网/同花顺/每经网)，AKShare作为备用数据源
-- **融资融券余额**: 沪深两市融资融券余额变化（数据源：上交所/深交所官网，通过AKShare获取）
-- **ETF资金流**: 100% MCP WebSearch实时获取（数据源：Wind、Choice、东方财富网等金融平台）
-- **异常零值检测**: 当AKShare返回连续零值时，自动切换WebSearch验证，确保数据准确性
+**数据说明** (现行 Stage2/Stage2.5 口径):
+- **数据获取策略**: TuShare可得字段优先；缺口进入 Stage2 Tavily/DeepSeek 或 Stage2.5 manual/WebSearch JSON 注入；0/None 一律 manual_required
+- **北向资金/南向资金**: 使用 Stage2 Tavily/DeepSeek 或 Stage2.5 manual/WebSearch JSON 注入，必须保留可审计来源URL
+- **融资融券余额**: 沪深两市融资融券余额变化优先使用 TuShare 可得字段，缺口转 Stage2.5
+- **ETF资金流**: 使用 Stage2 Tavily/DeepSeek 或 Stage2.5 manual/WebSearch JSON 注入
+- **异常零值检测**: 0/None 和窗口值缺失标记为 manual_required，不直接写入最终报告
 - **流向趋势**: 基于近5日数据判断，正值为流入/增加，负值为流出/减少
 - **计算方法**: 120日累计 = 分析窗口内所有交易日的资金流向总和
-- **数据时效性**: WebSearch数据延迟≤5分钟，AKShare数据延迟≤1天
+- **数据时效性**: 以注入数据的 as_of_date/source_url 与质量门禁为准
 
 ---
 
@@ -1363,10 +1364,10 @@ class BackgroundScan120DGeneratorFixed:
 ## 九、附注说明
 
 ### 代理口径说明
-- **商品数据**: V2.1优先使用国际期货数据API，备用MCP WebFetch实时获取
+- **商品数据**: 现行补数入口为 Stage2 Tavily/DeepSeek 或 Stage2.5 manual/WebSearch JSON 注入
 - **数据周期**: 120个自然日，约等于4个月的交易周期
 - **评分体系**: 趋势评分采用-2至+2整数评分，±1为中性阈值
-- **降级逻辑**: 数据获取失败时提供明确提示，引导使用MCP工具补充
+- **降级逻辑**: 数据获取失败时标记 manual_required，并通过 Stage2.5 注入补齐
 
 ### 计算方法说明
 - **涨跌幅**: (期末价格/期初价格 - 1) × 100%，保留1-2位小数
@@ -1375,11 +1376,11 @@ class BackgroundScan120DGeneratorFixed:
 - **趋势评分**: 四维度评分累加，收益趋势+均线位置+中期趋势+短期动量
 
 ### 数据源汇总
-- **股票数据**: TuShare (主)，AKShare (备)
-- **商品数据**: InternationalFinance API (主)，MCP WebFetch (备)
-- **汇率数据**: InternationalFinance API (主)，MCP WebFetch (备)
-- **债券数据**: InternationalFinance API (主)，MCP WebFetch (备)
-- **资金流向**: AKShare (北向/南向/融资融券)，MCP WebSearch (ETF资金流)
+- **股票数据**: TuShare (主)，Stage2/Stage2.5 补齐缺口
+- **商品数据**: Stage2 Tavily/DeepSeek 或 Stage2.5 manual/WebSearch JSON 注入
+- **汇率数据**: TuShare可得字段、Stage2 Tavily/DeepSeek 或 Stage2.5 注入
+- **债券数据**: TuShare可得字段、Stage2 Tavily/DeepSeek 或 Stage2.5 注入
+- **资金流向**: TuShare可得字段、Stage2 Tavily/DeepSeek 或 Stage2.5 注入
 - **技术指标**: 自主计算，基于收盘价序列
 - **库存周期**: 集成宏观经济指标(PPI、PMI、CPI、工业增加值、BDI)
 
@@ -1401,15 +1402,27 @@ async def main():
     """主函数 - 集成质量检查"""
     import argparse
 
-    parser = argparse.ArgumentParser(description='生成120日背景扫描报告')
+    parser = argparse.ArgumentParser(description='归档120日背景扫描生成器（默认禁用直接生成）')
     parser.add_argument('--date', type=str, required=False, default="2025-09-16",
                         help='报告结束日期 (格式: YYYY-MM-DD)')
     parser.add_argument('--output', type=str, required=False, default=None,
-                        help='输出文件路径 (默认: reports/YYYYMMDD背景扫描120.md)')
+                        help='输出文件路径 (默认: reports/archive/YYYYMMDD背景扫描120_archived.md)')
     parser.add_argument('--skip-validation', action='store_true',
                         help='跳过质量检查（不推荐）')
+    parser.add_argument('--run-archived', action='store_true',
+                        help='显式运行归档工具，仅用于历史比对；日常报告请使用 Stage1-Stage4 主链路')
 
     args = parser.parse_args()
+
+    if not args.run_archived:
+        print(
+            "[ARCHIVED] scripts/utility/background_scan_120d_generator.py 已停用为归档工具。\n"
+            "当前报告生成请使用 Stage1 -> Stage2 unified enhancer -> Stage2.5 injector -> "
+            "Stage3 Pring analyzer -> Stage4 report generator。\n"
+            "如仅需历史比对，可显式添加 --run-archived。",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     try:
         generator = BackgroundScan120DGeneratorFixed(
@@ -1417,14 +1430,14 @@ async def main():
         )
         report = await generator.generate_report()
 
-        # 保存报告到文件
-        os.makedirs("reports", exist_ok=True)
-
         if args.output:
             report_filename = args.output
         else:
             date_str = args.date.replace("-", "")
-            report_filename = f"reports/{date_str}背景扫描120.md"
+            report_filename = f"reports/archive/{date_str}背景扫描120_archived.md"
+
+        # 保存归档报告到文件
+        os.makedirs(os.path.dirname(report_filename) or ".", exist_ok=True)
 
         # 先写入临时文件
         temp_filename = report_filename + ".temp"
@@ -1505,7 +1518,7 @@ async def main():
             os.remove(report_filename)
         os.rename(temp_filename, report_filename)
 
-        print(f"\n[SUCCESS] 最终报告: {report_filename}")
+        print(f"\n[SUCCESS] 归档报告: {report_filename}")
         return report_filename
 
     except Exception as e:
