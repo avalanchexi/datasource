@@ -127,17 +127,24 @@ def test_stage25_outputs_are_accepted_by_unified_quality_state(
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     state = build_pipeline_quality_state(output)
-    gap_monitor = json.loads(gap_monitor_path.read_text(encoding="utf-8"))
+    gap = json.loads(gap_monitor_path.read_text(encoding="utf-8"))
+    metadata = output["metadata"]
 
     assert state["quality_blockers"] == []
     assert state["manual_required"] == []
-    assert gap_monitor["manual_required"] == []
-    assert gap_monitor.get("pending_tasks") in (None, [])
-    assert gap_monitor.get("quality_blockers", []) == []
-    assert gap_monitor.get("data_quality_issues", []) == []
-    assert output["metadata"]["ai_websearch_enhanced"] is True
-    assert output["metadata"].get("quality_blockers", []) == []
-    assert output["metadata"].get("manual_required", []) == []
+    assert "manual_required" in gap
+    assert gap["manual_required"] == []
+    assert "pending_tasks" in gap
+    assert gap["pending_tasks"] == []
+    assert "quality_blockers" in gap
+    assert gap["quality_blockers"] == []
+    assert "data_quality_issues" in gap
+    assert gap["data_quality_issues"] == []
+    assert metadata["ai_websearch_enhanced"] is True
+    assert "quality_blockers" in metadata
+    assert metadata["quality_blockers"] == []
+    assert "manual_required" in metadata
+    assert metadata["manual_required"] == []
     assert output["macro_indicators"]["industrial"]["source_url"] == "https://example.com/industrial"
     assert output["fund_flow"]["northbound"]["source_url"] == "https://example.com/north"
     assert output["commodities"][0]["source_url"] == "https://example.com/gold"
