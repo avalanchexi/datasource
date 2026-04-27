@@ -726,13 +726,19 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         change_120d = _fmt_change_cell(idx.get("change_120d"), digits=1, suffix="%")
         report += f"| {idx['name']} | {idx['current_price']:.2f} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
 
-    report += """
+    use_commodity_120d_window = any(
+        comm.get("ytd_change") is None and comm.get("change_120d") is not None
+        for comm in commodities
+    )
+    commodity_change_header = "近120日变化" if use_commodity_120d_window else "年内涨跌"
+
+    report += f"""
 
 ---
 
 ## 三、商品与黄金
 
-| 品种 | 最新报价 | 日涨跌 | 年内涨跌 | 趋势方向 |
+| 品种 | 最新报价 | 日涨跌 | {commodity_change_header} | 趋势方向 |
 |------|----------|--------|----------|----------|
 """
     commodity_name_map = {
@@ -769,8 +775,11 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             suffix="%",
             low_confidence=low_confidence,
         )
+        commodity_window_change = comm.get("ytd_change")
+        if commodity_window_change is None and use_commodity_120d_window:
+            commodity_window_change = comm.get("change_120d")
         ytd_change = _fmt_change_cell(
-            comm.get("ytd_change"),
+            commodity_window_change,
             digits=2,
             suffix="%",
             low_confidence=low_confidence,

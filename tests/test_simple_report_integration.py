@@ -188,3 +188,41 @@ def test_bond_date_uses_latest_available_note_date(tmp_path: Path):
     text = out.read_text(encoding="utf-8")
     assert "| 中国10年期国债 | 1.80% | -1.7bp | +1.3bp | 平稳 | 2026-02-06 |" in text
     assert "| 中国10年期国开债 | 1.96% | +10.9bp | -8.4bp | 上行 | 2026-02-09 |" in text
+
+
+def test_commodity_table_uses_120d_window_when_ytd_missing(tmp_path: Path):
+    market = _base_market()
+    market["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "name": "COMEX黄金",
+            "current_price": 2650.5,
+            "unit": "$/oz",
+            "daily_change": None,
+            "change_120d": 12.3,
+            "ytd_change": None,
+            "trend": "强势上涨",
+            "source": "websearch_manual",
+        }
+    ]
+    pring = {
+        "final_stage": "第Ⅲ阶段",
+        "confidence": 0.61,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+    assert "| 品种 | 最新报价 | 日涨跌 | 近120日变化 | 趋势方向 |" in text
+    assert "| COMEX黄金 | 2650.50 $/oz | N/A | +12.30% | 强势上涨 |" in text
+    assert "年内涨跌" not in text
