@@ -16,11 +16,9 @@ def load_json_strict(path: Path) -> Any:
 
 def load_json_optional(path: Path) -> Optional[Any]:
     target = Path(path)
-    if not target.exists():
-        return None
     try:
         return json.loads(target.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
+    except (FileNotFoundError, json.JSONDecodeError):
         return None
 
 

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,20 @@ def test_load_json_optional_returns_none_for_missing_or_invalid(tmp_path):
     invalid = tmp_path / "invalid.json"
     invalid.write_text("{bad", encoding="utf-8")
     assert load_json_optional(invalid) is None
+
+
+def test_load_json_optional_propagates_non_optional_io_errors(tmp_path, monkeypatch):
+    def fake_exists(self):
+        return False
+
+    def fake_read_text(self, encoding):
+        raise OSError("read failed")
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(Path, "read_text", fake_read_text)
+
+    with pytest.raises(OSError):
+        load_json_optional(tmp_path / "payload.json")
 
 
 def test_dump_json_creates_parent_and_backup(tmp_path):
