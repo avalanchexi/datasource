@@ -45,4 +45,98 @@ def test_stage4_prefers_dated_gap_monitor(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError) as exc:
         stage4.main()
 
-    assert "data/runs/20260409/gap_monitor.json" in str(exc.value)
+    assert "data/runs/20260409/gap_monitor.json" in str(exc.value).replace("\\", "/")
+
+
+def test_stage4_blocks_manual_websearch_commodity_without_source_url(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+
+    market_path.write_text(
+        """
+{
+  "metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"},
+  "commodities": [
+    {
+      "symbol": "GC=F",
+      "name": "COMEX黄金",
+      "current_price": 2650.5,
+      "source": "websearch_manual"
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}}',
+        encoding="utf-8",
+    )
+    gap_path.write_text('{"pending_tasks": [], "manual_required": []}', encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(reports_dir / "out.md"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    assert "missing_source_url" in str(exc.value)
+
+
+def test_stage4_blocks_pring_date_mismatch(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+
+    market_path.write_text(
+        '{"metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"}}',
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-26"}}',
+        encoding="utf-8",
+    )
+    gap_path.write_text('{"pending_tasks": [], "manual_required": []}', encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(reports_dir / "out.md"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    message = str(exc.value)
+    assert "2026-04-27" in message
+    assert "2026-04-26" in message

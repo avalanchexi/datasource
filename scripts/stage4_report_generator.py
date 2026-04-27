@@ -13,9 +13,10 @@ import argparse
 import json
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from datasource.generators.simple_report import generate_report
+from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 
@@ -48,6 +49,72 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _format_quality_issue(issue: Dict[str, Any]) -> str:
+    category = str(issue.get("category") or "unknown")
+    key = str(issue.get("key") or "unknown")
+    reason = str(issue.get("reason") or "unknown")
+    return f"{category}.{key}:{reason}"
+
+
+def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
+    quality_state = build_pipeline_quality_state(
+        market_payload,
+        stage="stage4",
+        allow_estimated=True,
+    )
+    quality_blockers = quality_state.get("quality_blockers") or []
+    policy = quality_state.get("policy_evaluation") or {}
+    policy_blocked = bool(policy.get("block_stage3"))
+
+    if not quality_blockers and not policy_blocked:
+        return
+
+    details = [_format_quality_issue(issue) for issue in quality_blockers]
+    if policy_blocked and not details:
+        details.append("policy_evaluation.block_stage3:true")
+
+    raise RuntimeError(
+        "Stage4 unified quality gate blocked report generation: "
+        f"{', '.join(details)}"
+    )
+
+
+def _market_report_date(market_payload: Dict[str, Any]) -> Optional[str]:
+    metadata = market_payload.get("metadata") or {}
+    candidates = (
+        metadata.get("date"),
+        metadata.get("end_date"),
+        market_payload.get("end_date"),
+        metadata.get("start_date"),
+        market_payload.get("start_date"),
+    )
+    for value in candidates:
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _pring_analysis_date(pring_payload: Dict[str, Any]) -> Optional[str]:
+    metadata = pring_payload.get("metadata") or {}
+    value = metadata.get("analysis_date")
+    if value in (None, ""):
+        return None
+    return str(value)
+
+
+def _assert_pring_matches_market(
+    market_payload: Dict[str, Any],
+    pring_payload: Dict[str, Any],
+) -> None:
+    market_date = _market_report_date(market_payload)
+    pring_date = _pring_analysis_date(pring_payload)
+    if market_date and pring_date and market_date != pring_date:
+        raise RuntimeError(
+            "Stage4 date mismatch: "
+            f"market_date={market_date}, pring_analysis_date={pring_date}"
+        )
+
+
 def main() -> None:
     args = parse_args()
     market_path = Path(args.market_data)
@@ -61,6 +128,9 @@ def main() -> None:
         raise FileNotFoundError(f"未找到Pring结果文件: {pring_path}")
 
     # gap_monitor 校验（支持带日期版本，自动从 market_data 路径推断）
+    market_payload = json.load(market_path.open("r", encoding="utf-8"))
+    pring_payload = json.load(pring_path.open("r", encoding="utf-8"))
+
     gap_path: Optional[Path]
     if args.gap_monitor:
         gap_path = Path(args.gap_monitor)
@@ -80,9 +150,12 @@ def main() -> None:
         print(f"[WARN] gap_monitor 文件未找到（查找: {gap_path}），跳过 gap 校验")
 
     # ai_websearch_enhanced 校验
-    meta = json.load(market_path.open("r", encoding="utf-8")).get("metadata", {})
+    meta = market_payload.get("metadata", {})
     if not meta.get("ai_websearch_enhanced"):
         raise RuntimeError("metadata.ai_websearch_enhanced 未设置，Stage4 已阻断。请先完成 Stage2。")
+
+    _assert_stage4_quality_gate(market_payload)
+    _assert_pring_matches_market(market_payload, pring_payload)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
