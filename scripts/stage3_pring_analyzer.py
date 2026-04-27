@@ -233,6 +233,31 @@ def _quality_blocker_keys(blockers: List[Dict[str, Any]]) -> Set[str]:
     return keys
 
 
+def _policy_item_matches_live_blocker(item: Any, live_quality_blocker_keys: Set[str]) -> bool:
+    key = _gap_item_key(item)
+    if not key:
+        return False
+    if key in live_quality_blocker_keys:
+        return True
+    if isinstance(item, dict):
+        category = item.get("category")
+        if category and f"{category}.{key}" in live_quality_blocker_keys:
+            return True
+    return False
+
+
+def _policy_item_has_current_entry(market_payload: Dict[str, Any], item: Any) -> bool:
+    key = _gap_item_key(item)
+    if not key:
+        return False
+    located = _find_estimated_entry_by_key(market_payload, key)
+    if located is None:
+        return False
+    if isinstance(item, dict) and item.get("category"):
+        return str(located[0]) == str(item.get("category"))
+    return True
+
+
 def _require_data_completeness(
     market_payload: Dict[str, Any],
     min_completeness: float,
@@ -382,6 +407,24 @@ async def _run_analysis(
 
     # 1) policy gate
     policy_rules = load_policy_rules()
+    block_on_stale = bool(policy_rules.get("block_on_stale", True))
+    critical_stale_keys = policy_rules.get("critical_stale_keys", ["cpi", "ppi", "pmi", "m1", "m2", "tsf"])
+    live_quality_state = build_pipeline_quality_state(
+        market_payload,
+        policy_rules=_effective_policy_rules(
+            policy_rules,
+            block_on_stale=block_on_stale,
+            critical_stale_keys=critical_stale_keys if isinstance(critical_stale_keys, list) else None,
+        ),
+        stage="stage3",
+        allow_estimated=allow_estimated,
+    )
+    live_quality_blocker_keys = _quality_blocker_keys(
+        _filtered_quality_blockers(
+            live_quality_state,
+            skip_fund_flow_check=skip_fund_flow_check,
+        )
+    )
     meta_date = (
         market_payload.get("metadata", {}).get("date")
         or market_payload.get("metadata", {}).get("end_date")
@@ -396,18 +439,22 @@ async def _run_analysis(
                 raw_redlist = policy_payload.get("redlist") or []
                 redlist_keys: List[str] = []
                 for row in raw_redlist:
-                    if isinstance(row, dict):
-                        key = row.get("key") or row.get("indicator_key")
-                    else:
-                        key = row
+                    key = _gap_item_key(row)
                     if key:
                         redlist_keys.append(str(key))
 
-                allowlisted_redlist = [
-                    key for key in redlist_keys
-                    if _is_allowlisted_gap_item(market_payload, key, policy_rules)
-                ]
-                blocking_redlist = [key for key in redlist_keys if key not in allowlisted_redlist]
+                allowlisted_redlist: List[str] = []
+                unresolved_redlist: List[str] = []
+                diagnostic_redlist: List[str] = []
+                for key in redlist_keys:
+                    if _is_allowlisted_gap_item(market_payload, key, policy_rules):
+                        allowlisted_redlist.append(key)
+                    elif key in live_quality_blocker_keys:
+                        continue
+                    elif _policy_item_has_current_entry(market_payload, key):
+                        diagnostic_redlist.append(key)
+                    else:
+                        unresolved_redlist.append(key)
                 for key in allowlisted_redlist:
                     _append_non_blocking_warning(
                         market_payload,
@@ -420,7 +467,25 @@ async def _run_analysis(
                     )
 
                 stale_redlist = policy_payload.get("stale_redlist") or []
-                if policy_payload.get("block_stage3") and (blocking_redlist or stale_redlist):
+                unresolved_stale_redlist: List[str] = []
+                diagnostic_stale_redlist: List[str] = []
+                for item in stale_redlist:
+                    key = _gap_item_key(item)
+                    if not key:
+                        continue
+                    if _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
+                        continue
+                    if _policy_item_has_current_entry(market_payload, item):
+                        diagnostic_stale_redlist.append(key)
+                    else:
+                        unresolved_stale_redlist.append(key)
+
+                if policy_payload.get("block_stage3") and (unresolved_redlist or unresolved_stale_redlist):
+                    blockers.append(
+                        f"policy: redlist={unresolved_redlist}, stale_redlist={unresolved_stale_redlist}"
+                    )
+
+                if policy_payload.get("block_stage3") and (diagnostic_redlist or diagnostic_stale_redlist):
                     _append_non_blocking_warning(
                         market_payload,
                         {
@@ -429,7 +494,7 @@ async def _run_analysis(
                             "key": "*",
                             "message": (
                                 "policy_evaluation.json retained for diagnostics only: "
-                                f"redlist={blocking_redlist}, stale_redlist={stale_redlist}"
+                                f"redlist={diagnostic_redlist}, stale_redlist={diagnostic_stale_redlist}"
                             ),
                         },
                     )
@@ -437,8 +502,6 @@ async def _run_analysis(
                 print(f"[WARN] policy_evaluation check skipped: {exc}")
 
     # 2) completeness gate
-    block_on_stale = bool(policy_rules.get("block_on_stale", True))
-    critical_stale_keys = policy_rules.get("critical_stale_keys", ["cpi", "ppi", "pmi", "m1", "m2", "tsf"])
     completeness_error: Optional[str] = None
     try:
         _require_data_completeness(
@@ -459,23 +522,6 @@ async def _run_analysis(
             blockers.extend(
                 line for line in completeness_error.splitlines() if line.strip()
             )
-
-    live_quality_state = build_pipeline_quality_state(
-        market_payload,
-        policy_rules=_effective_policy_rules(
-            policy_rules,
-            block_on_stale=block_on_stale,
-            critical_stale_keys=critical_stale_keys if isinstance(critical_stale_keys, list) else None,
-        ),
-        stage="stage3",
-        allow_estimated=allow_estimated,
-    )
-    live_quality_blocker_keys = _quality_blocker_keys(
-        _filtered_quality_blockers(
-            live_quality_state,
-            skip_fund_flow_check=skip_fund_flow_check,
-        )
-    )
 
     # 3) gap monitor gate
     ai_websearch_flag = bool(market_payload.get("metadata", {}).get("ai_websearch_enhanced"))

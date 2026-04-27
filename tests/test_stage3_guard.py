@@ -352,6 +352,52 @@ def test_run_analysis_does_not_block_on_stale_policy_file_when_live_state_clean(
     assert output_path.exists()
 
 
+def test_run_analysis_blocks_unresolved_policy_redlist_missing_from_payload(tmp_path: Path, monkeypatch):
+    market_payload = {
+        "metadata": {
+            "date": "2026-02-09",
+            "data_completeness": 1.0,
+            "ai_websearch_enhanced": True,
+            "missing_items": {"monetary_policy": ["mlf"]},
+        },
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+    run_dir = tmp_path / "data" / "runs" / "20260209"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "policy_evaluation.json").write_text(
+        json.dumps({"block_stage3": True, "redlist": ["mlf"]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (run_dir / "gap_monitor.json").write_text(
+        json.dumps({"manual_required": [], "pending_tasks": []}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    market_path = tmp_path / "market.json"
+    output_path = tmp_path / "pring.json"
+    market_path.write_text(json.dumps(market_payload, ensure_ascii=False), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            s3._run_analysis(
+                market_path=market_path,
+                output_path=output_path,
+                allow_fallback=False,
+                skip_gap_check=False,
+            )
+        )
+
+    msg = str(exc.value)
+    assert "policy:" in msg
+    assert "mlf" in msg
+
+
 def test_run_analysis_does_not_block_on_stale_gap_monitor_when_live_state_clean(tmp_path: Path, monkeypatch):
     market_payload = {
         "metadata": {
