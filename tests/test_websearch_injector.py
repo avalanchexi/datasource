@@ -255,6 +255,48 @@ def test_remove_top_missing_on_skip_keeps_stage3_unblocked():
     assert market_data["missing_items"] == ["cpi"]
 
 
+def test_stock_index_merge_preserves_source_url_and_metadata():
+    merged = injector._merge_stock_index_entry(
+        {
+            "symbol": "000300",
+            "name": "沪深300",
+            "current_price": None,
+            "source": "placeholder",
+        },
+        {
+            "symbol": "000300",
+            "name": "沪深300",
+            "current_price": 4200.5,
+            "source": "manual",
+            "source_url": "https://example.com/hs300",
+            "is_estimated": True,
+            "estimation_method": "manual_estimate",
+            "metric_basis": "close",
+            "confidence": "high",
+        },
+    )
+
+    assert merged["source_url"] == "https://example.com/hs300"
+    assert merged["is_estimated"] is True
+    assert merged["estimation_method"] == "manual_estimate"
+    assert merged["metric_basis"] == "close"
+    assert merged["confidence"] == "high"
+
+
+def test_stock_index_build_preserves_source_url_alias():
+    built = injector._build_stock_index_entry(
+        "000016",
+        {
+            "name": "上证50",
+            "current_price": 2950.2,
+            "source": "manual",
+            "sourceUrl": "https://example.com/sse50",
+        },
+    )
+
+    assert built["source_url"] == "https://example.com/sse50"
+
+
 def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
     existing = {
         "pair": "USDCNY",

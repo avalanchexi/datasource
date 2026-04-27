@@ -288,9 +288,9 @@ def _copy_payload_metadata_fields(target: Dict[str, Any], payload: Dict[str, Any
 
 
 def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
-    url = payload.get("source_url") or payload.get("url")
-    if isinstance(url, str) and url.strip():
-        target["source_url"] = url.strip()
+    url = _extract_source_url(payload)
+    if url:
+        target["source_url"] = url
 
 
 def _collect_missing_source_urls(websearch_data: Dict[str, Any]) -> List[str]:
@@ -3009,12 +3009,18 @@ def _merge_stock_index_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> D
     merged['trend_score'] = int(payload.get('trend_score', orig.get('trend_score', 0)))
     merged['trend_label'] = payload.get('trend_label', orig.get('trend_label', '中性'))
     merged['source'] = _format_source_label(payload.get('source') or orig.get('source'))
+    _copy_source_url(merged, payload)
+    _copy_payload_metadata_fields(
+        merged,
+        payload,
+        ("is_estimated", "estimation_method", "metric_basis", "confidence"),
+    )
     return merged
 
 
 def _build_stock_index_entry(symbol: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     """为缺失的指数（如000016）构造完整条目，确保 Pydantic 校验通过。"""
-    return {
+    entry = {
         "symbol": symbol,
         "name": payload.get('name', symbol),
         "current_price": _coerce_float(payload.get('current_price') or payload.get('close') or payload.get('price')) or 0.0,
@@ -3030,6 +3036,13 @@ def _build_stock_index_entry(symbol: str, payload: Dict[str, Any]) -> Dict[str, 
         "trend_label": payload.get('trend_label', '中性'),
         "source": _format_source_label(payload.get('source')),
     }
+    _copy_source_url(entry, payload)
+    _copy_payload_metadata_fields(
+        entry,
+        payload,
+        ("is_estimated", "estimation_method", "metric_basis", "confidence"),
+    )
+    return entry
 
 
 def _merge_bond_entry(
