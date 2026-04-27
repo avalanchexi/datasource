@@ -233,29 +233,26 @@ def _quality_blocker_keys(blockers: List[Dict[str, Any]]) -> Set[str]:
     return keys
 
 
+def _item_label(item: Any) -> str:
+    key = _gap_item_key(item)
+    if isinstance(item, dict) and item.get("category"):
+        return f"{item.get('category')}.{key}"
+    return key
+
+
 def _policy_item_matches_live_blocker(item: Any, live_quality_blocker_keys: Set[str]) -> bool:
     key = _gap_item_key(item)
     if not key:
         return False
-    if key in live_quality_blocker_keys:
-        return True
     if isinstance(item, dict):
         category = item.get("category")
-        if category and f"{category}.{key}" in live_quality_blocker_keys:
-            return True
-    return False
+        if category:
+            return f"{category}.{key}" in live_quality_blocker_keys
+    return key in live_quality_blocker_keys
 
 
 def _policy_item_has_current_entry(market_payload: Dict[str, Any], item: Any) -> bool:
-    key = _gap_item_key(item)
-    if not key:
-        return False
-    located = _find_estimated_entry_by_key(market_payload, key)
-    if located is None:
-        return False
-    if isinstance(item, dict) and item.get("category"):
-        return str(located[0]) == str(item.get("category"))
-    return True
+    return _find_entry_by_item(market_payload, item) is not None
 
 
 def _require_data_completeness(
@@ -328,15 +325,48 @@ def _find_estimated_entry_by_key(
     for item in market_payload.get("stock_indices", []) or []:
         if isinstance(item, dict) and str(item.get("symbol")) == str(key):
             return ("stock_indices", str(item.get("symbol")), item)
+    fund_flow = market_payload.get("fund_flow", {})
+    if isinstance(fund_flow, dict) and isinstance(fund_flow.get(key), dict):
+        return ("fund_flow", key, fund_flow[key])
+    return None
+
+
+def _find_entry_by_item(
+    market_payload: Dict[str, Any],
+    item: Any,
+) -> Optional[tuple[str, str, Dict[str, Any]]]:
+    key = _gap_item_key(item)
+    if not key:
+        return None
+
+    category = item.get("category") if isinstance(item, dict) else None
+    if not category:
+        return _find_estimated_entry_by_key(market_payload, key)
+
+    section = market_payload.get(str(category))
+    if isinstance(section, dict):
+        entry = section.get(key)
+        if isinstance(entry, dict):
+            return (str(category), key, entry)
+        return None
+
+    if isinstance(section, list):
+        for entry in section:
+            if not isinstance(entry, dict):
+                continue
+            for field in ("key", "symbol", "pair", "name", "ts_code", "code"):
+                value = entry.get(field)
+                if value not in (None, "") and str(value) == key:
+                    return (str(category), key, entry)
     return None
 
 
 def _is_allowlisted_gap_item(
     market_payload: Dict[str, Any],
-    key: str,
+    item: Any,
     policy_rules: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    located = _find_estimated_entry_by_key(market_payload, key)
+    located = _find_entry_by_item(market_payload, item)
     if not located:
         return False
     category, real_key, entry = located
@@ -437,24 +467,25 @@ async def _run_analysis(
                 policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
 
                 raw_redlist = policy_payload.get("redlist") or []
-                redlist_keys: List[str] = []
+                redlist_items: List[Any] = []
                 for row in raw_redlist:
                     key = _gap_item_key(row)
                     if key:
-                        redlist_keys.append(str(key))
+                        redlist_items.append(row)
 
                 allowlisted_redlist: List[str] = []
                 unresolved_redlist: List[str] = []
                 diagnostic_redlist: List[str] = []
-                for key in redlist_keys:
-                    if _is_allowlisted_gap_item(market_payload, key, policy_rules):
-                        allowlisted_redlist.append(key)
-                    elif key in live_quality_blocker_keys:
+                for item in redlist_items:
+                    label = _item_label(item)
+                    if _is_allowlisted_gap_item(market_payload, item, policy_rules):
+                        allowlisted_redlist.append(label)
+                    elif _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
                         continue
-                    elif _policy_item_has_current_entry(market_payload, key):
-                        diagnostic_redlist.append(key)
+                    elif _policy_item_has_current_entry(market_payload, item):
+                        diagnostic_redlist.append(label)
                     else:
-                        unresolved_redlist.append(key)
+                        unresolved_redlist.append(label)
                 for key in allowlisted_redlist:
                     _append_non_blocking_warning(
                         market_payload,
@@ -473,12 +504,13 @@ async def _run_analysis(
                     key = _gap_item_key(item)
                     if not key:
                         continue
+                    label = _item_label(item)
                     if _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
                         continue
                     if _policy_item_has_current_entry(market_payload, item):
-                        diagnostic_stale_redlist.append(key)
+                        diagnostic_stale_redlist.append(label)
                     else:
-                        unresolved_stale_redlist.append(key)
+                        unresolved_stale_redlist.append(label)
 
                 if policy_payload.get("block_stage3") and (unresolved_redlist or unresolved_stale_redlist):
                     blockers.append(
@@ -539,30 +571,46 @@ async def _run_analysis(
             key = _gap_item_key(item)
             if not key:
                 continue
-            if key in live_quality_blocker_keys:
-                pending_blocking.append(key)
+            label = _item_label(item)
+            if _is_allowlisted_gap_item(market_payload, item, policy_rules):
+                _append_non_blocking_warning(
+                    market_payload,
+                    {
+                        "level": "warning",
+                        "code": "gap_allowlisted_pending_ignored",
+                        "key": label,
+                        "message": f"gap_monitor pending allowlist pass: {label}",
+                    },
+                )
+            elif _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
+                pending_blocking.append(label)
+            elif _policy_item_has_current_entry(market_payload, item):
+                stale_gap_items.append(label)
             else:
-                stale_gap_items.append(key)
+                pending_blocking.append(label)
 
         manual_blocking: List[str] = []
         for item in manual_raw:
             key = _gap_item_key(item)
             if not key:
                 continue
-            if _is_allowlisted_gap_item(market_payload, key, policy_rules):
+            label = _item_label(item)
+            if _is_allowlisted_gap_item(market_payload, item, policy_rules):
                 _append_non_blocking_warning(
                     market_payload,
                     {
                         "level": "warning",
                         "code": "gap_allowlisted_manual_ignored",
-                        "key": key,
-                        "message": f"gap_monitor 白名单放行: {key}",
+                        "key": label,
+                        "message": f"gap_monitor allowlist pass: {label}",
                     },
                 )
-            elif key in live_quality_blocker_keys:
-                manual_blocking.append(key)
+            elif _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
+                manual_blocking.append(label)
+            elif _policy_item_has_current_entry(market_payload, item):
+                stale_gap_items.append(label)
             else:
-                stale_gap_items.append(key)
+                manual_blocking.append(label)
 
         if stale_gap_items:
             _append_non_blocking_warning(
