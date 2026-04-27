@@ -28,6 +28,11 @@ def dump_json(payload: Any, path: Path, backup: bool = False) -> None:
     if backup and target.exists():
         backup_path = target.with_name(target.name + ".bak")
         timestamp_path = target.with_name(f"{target.stem}_{datetime.now():%Y%m%d%H%M%S%f}{target.suffix}")
-        shutil.copy2(target, backup_path)
-        shutil.copy2(target, timestamp_path)
-    target.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            shutil.copy2(target, backup_path)
+            shutil.copy2(target, timestamp_path)
+        except OSError:
+            pass
+    tmp_path = target.with_suffix(target.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp_path.replace(target)

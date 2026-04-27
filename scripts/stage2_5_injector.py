@@ -18,7 +18,7 @@ from datasource.models.market_data_contract import FundFlowData
 from datasource.utils.trend_history_store import write_from_market_data, DEFAULT_BASE_DIR, SERIES_WINDOWS
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
 from datasource.utils.quality_metrics import write_quality_metrics
-from datasource.utils.coercion import is_stage2_number_placeholder
+from datasource.utils.coercion import is_legacy_713_placeholder, is_stage2_number_placeholder
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -302,7 +302,7 @@ def _collect_missing_source_urls(websearch_data: Dict[str, Any]) -> List[str]:
 
 
 def _is_placeholder_numeric(value: Any) -> bool:
-    return is_stage2_number_placeholder(value)
+    return is_stage2_number_placeholder(value) or is_legacy_713_placeholder(value)
 
 
 def _has_valid_value(value: Any) -> bool:

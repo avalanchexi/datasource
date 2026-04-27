@@ -61,3 +61,17 @@ def test_dump_json_repeated_backup_keeps_distinct_timestamp_files(tmp_path):
         if backup.name != path.name + ".bak"
     ]
     assert len(timestamp_backups) >= 2
+
+
+def test_dump_json_backup_copy_failure_still_writes_target(tmp_path, monkeypatch):
+    path = tmp_path / "payload.json"
+    dump_json({"a": 1}, path)
+
+    def fail_copy2(src, dst):
+        raise OSError("copy failed")
+
+    monkeypatch.setattr("datasource.utils.json_io.shutil.copy2", fail_copy2)
+
+    dump_json({"a": 2}, path, backup=True)
+
+    assert json.loads(path.read_text(encoding="utf-8")) == {"a": 2}

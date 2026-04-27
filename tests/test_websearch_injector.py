@@ -33,6 +33,11 @@ def test_coerce_float_handles_percent_and_units(raw, expected):
     assert injector._coerce_float(raw) == expected
 
 
+@pytest.mark.parametrize("raw", [7.13, "7.13"])
+def test_is_placeholder_numeric_preserves_legacy_713_placeholder(raw):
+    assert injector._is_placeholder_numeric(raw) is True
+
+
 def test_apply_fund_flow_entry_normalizes_websearch_payload():
     entry = {"type": "northbound", "recent_5d": None, "total_120d": None, "trend": "待获取", "source": "占位", "note": ""}
     payload = {
