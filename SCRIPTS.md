@@ -322,35 +322,39 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ```bash
 # 设置日期变量
-DATE=2025-11-14
+DATE=$(date +%Y-%m-%d)
 DATE_NH=${DATE//-/}
 
 # Stage 1: API数据收集
-python scripts/stage1_data_collector.py \
-  --date $DATE \
-  --output data/${DATE}_market_data.json
+bash run_clean.sh python scripts/stage1_data_collector.py \
+  --date "$DATE" \
+  --output "data/runs/${DATE_NH}/market_data.json"
 
-# Stage 2a: MCP Essential增强 (可选，有弃用警告)
-python scripts/stage2a_mcp_enhancer.py \
-  --market-data data/${DATE}_market_data.json \
-  --output data/${DATE}_market_data_enhanced.json
+# Stage 2: Tavily + DeepSeek 增强
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --extraction-backend deepseek \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 
-# AI补全: WebSearch数据收集 + 注入 (CRITICAL)
-# 1. AI执行14个WebSearch查询
-# 2. 创建 websearch_results_${DATE}.json
-# 3. 运行注入脚本
+# Stage 2.5: WebSearch/manual 注入
 bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/market_data_stage2.json" \
   "data/runs/${DATE_NH}/websearch_results_manual.json" \
   "data/runs/${DATE_NH}/market_data_complete.json"
 
-# Stage 2: Pring分析
+# Stage 3: Pring分析
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
   --allow-estimated
 
-# Stage 3: 报告生成
+# Stage 4: 报告生成
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
