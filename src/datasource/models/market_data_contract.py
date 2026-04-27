@@ -36,8 +36,11 @@ class CommodityData(BaseModel):
     unit: str  # $/oz, $/barrel, etc.
     daily_change: Optional[float] = None
     ytd_change: Optional[float] = None
+    change_120d: Optional[float] = None
+    change_120d_basis: Optional[str] = None
     trend: str
     source: str
+    source_url: Optional[str] = None
     timestamp: str
     stage_task_id: Optional[str] = None
     note: Optional[str] = None

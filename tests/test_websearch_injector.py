@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scripts.stage2_5_injector as injector
+from datasource.models.market_data_contract import CommodityData
 
 
 @pytest.mark.parametrize(
@@ -962,6 +963,65 @@ def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monke
     assert merged["change_120d_basis"] == "trend_history"
     assert "daily_change_basis" not in merged
     assert "ytd_change_basis" not in merged
+
+
+def test_merge_commodity_entry_preserves_payload_change_120d_and_source_url(monkeypatch):
+    existing = {
+        "symbol": "GC=F",
+        "name": "COMEX黄金",
+        "current_price": None,
+        "daily_change": None,
+        "ytd_change": None,
+        "source": "占位",
+    }
+    payload = {
+        "symbol": "GC=F",
+        "current_price": "3450.0",
+        "change_120d": "12.3",
+        "source": "manual https://example.com/gold",
+        "source_url": "https://example.com/gold",
+    }
+
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_5d": 1.5,
+            "change_120d": None,
+            "reason_5d": None,
+            "reason_120d": "trend_history_missing",
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        },
+    )
+
+    merged = injector._merge_commodity_entry(existing, payload, is_manual=True)
+
+    assert merged["change_120d"] == pytest.approx(12.3)
+    assert merged["change_120d_basis"] == "websearch_manual"
+    assert merged["source_url"] == "https://example.com/gold"
+
+
+def test_commodity_data_preserves_120d_fields_and_source_url():
+    commodity = CommodityData(
+        symbol="GC=F",
+        name="COMEX黄金",
+        current_price=3450.0,
+        unit="$/oz",
+        daily_change=None,
+        ytd_change=None,
+        change_120d=12.3,
+        change_120d_basis="websearch_manual",
+        trend="上涨",
+        source="manual",
+        source_url="https://example.com/gold",
+        timestamp="2026-04-27",
+    )
+
+    payload = commodity.model_dump()
+    assert payload["change_120d"] == pytest.approx(12.3)
+    assert payload["change_120d_basis"] == "websearch_manual"
+    assert payload["source_url"] == "https://example.com/gold"
 
 
 def test_build_forex_entry_keeps_unknown_changes_as_none(monkeypatch):

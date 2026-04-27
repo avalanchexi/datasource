@@ -3143,6 +3143,12 @@ def _merge_commodity_entry(
     current_price = merged.get('current_price')
     symbol = merged.get('symbol')
     used_hist_120d = False
+    payload_120d = _coerce_percent(payload.get('change_120d'))
+    if payload_120d is None:
+        payload_120d = _coerce_percent(payload.get('change_120d_pct'))
+    if payload_120d is not None:
+        merged['change_120d'] = payload_120d
+        merged['change_120d_basis'] = payload.get('change_120d_basis') or ('websearch_manual' if is_manual else 'payload')
     if current_price and symbol and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
             "commodities",
@@ -3159,7 +3165,7 @@ def _merge_commodity_entry(
         elif payload.get('ytd_change_basis') or 'ytd_change_basis' not in merged:
             merged['ytd_change_basis'] = payload.get('ytd_change_basis') or 'year_to_date'
         hist_120d = _coerce_float(hist_changes.get('change_120d'))
-        if hist_120d is not None:
+        if payload_120d is None and hist_120d is not None:
             merged['change_120d'] = hist_120d
             merged['change_120d_basis'] = 'trend_history'
             used_hist_120d = True
@@ -3181,6 +3187,8 @@ def _merge_commodity_entry(
             merged['ytd_change'] = existing.get('ytd_change')
         elif payload.get('ytd_change_basis') or 'ytd_change_basis' not in merged:
             merged['ytd_change_basis'] = payload.get('ytd_change_basis') or 'year_to_date'
+        if payload_120d is None:
+            merged['change_120d'] = existing.get('change_120d')
     _copy_source_url(merged, payload)
     _copy_payload_metadata_fields(
         merged,
