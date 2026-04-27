@@ -515,8 +515,8 @@ class MarketDataCollector:
                                 symbol=symbol,
                                 name=name,
                                 current_price=current,
-                                change_5d=0.0,
-                                change_120d=0.0,
+                                change_5d=None,
+                                change_120d=None,
                                 above_ma50=False,
                                 above_ma200=False,
                                 ma50_slope=0.0,
@@ -540,8 +540,8 @@ class MarketDataCollector:
                                 symbol=symbol,
                                 name=name,
                                 current_price=current,
-                                change_5d=0.0,
-                                change_120d=0.0,
+                                change_5d=None,
+                                change_120d=None,
                                 above_ma50=False,
                                 above_ma200=False,
                                 ma50_slope=0.0,
@@ -559,8 +559,8 @@ class MarketDataCollector:
                         raise ValueError("close series empty")
                     closes = df["close"]
                     current = float(closes.iloc[-1])
-                    change_5d = (current / closes.iloc[-6] - 1) * 100 if len(closes) > 6 else 0.0
-                    change_120d = (current / closes.iloc[-121] - 1) * 100 if len(closes) > 121 else 0.0
+                    change_5d = (current / closes.iloc[-6] - 1) * 100 if len(closes) > 6 else None
+                    change_120d = (current / closes.iloc[-121] - 1) * 100 if len(closes) > 121 else None
                     ma50 = closes.rolling(50).mean().iloc[-1] if len(closes) >= 50 else closes.mean()
                     ma200 = closes.rolling(200).mean().iloc[-1] if len(closes) >= 200 else ma50
                     above_ma50 = current > (ma50 or current)

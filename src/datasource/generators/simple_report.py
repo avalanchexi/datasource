@@ -727,7 +727,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         report += f"| {idx['name']} | {idx['current_price']:.2f} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
 
     use_commodity_120d_window = any(
-        comm.get("ytd_change") is None and comm.get("change_120d") is not None
+        comm.get("change_120d") is not None
         for comm in commodities
     )
     commodity_change_header = "近120日变化" if use_commodity_120d_window else "年内涨跌"

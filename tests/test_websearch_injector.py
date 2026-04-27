@@ -298,6 +298,24 @@ def test_stock_index_build_preserves_source_url_alias():
     assert built["source_url"] == "https://example.com/sse50"
 
 
+def test_coerce_stage2_results_uses_raw_result_url_when_extraction_lacks_source_url():
+    converted = injector._coerce_stage2_results_to_schema(
+        {
+            "results": [
+                {
+                    "task": {"indicator_key": "GC=F", "unit": "$/oz"},
+                    "extraction": {"value": "2650.5", "note": "stage2 snippet"},
+                    "raw_results": [{"url": "https://example.com/gold"}],
+                }
+            ]
+        }
+    )
+
+    row = converted["commodities"][0]
+    assert row["source_url"] == "https://example.com/gold"
+    assert "https://example.com/gold" in row["source"]
+
+
 def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
     existing = {
         "pair": "USDCNY",

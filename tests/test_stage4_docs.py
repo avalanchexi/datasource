@@ -48,6 +48,61 @@ def test_stage4_prefers_dated_gap_monitor(tmp_path, monkeypatch):
     assert "data/runs/20260409/gap_monitor.json" in str(exc.value).replace("\\", "/")
 
 
+def test_stage4_ignores_stale_gap_when_live_quality_state_is_clean(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+    output_path = reports_dir / "out.md"
+
+    market_path.write_text(
+        """
+{
+  "metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"},
+  "macro_indicators": {
+    "industrial": {
+      "current_value": 5.2,
+      "previous_value": 5.0,
+      "change_rate": 4.0,
+      "source": "websearch_manual(https://example.com/industrial)",
+      "source_url": "https://example.com/industrial"
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}}',
+        encoding="utf-8",
+    )
+    gap_path.write_text('{"pending_tasks": [], "manual_required": ["industrial"]}', encoding="utf-8")
+
+    called = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stage4, "generate_report", lambda *args: called.append(args))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    stage4.main()
+
+    assert called == [(market_path, pring_path, output_path)]
+
+
 def test_stage4_blocks_manual_websearch_commodity_without_source_url(tmp_path, monkeypatch):
     data_dir = tmp_path / "data" / "runs" / "20260427"
     reports_dir = tmp_path / "reports"

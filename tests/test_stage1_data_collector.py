@@ -129,3 +129,104 @@ def test_calculate_change_returns_none_when_window_unavailable():
     collector = Stage1DataCollector.__new__(Stage1DataCollector)
 
     assert collector._calculate_change(df, 120) is None
+
+
+def test_index_daily_fallback_short_window_returns_none_changes(monkeypatch):
+    class _Pro:
+        def index_daily(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260424", "20260427"],
+                    "close": [3000.0, 3010.0],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(
+        collector._fallback_index_from_tushare("000001", "SH", "2026-04-01", "2026-04-27")
+    )
+
+    assert result is not None
+    assert result.change_5d is None
+    assert result.change_120d is None
+
+
+def test_minute_fallback_returns_none_window_changes(monkeypatch):
+    class _Pro:
+        def index_daily(self, **_kwargs):
+            return pd.DataFrame()
+
+        def pro_bar(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "trade_time": ["2026-04-27 14:59:00", "2026-04-27 15:00:00"],
+                    "close": [3000.0, 3010.0],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(
+        collector._fallback_index_from_tushare("000001", "SH", "2026-04-01", "2026-04-27")
+    )
+
+    assert result is not None
+    assert result.change_5d is None
+    assert result.change_120d is None
+
+
+def test_previous_trade_fallback_returns_none_window_changes(monkeypatch):
+    class _Pro:
+        def index_daily(self, **kwargs):
+            if kwargs.get("start_date") == kwargs.get("end_date"):
+                return pd.DataFrame({"trade_date": ["20260424"], "close": [3000.0]})
+            return pd.DataFrame()
+
+        def pro_bar(self, **_kwargs):
+            return pd.DataFrame()
+
+        def trade_cal(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "cal_date": ["20260424", "20260427"],
+                    "is_open": [1, 1],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(
+        collector._fallback_index_from_tushare("000001", "SH", "2026-04-01", "2026-04-27")
+    )
+
+    assert result is not None
+    assert result.change_5d is None
+    assert result.change_120d is None

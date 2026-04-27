@@ -13,7 +13,7 @@ import argparse
 import json
 import shutil
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from datasource.generators.simple_report import generate_report
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
@@ -79,6 +79,104 @@ def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
     )
 
 
+def _gap_item_label(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(
+            item.get("indicator_key")
+            or item.get("key")
+            or item.get("task")
+            or item.get("field")
+            or item
+        )
+    return str(item)
+
+
+def _gap_item_category(item: Any) -> Optional[str]:
+    if not isinstance(item, dict):
+        return None
+    category = item.get("category")
+    return str(category) if category not in (None, "") else None
+
+
+def _payload_entries(market_payload: Dict[str, Any]) -> List[Tuple[str, str]]:
+    entries: List[Tuple[str, str]] = []
+    for category in ("macro_indicators", "monetary_policy", "fund_flow"):
+        rows = market_payload.get(category)
+        if not isinstance(rows, dict):
+            continue
+        for key, entry in rows.items():
+            if isinstance(entry, dict):
+                entries.append((category, str(key)))
+
+    key_fields = {
+        "bonds": ("symbol", "name"),
+        "forex": ("pair", "name"),
+        "commodities": ("symbol", "name"),
+        "stock_indices": ("symbol", "name", "ts_code", "code"),
+    }
+    for category, fields in key_fields.items():
+        rows = market_payload.get(category)
+        if not isinstance(rows, list):
+            continue
+        for entry in rows:
+            if not isinstance(entry, dict):
+                continue
+            for field in fields:
+                value = entry.get(field)
+                if value not in (None, ""):
+                    entries.append((category, str(value)))
+                    break
+    return entries
+
+
+def _matching_payload_entries(
+    market_payload: Dict[str, Any],
+    gap_item: Any,
+) -> List[Tuple[str, str]]:
+    label = _gap_item_label(gap_item).strip()
+    category = _gap_item_category(gap_item)
+    if "." in label and category is None:
+        maybe_category, maybe_key = label.split(".", 1)
+        if maybe_category and maybe_key:
+            category = maybe_category
+            label = maybe_key
+    label_norm = label.lower()
+    category_norm = category.lower() if category else None
+
+    matches: List[Tuple[str, str]] = []
+    for entry_category, entry_key in _payload_entries(market_payload):
+        if category_norm and entry_category.lower() != category_norm:
+            continue
+        if entry_key.lower() == label_norm:
+            matches.append((entry_category, entry_key))
+    return matches
+
+
+def _unresolved_gap_items(
+    market_payload: Dict[str, Any],
+    quality_state: Dict[str, Any],
+    gap_items: Any,
+) -> List[Any]:
+    if not isinstance(gap_items, list):
+        return []
+
+    blocker_pairs = {
+        (str(issue.get("category") or "").lower(), str(issue.get("key") or "").lower())
+        for issue in quality_state.get("quality_blockers") or []
+        if isinstance(issue, dict)
+    }
+
+    unresolved: List[Any] = []
+    for item in gap_items:
+        matches = _matching_payload_entries(market_payload, item)
+        if not matches:
+            unresolved.append(item)
+            continue
+        if any((category.lower(), key.lower()) in blocker_pairs for category, key in matches):
+            unresolved.append(item)
+    return unresolved
+
+
 def _market_report_date(market_payload: Dict[str, Any]) -> Optional[str]:
     metadata = market_payload.get("metadata") or {}
     candidates = (
@@ -141,6 +239,13 @@ def main() -> None:
         gap = json.load(gap_path.open("r", encoding="utf-8"))
         pending = gap.get("pending_tasks", [])
         manual = gap.get("manual_required", [])
+        quality_state = build_pipeline_quality_state(
+            market_payload,
+            stage="stage4",
+            allow_estimated=True,
+        )
+        pending = _unresolved_gap_items(market_payload, quality_state, pending)
+        manual = _unresolved_gap_items(market_payload, quality_state, manual)
         if pending or manual:
             raise RuntimeError(
                 f"gap_monitor 未清空（{gap_path}），pending={pending}, "

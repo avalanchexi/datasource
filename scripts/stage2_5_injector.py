@@ -917,7 +917,14 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 _append_manual_skeleton(key, cat, task, extraction, "no_value_from_stage2", item)
                 seen_manual_keys.add(uniq_key)
             continue
+        src = _candidate_url(item, extraction)
         source = extraction.get("source_url") or extraction.get("note") or "stage2_auto_extract"
+        if src:
+            source_text = str(source or "stage2_auto_extract")
+            if src not in source_text:
+                source = f"{source_text}({src})"
+        elif "stage2_auto" not in str(source).lower():
+            source = f"stage2_auto_extract:{source}" if source else "stage2_auto_extract"
         if cat == "commodities":
             _upsert(
                 schema["commodities"],
@@ -930,7 +937,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "ytd_change": extraction.get("ytd_change"),
                     "trend": "未知",
                     "source": source,
-                    "source_url": extraction.get("source_url"),
+                    "source_url": src,
                 },
             )
         elif cat == "forex":
@@ -945,7 +952,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "change_120d": extraction.get("change_120d"),
                     "trend": extraction.get("trend") or "未知",
                     "source": source,
-                    "source_url": extraction.get("source_url"),
+                    "source_url": src,
                 },
             )
         elif cat == "bonds":
@@ -960,7 +967,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "change_120d_bp": extraction.get("change_120d_bp"),
                     "trend": extraction.get("trend") or "未知",
                     "source": source,
-                    "source_url": extraction.get("source_url"),
+                    "source_url": src,
                 },
             )
         elif cat == "stock_indices":
@@ -972,7 +979,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "name": key,
                     "current_price": val,
                     "source": source,
-                    "source_url": extraction.get("source_url"),
+                    "source_url": src,
                 },
             )
         elif cat == "fund_flow":
@@ -990,7 +997,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 "trend": _trend_cn(extraction.get("trend"), recent),
                 "source": source,
                 "note": extraction.get("note"),
-                "source_url": extraction.get("source_url"),
+                "source_url": src,
             }
         elif cat == "macro_indicators":
             schema["macro_indicators"][key] = {
@@ -1005,7 +1012,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 "yoy_month": extraction.get("yoy_month"),
                 "yoy_ytd": extraction.get("yoy_ytd"),
                 "source": source,
-                "source_url": extraction.get("source_url"),
+                "source_url": src,
             }
         elif cat == "monetary_policy":
             schema["monetary_policy"][key] = {
@@ -1017,7 +1024,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
                 "rrr_type": extraction.get("rrr_type"),
                 "source": source,
-                "source_url": extraction.get("source_url"),
+                "source_url": src,
             }
     # 移除空类别，保持与原脚本兼容
     metadata = schema.get("metadata") or {}

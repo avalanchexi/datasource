@@ -79,6 +79,22 @@ def test_pipeline_quality_state_requires_source_url_for_manual_values():
     assert {"category": "commodities", "key": "GC=F", "reason": "missing_source_url"} in state["quality_blockers"]
 
 
+def test_pipeline_quality_state_requires_source_url_for_stage2_auto_values():
+    payload = _base_payload()
+    payload["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "current_price": 3450.0,
+            "source": "stage2_auto_extract",
+        }
+    ]
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    assert {"category": "commodities", "key": "GC=F", "reason": "missing_source_url"} in state["source_url_issues"]
+    assert {"category": "commodities", "key": "GC=F", "reason": "missing_source_url"} in state["quality_blockers"]
+
+
 def test_pipeline_quality_state_blocks_disallowed_estimated_values_even_with_allow_estimated():
     payload = _base_payload()
     payload["monetary_policy"]["m2"] = {

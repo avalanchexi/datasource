@@ -14,7 +14,7 @@ from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_
 
 
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-_SOURCE_MARKERS = ("websearch", "manual", "tavily", "deepseek")
+_SOURCE_MARKERS = ("websearch", "manual", "tavily", "deepseek", "stage2_auto", "stage2_auto_extract")
 
 
 def build_pipeline_quality_state(

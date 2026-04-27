@@ -279,3 +279,54 @@ def test_commodity_table_uses_120d_for_all_rows_when_any_ytd_missing(tmp_path: P
     assert "| Gold | 2650.50 $/oz | N/A | +3.30% | up |" in text
     assert "| WTI Oil | 70.25 $/bbl | N/A | -4.50% | down |" in text
     assert "+8.80%" not in text
+
+
+def test_commodity_table_prefers_120d_when_all_rows_also_have_ytd(tmp_path: Path):
+    market = _base_market()
+    market["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "name": "Gold",
+            "current_price": 2650.5,
+            "unit": "$/oz",
+            "daily_change": None,
+            "change_120d": 3.3,
+            "ytd_change": 8.8,
+            "trend": "up",
+            "source": "websearch_manual",
+        },
+        {
+            "symbol": "CL=F",
+            "name": "WTI Oil",
+            "current_price": 70.25,
+            "unit": "$/bbl",
+            "daily_change": None,
+            "change_120d": -4.4,
+            "ytd_change": 9.9,
+            "trend": "down",
+            "source": "websearch_manual",
+        },
+    ]
+    pring = {
+        "final_stage": "stage 3",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert "| Gold | 2650.50 $/oz | N/A | +3.30% | up |" in text
+    assert "| WTI Oil | 70.25 $/bbl | N/A | -4.40% | down |" in text
+    assert "+8.80%" not in text
+    assert "+9.90%" not in text
