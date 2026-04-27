@@ -14,6 +14,126 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scripts.stage2_5_injector as injector
+from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
+
+
+def test_stage25_outputs_are_accepted_by_unified_quality_state(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260427"
+    market_path = tmp_path / "market_data_stage2.json"
+    manual_path = tmp_path / "websearch_results_manual.json"
+    output_path = tmp_path / "market_data_complete.json"
+    gap_monitor_path = run_dir / "gap_monitor.json"
+
+    market_path.write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "date": "2026-04-27",
+                    "data_completeness": 0.25,
+                    "ai_websearch_enhanced": False,
+                    "missing_items": {
+                        "macro_indicators": [{"key": "industrial"}],
+                    },
+                },
+                "missing_items": ["industrial"],
+                "macro_indicators": {
+                    "industrial": {
+                        "indicator_name": "工业增加值",
+                        "current_value": None,
+                        "previous_value": None,
+                        "change_rate": None,
+                        "unit": "%",
+                        "source": "待人工补数(Stage2 manual_required)",
+                    }
+                },
+                "fund_flow": {
+                    "northbound": {
+                        "type": "northbound",
+                        "recent_5d": None,
+                        "total_120d": None,
+                        "trend": "未知",
+                        "source": "待人工补数(Stage2 manual_required)",
+                    }
+                },
+                "commodities": [
+                    {
+                        "symbol": "GC=F",
+                        "name": "COMEX黄金",
+                        "current_price": None,
+                        "unit": "$/oz",
+                        "source": "待人工补数(Stage2 manual_required)",
+                    }
+                ],
+                "monetary_policy": {},
+                "forex": [],
+                "bonds": [],
+                "stock_indices": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manual_path.write_text(
+        json.dumps(
+            {
+                "macro_indicators": {
+                    "industrial": {
+                        "indicator_name": "工业增加值",
+                        "current_value": 5.2,
+                        "previous_value": 5.0,
+                        "change_rate": 4.0,
+                        "unit": "%",
+                        "source": "websearch_manual https://example.com/industrial",
+                        "source_url": "https://example.com/industrial",
+                    }
+                },
+                "fund_flow": {
+                    "northbound": {
+                        "recent_5d": 85.6,
+                        "total_120d": 1250.0,
+                        "trend": "流入",
+                        "source": "websearch_manual https://example.com/northbound",
+                        "source_url": "https://example.com/northbound",
+                    }
+                },
+                "commodities": [
+                    {
+                        "symbol": "GC=F",
+                        "name": "COMEX黄金",
+                        "current_price": 3450.5,
+                        "unit": "$/oz",
+                        "source": "websearch_manual https://example.com/gold",
+                        "source_url": "https://example.com/gold",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    injector.inject_websearch_data(
+        market_path,
+        manual_path,
+        output_path,
+        backfill_trend=False,
+        gap_monitor_path=gap_monitor_path,
+        disable_trend_history_write=True,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    state = build_pipeline_quality_state(output)
+    gap_monitor = json.loads(gap_monitor_path.read_text(encoding="utf-8"))
+
+    assert state["quality_blockers"] == []
+    assert state["manual_required"] == []
+    assert gap_monitor["manual_required"] == []
+    assert gap_monitor.get("pending_tasks") in (None, [])
+    assert output["metadata"]["ai_websearch_enhanced"] is True
 
 
 def test_stage25_replay_normalizes_legacy_monetary_key_and_disables_trend_write(
