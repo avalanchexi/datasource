@@ -36,6 +36,9 @@ def build_pipeline_quality_state(
     warnings: List[Dict[str, Any]] = []
     estimated_blockers: List[str] = []
     estimated_blocker_reasons: Dict[str, List[str]] = {}
+    stale_redlist: List[Dict[str, str]] = []
+    critical_stale_keys = {str(item).lower() for item in rules.get("critical_stale_keys", [])}
+    block_on_stale = bool(rules.get("block_on_stale", True))
 
     def add_issue(category: str, key: str, reason: str, *, details: Any = None) -> Dict[str, Any]:
         issue = {"category": category, "key": key, "reason": reason}
@@ -55,8 +58,17 @@ def build_pipeline_quality_state(
         has_real_value = _has_real_value(value)
         has_any_real_value = _entry_has_any_real_value(category, entry)
 
+        if _is_primary_value_missing(category, entry):
+            add_issue(category, key, "primary_value_missing")
+
         if has_real_value and _is_compare_missing(category, entry):
             add_issue(category, key, "missing_compare_values")
+
+        if block_on_stale and entry.get("is_stale") is True and key.lower() in critical_stale_keys:
+            add_issue(category, key, "critical_stale")
+            stale_item = {"category": category, "key": key}
+            if stale_item not in stale_redlist:
+                stale_redlist.append(stale_item)
 
         if has_any_real_value and _needs_source_url(entry):
             issue = add_issue(category, key, "missing_source_url")
@@ -78,6 +90,7 @@ def build_pipeline_quality_state(
             for issue in _commodity_window_issues(key, entry):
                 if issue not in window_metric_issues:
                     window_metric_issues.append(issue)
+                add_issue(issue["category"], issue["key"], issue["reason"])
 
     for key, entry in _iter_fund_flow(payload.get("fund_flow")):
         for field in ("recent_5d", "total_120d"):
@@ -96,6 +109,7 @@ def build_pipeline_quality_state(
             "quality_blockers": quality_blockers,
             "estimated_blockers": estimated_blockers,
             "estimated_blocker_reasons": estimated_blocker_reasons,
+            "stale_redlist": stale_redlist,
             "allow_estimated": allow_estimated,
         },
         "gap_monitor_view": {
@@ -156,7 +170,7 @@ def _entry_value(category: str, entry: Dict[str, Any]) -> Any:
         "bonds": ("current_yield", "current_value", "yield"),
         "forex": ("current_rate", "current_value"),
         "commodities": ("current_price", "current_value"),
-        "stock_indices": ("current_value", "close", "price"),
+        "stock_indices": ("current_price", "current_value", "close", "price"),
         "fund_flow": ("recent_5d", "total_120d", "current_value"),
     }
     for field in fields_by_category.get(category, ("current_value",)):
@@ -167,6 +181,12 @@ def _entry_value(category: str, entry: Dict[str, Any]) -> Any:
 
 def _has_real_value(value: Any) -> bool:
     return not is_stage2_number_placeholder(value) and not is_legacy_713_placeholder(value)
+
+
+def _is_primary_value_missing(category: str, entry: Dict[str, Any]) -> bool:
+    if category == "fund_flow":
+        return False
+    return not _has_real_value(_entry_value(category, entry))
 
 
 def _entry_has_any_real_value(category: str, entry: Dict[str, Any]) -> bool:

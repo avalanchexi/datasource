@@ -113,6 +113,9 @@ def test_pipeline_quality_state_flags_commodity_window_mismatch():
     reasons = {row["reason"] for row in state["window_metric_issues"]}
     assert "daily_change_from_change_5d" in reasons
     assert "ytd_change_from_change_120d" in reasons
+    assert {"category": "commodities", "key": "GC=F", "reason": "daily_change_from_change_5d"} in state["quality_blockers"]
+    assert {"category": "commodities", "key": "GC=F", "reason": "ytd_change_from_change_120d"} in state["quality_blockers"]
+    assert state["policy_evaluation"]["block_stage3"] is True
 
 
 def test_pipeline_quality_state_requires_source_url_when_any_fund_flow_value_is_real():
@@ -159,3 +162,68 @@ def test_pipeline_quality_state_flags_fund_flow_window_missing_for_missing_or_ze
     assert {"key": "southbound", "field": "total_120d"} in [
         {"key": row["key"], "field": row["details"]["field"]} for row in fund_flow_blockers
     ]
+
+
+def test_pipeline_quality_state_blocks_missing_zero_and_placeholder_primary_values():
+    payload = _base_payload()
+    payload["macro_indicators"]["industrial"]["current_value"] = None
+    payload["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "current_price": None,
+            "source_url": "https://example.com/gold",
+        }
+    ]
+    payload["forex"] = [
+        {
+            "pair": "USDCNY",
+            "current_rate": 7.13,
+            "source_url": "https://example.com/usdcny",
+        }
+    ]
+    payload["stock_indices"] = [
+        {
+            "symbol": "000001.SH",
+            "current_price": 0,
+            "source_url": "https://example.com/sh",
+        }
+    ]
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    assert {"category": "macro_indicators", "key": "industrial", "reason": "primary_value_missing"} in state["quality_blockers"]
+    assert {"category": "commodities", "key": "GC=F", "reason": "primary_value_missing"} in state["quality_blockers"]
+    assert {"category": "forex", "key": "USDCNY", "reason": "primary_value_missing"} in state["quality_blockers"]
+    assert {"category": "stock_indices", "key": "000001.SH", "reason": "primary_value_missing"} in state["quality_blockers"]
+    assert state["missing_items"]["macro_indicators"][0]["key"] == "industrial"
+    assert "industrial" in state["gap_monitor_view"]["manual_required"]
+    assert state["policy_evaluation"]["block_stage3"] is True
+
+
+def test_pipeline_quality_state_blocks_critical_stale_items_from_policy_rules():
+    payload = _base_payload()
+    payload["macro_indicators"]["cpi"] = {
+        "current_value": 1.2,
+        "previous_value": 1.0,
+        "change_rate": 20.0,
+        "is_stale": True,
+        "source_url": "https://example.com/cpi",
+    }
+    payload["monetary_policy"]["m2"] = {
+        "current_value": 7.1,
+        "change_from_120d": 0.2,
+        "is_stale": True,
+        "source_url": "https://example.com/m2",
+    }
+
+    state = build_pipeline_quality_state(
+        payload,
+        policy_rules={"block_on_stale": True, "critical_stale_keys": ["cpi", "m2", "tsf"]},
+        allow_estimated=False,
+    )
+
+    assert {"category": "macro_indicators", "key": "cpi", "reason": "critical_stale"} in state["quality_blockers"]
+    assert {"category": "monetary_policy", "key": "m2", "reason": "critical_stale"} in state["quality_blockers"]
+    assert {"category": "macro_indicators", "key": "cpi"} in state["policy_evaluation"]["stale_redlist"]
+    assert {"category": "monetary_policy", "key": "m2"} in state["policy_evaluation"]["stale_redlist"]
+    assert state["policy_evaluation"]["block_stage3"] is True
