@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 DEFAULT_RULES = {
     "extract_422_threshold": 3,
@@ -16,6 +18,22 @@ DEFAULT_RULES = {
     "block_on_stale": True,
     "critical_stale_keys": ["cpi", "ppi", "pmi", "m1", "m2", "tsf"],
     "min_trading_days": 100,
+    "estimated_allowlist_keys": ["CN10Y_CDB", "bdi"],
+    "bdi_estimated_allow_conditions": {
+        "trusted_domains": [
+            "balticexchange.com",
+            "tradingeconomics.com",
+            "investing.com",
+            "eastmoney.com",
+        ],
+        "max_age_days": 2,
+        "value_range": [200.0, 10000.0],
+        "unit_keywords": ["点", "point", "points"],
+    },
+    "non_blocking_warning": {
+        "gc_f_risk_domains": ["guba.eastmoney.com"],
+        "gc_f_anomaly_threshold_pct": 8.0,
+    },
 }
 
 
@@ -37,6 +55,13 @@ def _simple_yaml_load(path: Path) -> Dict[str, Any]:
                 data[key] = []
                 current_key = key
             else:
+                if value.startswith("{") or value.startswith("["):
+                    try:
+                        data[key] = json.loads(value)
+                        current_key = None
+                        continue
+                    except Exception:
+                        pass
                 # cast int if possible
                 try:
                     data[key] = int(value)
@@ -63,6 +88,145 @@ def load_policy_rules(path: Optional[Path] = None) -> Dict[str, Any]:
     overrides = _simple_yaml_load(path)
     rules.update(overrides)
     return rules
+
+
+def get_estimated_allowlist_keys(rules: Optional[Dict[str, Any]] = None) -> List[str]:
+    resolved = rules or load_policy_rules()
+    raw = resolved.get("estimated_allowlist_keys") or []
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def get_bdi_estimated_allow_conditions(rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    resolved = rules or load_policy_rules()
+    base = dict(DEFAULT_RULES.get("bdi_estimated_allow_conditions", {}))
+    raw = resolved.get("bdi_estimated_allow_conditions") or {}
+    if isinstance(raw, dict):
+        base.update(raw)
+    return base
+
+
+def get_non_blocking_warning_rules(rules: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    resolved = rules or load_policy_rules()
+    base = dict(DEFAULT_RULES.get("non_blocking_warning", {}))
+    raw = resolved.get("non_blocking_warning") or {}
+    if isinstance(raw, dict):
+        base.update(raw)
+    return base
+
+
+def _normalize_key(value: Optional[str]) -> str:
+    return str(value or "").strip().lower()
+
+
+def _extract_domain(url_or_text: str) -> str:
+    try:
+        return (urlparse(url_or_text).netloc or "").lower()
+    except Exception:
+        return ""
+
+
+def _extract_domain_candidates(entry: Dict[str, Any]) -> List[str]:
+    candidates: List[str] = []
+    for field in ("source_url", "url"):
+        value = entry.get(field)
+        if isinstance(value, str) and value.strip():
+            candidates.append(value.strip())
+    for field in ("source", "note"):
+        value = entry.get(field)
+        if not isinstance(value, str) or "http" not in value:
+            continue
+        candidates.extend(re.findall(r"https?://[^\s|;，,]+", value))
+    return candidates
+
+
+def _parse_date(value: Any) -> Optional[datetime]:
+    if value in (None, "", "N/A"):
+        return None
+    text = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d", "%Y-%m", "%Y/%m"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            if fmt in ("%Y-%m", "%Y/%m"):
+                dt = dt.replace(day=1)
+            return dt
+        except Exception:
+            continue
+    m = re.search(r"(20\d{2})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?", text)
+    if not m:
+        return None
+    year = int(m.group(1))
+    month = int(m.group(2))
+    day = int(m.group(3) or 1)
+    try:
+        return datetime(year, month, day)
+    except Exception:
+        return None
+
+
+def check_bdi_estimated_allow(entry: Dict[str, Any], rules: Optional[Dict[str, Any]] = None) -> Tuple[bool, List[str]]:
+    cfg = get_bdi_estimated_allow_conditions(rules)
+    reasons: List[str] = []
+
+    value = entry.get("current_value")
+    try:
+        numeric_value = float(value)
+    except Exception:
+        numeric_value = None
+    if numeric_value is None:
+        reasons.append("bdi_value_missing")
+    else:
+        bounds = cfg.get("value_range") or [200.0, 10000.0]
+        if isinstance(bounds, list) and len(bounds) == 2:
+            low, high = float(bounds[0]), float(bounds[1])
+            if numeric_value < low or numeric_value > high:
+                reasons.append(f"bdi_value_out_of_range:{numeric_value}")
+
+    unit = str(entry.get("unit") or "")
+    unit_keywords = cfg.get("unit_keywords") or ["点", "point", "points"]
+    if not any(str(marker).lower() in unit.lower() for marker in unit_keywords):
+        reasons.append(f"bdi_unit_mismatch:{unit}")
+
+    trusted_domains = [str(d).lower() for d in (cfg.get("trusted_domains") or []) if str(d).strip()]
+    domains = [_extract_domain(item) for item in _extract_domain_candidates(entry)]
+    domains = [d for d in domains if d]
+    if trusted_domains:
+        if not any(any(domain.endswith(td) for td in trusted_domains) for domain in domains):
+            reasons.append("bdi_untrusted_domain")
+    else:
+        reasons.append("bdi_trusted_domains_empty")
+
+    max_age_days = int(cfg.get("max_age_days") or 2)
+    dt = _parse_date(entry.get("as_of_date") or entry.get("date") or entry.get("report_period"))
+    if dt is None:
+        reasons.append("bdi_date_missing")
+    else:
+        age = (datetime.now() - dt).days
+        if age > max_age_days:
+            reasons.append(f"bdi_date_stale:{age}d")
+
+    return len(reasons) == 0, reasons
+
+
+def is_estimated_allowlisted(
+    category: str,
+    key: str,
+    entry: Optional[Dict[str, Any]] = None,
+    *,
+    rules: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, List[str]]:
+    allowlist = {_normalize_key(item) for item in get_estimated_allowlist_keys(rules)}
+    key_norm = _normalize_key(key)
+    if key_norm not in allowlist:
+        return False, ["not_in_allowlist"]
+
+    if key_norm == "bdi":
+        if not isinstance(entry, dict):
+            return False, ["bdi_entry_missing"]
+        ok, reasons = check_bdi_estimated_allow(entry, rules)
+        return ok, reasons
+    return True, []
 
 
 def evaluate_policy(

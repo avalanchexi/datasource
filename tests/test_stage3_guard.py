@@ -7,6 +7,7 @@ Stage3 前置校验单元测试：
 """
 
 import pytest
+from datetime import datetime
 from pathlib import Path
 import asyncio
 import json
@@ -41,7 +42,7 @@ def test_require_data_completeness_fail_on_low_score():
         s3._require_data_completeness(payload, 0.8)
 
 
-def test_require_data_completeness_fail_on_estimated():
+def test_require_data_completeness_allows_cn10y_cdb_estimated():
     payload = {
         "metadata": {"data_completeness": 0.9},
         "missing_items": [],
@@ -49,9 +50,58 @@ def test_require_data_completeness_fail_on_estimated():
             {"symbol": "CN10Y_CDB", "current_yield": 1.97, "is_estimated": True},
         ],
     }
+    s3._require_data_completeness(payload, 0.8, allow_estimated=False)
+
+
+def test_require_data_completeness_fail_on_non_allowlisted_estimated():
+    payload = {
+        "metadata": {"data_completeness": 0.9},
+        "missing_items": [],
+        "bonds": [
+            {"symbol": "US10Y", "current_yield": 4.18, "is_estimated": True},
+        ],
+    }
     with pytest.raises(RuntimeError):
         s3._require_data_completeness(payload, 0.8, allow_estimated=False)
 
+
+def test_require_data_completeness_allows_bdi_when_trusted():
+    today = datetime.now().strftime("%Y-%m-%d")
+    payload = {
+        "metadata": {"data_completeness": 0.9},
+        "missing_items": [],
+        "macro_indicators": {
+            "bdi": {
+                "current_value": 2233.0,
+                "previous_value": 2190.0,
+                "change_rate": 1.96,
+                "unit": "points",
+                "date": today,
+                "source_url": "https://www.tradingeconomics.com/commodity/baltic",
+                "is_estimated": True,
+            }
+        },
+    }
+    s3._require_data_completeness(payload, 0.8, allow_estimated=False)
+
+
+def test_require_data_completeness_blocks_bdi_when_untrusted():
+    today = datetime.now().strftime("%Y-%m-%d")
+    payload = {
+        "metadata": {"data_completeness": 0.9},
+        "missing_items": [],
+        "macro_indicators": {
+            "bdi": {
+                "current_value": 2233.0,
+                "unit": "points",
+                "date": today,
+                "source_url": "https://example.com/bdi",
+                "is_estimated": True,
+            }
+        },
+    }
+    with pytest.raises(RuntimeError):
+        s3._require_data_completeness(payload, 0.8, allow_estimated=False)
 
 def test_require_data_completeness_fail_on_missing_compare_values():
     payload = {
@@ -93,23 +143,21 @@ def test_require_data_completeness_fail_on_stale_critical_items():
 
 
 def test_resolve_gap_monitor_prefers_dated_file(tmp_path: Path, monkeypatch):
-    reports = tmp_path / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    dated = reports / "gap_monitor_20260209.json"
-    explicit = reports / "custom_gap.json"
+    run_dir = tmp_path / "data" / "runs" / "20260209"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    dated = run_dir / "gap_monitor.json"
+    explicit = tmp_path / "custom_gap.json"
     dated.write_text('{"manual_required": []}', encoding="utf-8")
     explicit.write_text('{"manual_required": ["USDCNY"]}', encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
     payload = {"metadata": {"date": "2026-02-09"}}
     resolved = s3._resolve_gap_monitor_path(payload, explicit_gap_path=explicit)
-    assert resolved == Path("reports/gap_monitor_20260209.json")
+    assert resolved == Path("data/runs/20260209/gap_monitor.json")
 
 
 def test_resolve_gap_monitor_uses_explicit_when_dated_missing(tmp_path: Path, monkeypatch):
-    reports = tmp_path / "reports"
-    reports.mkdir(parents=True, exist_ok=True)
-    explicit = reports / "custom_gap.json"
+    explicit = tmp_path / "custom_gap.json"
     explicit.write_text('{"manual_required": []}', encoding="utf-8")
 
     monkeypatch.chdir(tmp_path)
@@ -127,13 +175,13 @@ def test_run_analysis_reports_all_blockers_once(tmp_path: Path, monkeypatch):
         },
         "missing_items": ["cpi"],
     }
-    reports_dir = tmp_path / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    (reports_dir / "policy_evaluation_20260209.json").write_text(
+    run_dir = tmp_path / "data" / "runs" / "20260209"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "policy_evaluation.json").write_text(
         json.dumps({"block_stage3": True, "redlist": ["mlf"]}, ensure_ascii=False),
         encoding="utf-8",
     )
-    (reports_dir / "gap_monitor_20260209.json").write_text(
+    (run_dir / "gap_monitor.json").write_text(
         json.dumps({"manual_required": ["USDCNY"]}, ensure_ascii=False),
         encoding="utf-8",
     )

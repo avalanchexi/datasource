@@ -10,8 +10,8 @@
 PYTHONPATH=./src \
 TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
 python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/20251203_market_data.json \
-  --output data/20251203_market_data_stage2_new.json \
+  --market-data data/runs/20251203/market_data.json \
+  --output data/runs/20251203/market_data_stage2.json \
   --execute-search \
   --fund-flow-backend tavily \
   --extraction-backend regex \
@@ -19,10 +19,11 @@ python3 scripts/stage2_unified_enhancer.py \
   --deepseek-timeout 8 \
   --llm-hard-timeout 10 \
   --deepseek-max-concurrency 1 \
-  --log-output logs/stage2_unified_log_20251203_new.json \
-  --gap-monitor reports/gap_monitor_20251203_new.json \
-  --websearch-results reports/websearch_results_20251203_new.json \
-  --task-log logs/stage_task_log_new.jsonl
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --log-output logs/runs/20251203/stage2_unified_log.json \
+  --gap-monitor data/runs/20251203/gap_monitor.json \
+  --websearch-results data/runs/20251203/websearch_results_auto.json \
+  --task-log logs/runs/20251203/stage_task_log.jsonl
 ```
   - 速度优先：保持 `--extraction-backend regex --disable-extract`，约 30–60 秒。
   - 精度优先：改为 `--extraction-backend deepseek --deepseek-model deepseek-chat --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`（预计 3–5 分钟）。
@@ -43,6 +44,7 @@ python3 scripts/stage2_unified_enhancer.py \
 - score_filtered_drop、domain_filtered_drop、extract_calls、tavily_extract_calls、tavily_extract_422_count
 - timeout_count、retry_count、cache_hit_rate、avg_elapsed_ms、p50_elapsed_ms、p95_elapsed_ms
 - success_by_category / total_by_category
+- 增量命中率：task_search_success、task_search_failed、task_skipped_existing、search_success_rate_incremental
 
 ## 兼容提醒
 - 无 MCP 跳过逻辑；资金流统一 Tavily，零值且无方向直接标人工。

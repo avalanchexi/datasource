@@ -15,6 +15,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from datasource.utils.run_paths import build_run_paths
+
 
 def _parse_date(date_str: Optional[str]) -> Tuple[str, str]:
     if not date_str:
@@ -123,15 +125,17 @@ def main() -> None:
     args = parser.parse_args()
 
     date_ymd, date_compact = _parse_date(args.date)
+    run_paths = build_run_paths(date_ymd)
 
-    stage1_path = Path("data") / f"{date_compact}_market_data.json"
-    stage2_path = Path("data") / f"{date_compact}_market_data_stage2.json"
-    complete_path = Path("data") / f"{date_compact}_market_data_complete.json"
-    pring_path = Path("data") / f"{date_compact}_pring_result.json"
-    gap_path = Path("reports") / f"gap_monitor_{date_compact}.json"
-    policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
+    stage1_path = run_paths.market_data
+    stage2_path = run_paths.market_data_stage2
+    complete_path = run_paths.market_data_complete
+    pring_path = run_paths.pring_result
+    gap_path = run_paths.gap_monitor
+    policy_path = run_paths.policy_evaluation
     stage2_log_path = _find_first(
         [
+            run_paths.stage2_log,
             Path("logs") / f"stage2_unified_log_{date_compact}.json",
             Path("logs") / f"stage2_unified_log_{date_ymd}.json",
             Path("logs") / "stage2_unified_log.json",
@@ -206,7 +210,7 @@ def main() -> None:
 
     facts["warnings"] = warnings
 
-    output_path = Path(args.output) if args.output else Path("reports") / f"recap_facts_{date_compact}.json"
+    output_path = Path(args.output) if args.output else run_paths.recap_facts
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8")
 

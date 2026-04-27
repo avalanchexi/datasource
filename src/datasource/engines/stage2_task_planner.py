@@ -10,6 +10,7 @@ Stage2TaskPlanner
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 from datetime import datetime
@@ -18,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from datasource.config.search_profiles import SEARCH_PROFILES
+from datasource.utils.run_paths import build_run_paths_from_reference
 
 PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}
 
@@ -29,7 +31,7 @@ class Stage2TaskPlanner:
         self,
         stage_phase: str = "all",
         search_backend: str = "tavily",
-        task_file: Path = Path("reports/search_tasks_stage2.jsonl"),
+        task_file: Optional[Path] = None,
         fund_flow_backend: str = "tavily",
     ) -> None:
         self.stage_phase = stage_phase
@@ -77,15 +79,76 @@ class Stage2TaskPlanner:
             "report_month": report_month,
             "report_month2": f"{report_month:02d}",
             "report_ym": f"{report_year}{report_month:02d}",
+            "expected_year": report_year,
+            "expected_month": report_month,
+            "expected_month2": f"{report_month:02d}",
+            "expected_ym": f"{report_year}{report_month:02d}",
+            "expected_period_label": f"{report_year}年{report_month}月",
+            "expected_period_range_label": f"{report_year}年1-{report_month}月",
         }
 
-    def _apply_query_templates(self, text: Optional[str]) -> Optional[str]:
-        if not text or not self.query_context:
+    def _context_for_expected_period(self, expected_period: Optional[str]) -> Dict[str, object]:
+        context = dict(self.query_context or {})
+        if not expected_period:
+            return context
+        match = re.search(r"(20\d{2})[-/年]?(\d{1,2})", str(expected_period))
+        if not match:
+            return context
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if not 1 <= month <= 12:
+            return context
+        context.update(
+            {
+                "expected_year": year,
+                "expected_month": month,
+                "expected_month2": f"{month:02d}",
+                "expected_ym": f"{year}{month:02d}",
+                "expected_period_label": f"{year}年{month}月",
+                "expected_period_range_label": f"{year}年1-{month}月",
+                "report_year": year,
+                "report_month": month,
+                "report_month2": f"{month:02d}",
+                "report_ym": f"{year}{month:02d}",
+            }
+        )
+        return context
+
+    def _apply_query_templates(self, text: Optional[str], context: Optional[Dict[str, object]] = None) -> Optional[str]:
+        active_context = context or self.query_context
+        if not text or not active_context:
             return text
         try:
-            return text.format(**self.query_context)
+            return text.format(**active_context)
         except Exception:
             return text
+
+    def _render_query_families(
+        self,
+        families: Optional[List[Dict[str, Any]]],
+        context: Dict[str, object],
+    ) -> List[Dict[str, Any]]:
+        rendered: List[Dict[str, Any]] = []
+        for family in families or []:
+            queries = [self._apply_query_templates(q, context) for q in (family.get("queries") or [])]
+            queries = [q for q in queries if q]
+            if not queries:
+                continue
+            rendered.append({**family, "queries": queries})
+        return rendered
+
+    def _render_field_queries(
+        self,
+        field_queries: Optional[Dict[str, List[str]]],
+        context: Dict[str, object],
+    ) -> Dict[str, List[str]]:
+        rendered: Dict[str, List[str]] = {}
+        for field_name, queries in (field_queries or {}).items():
+            values = [self._apply_query_templates(q, context) for q in (queries or [])]
+            values = [q for q in values if q]
+            if values:
+                rendered[field_name] = values
+        return rendered
 
     @staticmethod
     def _is_placeholder(value: Any) -> bool:
@@ -196,9 +259,19 @@ class Stage2TaskPlanner:
         expected_period: Optional[str] = None,
     ) -> Dict[str, Any]:
         profile = SEARCH_PROFILES.get(indicator_key, {})
-        query = self._apply_query_templates(profile.get("query"))
-        queries = [self._apply_query_templates(q) for q in (profile.get("queries") or [])]
+        task_context = self._context_for_expected_period(expected_period)
+        query = self._apply_query_templates(profile.get("query"), task_context)
+        queries = [self._apply_query_templates(q, task_context) for q in (profile.get("queries") or [])]
         queries = [q for q in queries if q]
+        query_families = self._render_query_families(profile.get("query_families"), task_context)
+        field_queries = self._render_field_queries(profile.get("field_queries"), task_context)
+        expected_period_tokens = [
+            str(task_context.get("expected_period_label") or "").strip(),
+            str(task_context.get("expected_period_range_label") or "").strip(),
+            f"{task_context.get('expected_year')}年{task_context.get('expected_month2')}月",
+            f"{task_context.get('expected_year')}-{task_context.get('expected_month2')}",
+        ]
+        expected_period_tokens = [token for token in expected_period_tokens if token and "None" not in token]
         return {
             "task_id": str(uuid.uuid4()),
             "stage_phase": phase,
@@ -212,9 +285,16 @@ class Stage2TaskPlanner:
             "max_age_days": profile.get("max_age_days"),
             "query": query,
             "queries": queries,
+            "query_families": query_families,
+            "query_candidates_expanded": [q for family in query_families for q in family.get("queries", [])],
+            "field_queries": field_queries,
             "unit": profile.get("unit"),
             "issuer": profile.get("issuer"),
             "issuer_aliases": profile.get("issuer_aliases", []),
+            "required_keywords": profile.get("required_keywords", []),
+            "exclude_keywords": profile.get("exclude_keywords", []),
+            "strict_required_keywords": profile.get("strict_required_keywords", False),
+            "strict_issuer_match": profile.get("strict_issuer_match", False),
             "language": profile.get("language"),
             "topic": profile.get("topic"),
             "max_results": profile.get("max_results"),
@@ -224,14 +304,22 @@ class Stage2TaskPlanner:
             "days": profile.get("days"),
             "low_score_threshold": profile.get("low_score_threshold"),
             "allow_low_score_extract": profile.get("allow_low_score_extract", False),
+            "extract_policy": profile.get("extract_policy", {}),
             "source_hint": source_hint,
             "trigger_reason": trigger_reason,
+            "force_refresh": trigger_reason == "stale_data",
             "expected_period": expected_period,
+            "expected_period_tokens": expected_period_tokens,
             "retry_count": 0,
             "created_at": int(time.time()),
         }
 
     def build_tasks(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        if self.task_file is None:
+            self.task_file = build_run_paths_from_reference(
+                payload=payload,
+                fallback_to_today=True,
+            ).search_tasks_stage2
         self.query_context = self._build_query_context(payload)
         tasks = self._from_missing_items(payload) + self._scan_placeholders(payload) + self._scan_stale_entries(payload)
         # 去重：同一 indicator_key 只保留一条，避免 basic/advanced 双倍调用

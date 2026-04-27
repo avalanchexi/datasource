@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from datasource.utils.policy_rules import load_policy_rules
+from datasource.utils.run_paths import build_run_paths
 
 
 def _parse_date(date_str: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -25,10 +26,10 @@ def _parse_date(date_str: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _find_latest_observability() -> Optional[Path]:
-    logs_dir = Path("logs")
-    if not logs_dir.exists():
+    logs_root = Path("logs") / "runs"
+    if not logs_root.exists():
         return None
-    candidates = sorted(logs_dir.glob("observability_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    candidates = sorted(logs_root.glob("*/observability.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     return candidates[0] if candidates else None
 
 
@@ -49,7 +50,7 @@ def main() -> None:
     args = parser.parse_args()
 
     date_ymd, date_compact = _parse_date(args.date)
-    obs_path = Path("logs") / f"observability_{date_compact}.json" if date_compact else _find_latest_observability()
+    obs_path = build_run_paths(date_ymd).observability if date_ymd else _find_latest_observability()
     if not obs_path or not obs_path.exists():
         print("[ERROR] observability log not found.")
         return

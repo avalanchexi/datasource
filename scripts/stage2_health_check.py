@@ -50,7 +50,7 @@ def main():
     else:
         print("[OK] Env variables present")
 
-    cache_ok = check_path(os.getenv("TAVILY_CACHE_PATH", "reports/tavily_cache.sqlite"))
+    cache_ok = check_path(os.getenv("TAVILY_CACHE_PATH", "data/cache/tavily_cache.sqlite"))
     print(f"[{'OK' if cache_ok else 'FAIL'}] Cache path writable")
 
     tavily_ping = _ping("https://api.tavily.com")

@@ -7,10 +7,12 @@
 
 import json
 import asyncio
+from datetime import datetime
 from pathlib import Path
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
+from datasource.utils.run_paths import build_run_paths
 
 async def run_pring_analysis(input_file, output_file):
     """执行Pring三层框架分析"""
@@ -100,9 +102,9 @@ async def run_pring_analysis(input_file, output_file):
 if __name__ == '__main__':
     import sys
 
-    # 默认路径
-    input_path = Path('data/20251114_market_data_complete_test.json')
-    output_path = Path('data/20251114_pring_result_test.json')
+    defaults = build_run_paths(datetime.now().strftime("%Y-%m-%d"))
+    input_path = defaults.market_data_complete
+    output_path = defaults.pring_result
 
     if len(sys.argv) > 1:
         input_path = Path(sys.argv[1])

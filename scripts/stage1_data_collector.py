@@ -3,7 +3,7 @@
 """
 Stage 1: Market Data Collector (V3.1 解耦架构)
 职责: 收集所有市场数据,输出标准JSON格式
-输出: data/YYYYMMDD_market_data.json
+输出: data/runs/YYYYMMDD/market_data.json
 """
 
 import asyncio
@@ -34,6 +34,7 @@ from datasource.models.market_data_contract import (
     MonetaryPolicyData
 )
 from datasource.utils.trend_history_store import scan_trend_history, write_from_market_data, load_series_values
+from datasource.utils.run_paths import build_run_paths
 
 
 class MarketDataCollector:
@@ -989,6 +990,13 @@ class MarketDataCollector:
             df = data.sort_values("date")
             yield_series = df["yield_rate"] if "yield_rate" in df.columns else df["close"]
             current = float(yield_series.iloc[-1])
+            latest_date_str = None
+            try:
+                latest_dt = pd.to_datetime(df["date"].iloc[-1], errors="coerce")
+                if pd.notna(latest_dt):
+                    latest_date_str = latest_dt.strftime("%Y-%m-%d")
+            except Exception:
+                latest_date_str = None
 
             def _calc_bp(series, window):
                 if len(series) <= window:
@@ -1015,6 +1023,8 @@ class MarketDataCollector:
                 change_120d_bp=change_120d_bp,
                 trend=trend,
                 source=source_label or "TuShare us_tycr",
+                date=latest_date_str,
+                as_of_date=latest_date_str,
                 is_estimated=False
             )
         except Exception as exc:
@@ -2255,7 +2265,7 @@ async def main():
     """主函数"""
     parser = argparse.ArgumentParser(description='Stage 1: 市场数据收集器')
     parser.add_argument('--date', required=True, help='结束日期 (YYYY-MM-DD 或 YYYYMMDD)')
-    parser.add_argument('--output', help='输出JSON文件路径 (默认: data/YYYYMMDD_market_data.json)')
+    parser.add_argument('--output', help='输出JSON文件路径 (默认: data/runs/YYYYMMDD/market_data.json)')
 
     args = parser.parse_args()
 
@@ -2300,14 +2310,6 @@ async def main():
             # 若 TuShare 不可用或无权限，保持用户输入日期
             return target_date
 
-    # 构建输出路径
-    if args.output:
-        output_path = Path(args.output)
-    else:
-        output_dir = Path('data')
-        output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / 'market_data.json'
-
     # 统一日期格式，容忍 YYYYMMDD
     try:
         normalized_date = _normalize_date_str(args.date)
@@ -2322,10 +2324,12 @@ async def main():
     else:
         print(f"[INFO] 使用交易日: {trading_date}")
 
+    run_paths = build_run_paths(trading_date)
+    output_path = Path(args.output) if args.output else run_paths.market_data
+
     # Pre-scan trend_history gaps before Stage1 collection
     try:
-        date_compact = trading_date.replace("-", "")
-        gap_output = Path("reports") / f"trend_history_gap_{date_compact}.json"
+        gap_output = run_paths.trend_history_gap
         gap_output.parent.mkdir(parents=True, exist_ok=True)
         gap_report = scan_trend_history(trading_date)
         with gap_output.open("w", encoding="utf-8") as f:

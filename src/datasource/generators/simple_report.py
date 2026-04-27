@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Optional
 
+from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import load_series_values
 
 try:
@@ -351,8 +352,7 @@ def _write_report_observability(
     latency_ms: float,
     status: str,
 ) -> None:
-    date_compact = report_date.replace("-", "")
-    output_path = Path("logs") / f"observability_{date_compact}.json"
+    output_path = build_run_paths(report_date).observability
     payload: dict = {}
     if output_path.exists():
         try:
@@ -575,9 +575,8 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
 
 
 def _write_quality_gate_logs(report_date: str, issues: list[dict]) -> None:
-    date_compact = report_date.replace("-", "")
-
-    gap_path = Path("reports") / f"gap_monitor_{date_compact}.json"
+    run_paths = build_run_paths(report_date)
+    gap_path = run_paths.gap_monitor
     gap_payload: dict = {}
     if gap_path.exists():
         try:
@@ -596,7 +595,7 @@ def _write_quality_gate_logs(report_date: str, issues: list[dict]) -> None:
     gap_path.parent.mkdir(parents=True, exist_ok=True)
     gap_path.write_text(json.dumps(gap_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    obs_path = Path("logs") / f"observability_{date_compact}.json"
+    obs_path = run_paths.observability
     obs_payload: dict = {}
     if obs_path.exists():
         try:
@@ -795,14 +794,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         bp120_str = _fmt_change_cell(bp120, digits=1, suffix="bp", low_confidence=low_confidence)
         trend = bond.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
-        date_val = bond.get('as_of_date') or bond.get('date') or _extract_date_from_text(str(bond.get('note') or ''))
-        # 债券日期仅展示“报告当日”数据，避免旧日期被误读为当日报价
-        report_day = str(report_date)[:10]
+        date_val = (
+            bond.get('as_of_date')
+            or bond.get('date')
+            or bond.get('report_period')
+            or _extract_date_from_text(str(bond.get('note') or ''))
+        )
         date_str = "N/A"
         if date_val:
-            normalized = _extract_date_from_text(str(date_val)) or str(date_val)[:10]
-            if normalized == report_day:
-                date_str = normalized
+            date_str = _extract_date_from_text(str(date_val)) or str(date_val)[:10]
         elif is_placeholder:
             date_str = NA_TEXT
         source_str = bond.get('source') or "-"
@@ -1068,6 +1068,19 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             f"- **估计值提醒**: 以下指标仍为估计值（is_estimated=True），请谨慎解读：{estimated_text}\n"
         )
 
+    non_blocking_warnings = market_data.get("metadata", {}).get("non_blocking_warnings", [])
+    warning_note = ""
+    if isinstance(non_blocking_warnings, list) and non_blocking_warnings:
+        warning_lines = []
+        for item in non_blocking_warnings:
+            if not isinstance(item, dict):
+                continue
+            msg = str(item.get("message") or "").strip()
+            if not msg:
+                continue
+            warning_lines.append(f"  - {msg}")
+        if warning_lines:
+            warning_note = "- **非阻断告警**:\n" + "\n".join(warning_lines) + "\n"
     report += f"""
 
 ---
@@ -1078,7 +1091,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 - **MCP增强**: WebSearch (债券、商品、宏观、货币、资金流向)
 - **数据完整性**: {completeness:.1%}
 - **分析方法**: {pring_result['metadata'].get('analysis_method', 'Pring三层框架')}
-{estimated_note}
+{estimated_note}{warning_note}
 
 ---
 
@@ -1100,11 +1113,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         print(f"[WARN] 数据质量闸未通过: {len(quality_issues)} 项需补数")
 
 
+    if isinstance(non_blocking_warnings, list) and non_blocking_warnings:
+        print(f"[WARN] 报告包含非阻断告警: {len(non_blocking_warnings)} 项")
+
 def main(argv: list[str] | None = None) -> None:
     argv = argv or sys.argv[1:]
-    market_data_file = Path('data/market_data_complete.json')
-    pring_result_file = Path('data/pring_result.json')
-    output_file = Path('reports/background_scan_120.md')
+    default_paths = build_run_paths(datetime.now().strftime("%Y-%m-%d"))
+    market_data_file = default_paths.market_data_complete
+    pring_result_file = default_paths.pring_result
+    output_file = default_paths.report_markdown
 
     if len(argv) > 0:
         market_data_file = Path(argv[0])

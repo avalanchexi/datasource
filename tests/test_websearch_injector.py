@@ -16,7 +16,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-import inject_websearch_data_test as injector
+import scripts.stage2_5_injector as injector
 
 
 @pytest.mark.parametrize(
@@ -237,6 +237,19 @@ def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
     assert "reason=no_previous_value" in str(entry.get("note") or "")
 
 
+def test_remove_top_missing_on_skip_keeps_stage3_unblocked():
+    market_data = {"missing_items": ["bdi", "cpi"]}
+    entry = {
+        "current_value": 2233.0,
+        "is_estimated": True,
+        "source_url": "https://www.tradingeconomics.com/commodity/baltic",
+    }
+
+    injector._remove_top_missing_on_skip(market_data, "bdi", entry)
+
+    assert market_data["missing_items"] == ["cpi"]
+
+
 def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
     existing = {
         "pair": "USDCNY",
@@ -370,7 +383,7 @@ def test_is_missing_item_filled_requires_compare_and_non_estimated():
         ],
     }
     assert injector._is_missing_item_filled(market_data, "macro_indicators", "industrial") is False
-    assert injector._is_missing_item_filled(market_data, "bonds", "CN10Y_CDB") is False
+    assert injector._is_missing_item_filled(market_data, "bonds", "CN10Y_CDB") is True
 
 
 def test_enforce_quality_blockers_marks_missing_items():
@@ -409,6 +422,80 @@ def test_enforce_quality_blockers_marks_missing_items():
     assert "mlf" in market_data["missing_items"]
 
 
+
+def test_enforce_quality_blockers_marks_etf_window_missing():
+    market_data = {
+        "metadata": {"missing_items": {}},
+        "missing_items": [],
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {
+            "etf": {"recent_5d": None, "total_120d": -250.0, "source": "tavily+deepseek"},
+        },
+    }
+
+    blockers = injector._enforce_quality_blockers(market_data)
+    assert {"category": "fund_flow", "key": "etf", "reason": "fund_flow_window_missing"} in blockers
+    assert "etf" in market_data["missing_items"]
+
+
+def test_collect_gc_non_blocking_warnings_risk_and_anomaly():
+    market_data = {
+        "commodities": [{"symbol": "GC=F", "current_price": 5340.0}],
+        "metadata": {},
+    }
+    websearch_raw = {
+        "results": [
+            {
+                "task": {"indicator_key": "GC=F"},
+                "extraction": {
+                    "value": 4907.5,
+                    "source_url": "https://guba.eastmoney.com/news,GCF,12345.html",
+                },
+            }
+        ]
+    }
+
+    warnings = injector._collect_gc_non_blocking_warnings(market_data, websearch_raw)
+    codes = {item.get("code") for item in warnings}
+    assert "gc_f_source_risk" in codes
+    assert "gc_f_price_anomaly" in codes
+
+
+def test_sync_backfill_issues_to_logs_merges_non_blocking_warnings(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    market_data = {
+        "metadata": {
+            "date": "2026-03-05",
+            "missing_items": {},
+            "trend_backfill_issues": [],
+            "non_blocking_warnings": [
+                {
+                    "code": "gc_f_source_risk",
+                    "key": "GC=F",
+                    "message": "GC=F 来源域名风险: guba.eastmoney.com",
+                }
+            ],
+        },
+        "missing_items": [],
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    injector._sync_backfill_issues_to_logs(market_data)
+    obs = json.loads((tmp_path / "logs" / "runs" / "20260305" / "observability.json").read_text(encoding="utf-8"))
+    warnings = obs.get("non_blocking_warnings", [])
+    assert isinstance(warnings, list) and warnings
+    assert warnings[0].get("code") == "gc_f_source_risk"
 def test_apply_macro_entry_autofills_change_rate_from_previous_value():
     entry = {
         "indicator_name": "CPI同比",

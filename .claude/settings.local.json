@@ -97,7 +97,11 @@
       "Bash([ -n \"$v\" ])",
       "Bash(sqlite3:*)",
       "Bash(for f in data/trend_history/min/series/forex/*.json)",
-      "Bash(git show:*)"
+      "Bash(git show:*)",
+      "Bash(bash:*)",
+      "Bash(fc-list :lang=zh)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": [],
     "ask": []

@@ -62,14 +62,15 @@ cp .env.example .env
 - 速度优先（regex，无 LLM）：
 ```bash
 PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/${DATE_NH}_market_data.json \
-  --output data/${DATE_NH}_market_data_stage2.json \
+  --market-data data/runs/${DATE_NH}/market_data.json \
+  --output data/runs/${DATE_NH}/market_data_stage2.json \
   --execute-search --phase all --fund-flow-backend tavily \
   --extraction-backend regex --disable-extract \
   --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1 \
-  --log-output logs/stage2_unified_log_${DATE_NH}.json \
-  --gap-monitor reports/gap_monitor_${DATE_NH}.json \
-  --websearch-results reports/websearch_results_${DATE_NH}_auto.json
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --log-output logs/runs/${DATE_NH}/stage2_unified_log.json \
+  --gap-monitor data/runs/${DATE_NH}/gap_monitor.json \
+  --websearch-results data/runs/${DATE_NH}/websearch_results_auto.json
 ```
 - 精度模式：改用 `--extraction-backend deepseek --deepseek-model deepseek-chat`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
 - Tavily extract 422/配额：可保留 `--disable-extract` 或调低 `--extract-topk 1`，先 search-only 再 regex 兜底。
@@ -81,21 +82,21 @@ pytest -q
 python tests/test_datasource.py
 ```
 
-运行专项脚本前可按需执行 `python scripts/market_scanner_unified.py` 等工具验证流水线。
+历史专项脚本已迁入 `scripts/legacy/`；当前主路径优先使用 Stage1-4 脚本。
 
 快速测试脚本示例
 
 ```bash
 # Pring 分析快速验证（tests/scripts）
 PYTHONPATH=.:src python tests/scripts/run_pring_analysis_test.py \
-  data/YYYYMMDD_market_data_complete.json \
-  data/YYYYMMDD_pring_result.json
+  data/runs/YYYYMMDD/market_data_complete.json \
+  data/runs/YYYYMMDD/pring_result.json
 
-# 简版报告生成（测试版脚本）
-PYTHONPATH=.:src python tests/scripts/generate_simple_report_test.py \
-  data/YYYYMMDD_market_data_complete.json \
-  data/YYYYMMDD_pring_result.json \
-  reports/YYYYMMDD背景扫描120.md
+# 正式报告生成
+PYTHONPATH=.:src python scripts/stage4_report_generator.py \
+  --market-data data/runs/YYYYMMDD/market_data_complete.json \
+  --pring-result data/runs/YYYYMMDD/pring_result.json \
+  --output reports/YYYY-MM-DD-背景扫描120.md
 ```
 
 
@@ -159,23 +160,23 @@ asyncio.run(get_daily_data())
 # 统一报告生成器 - 集成多数据源的综合报告
 python generate_report_simple.py
 
-# 统一市场扫描器 - 配置化的技术指标分析
-python scripts/market_scanner_unified.py
+# 历史扫描器（已迁入 legacy，如需回溯老流程）
+python scripts/legacy/market_scanner_unified.py
 
 # Stage2 一体化增强（Tavily + DeepSeek 骨架）
-python scripts/stage2_unified_enhancer.py --market-data data/market_data.json --phase all --execute-search \
-  --cache-backend sqlite --cache-path reports/tavily_cache.sqlite
+python scripts/stage2_unified_enhancer.py --market-data data/runs/${DATE_NH}/market_data.json --phase all --execute-search \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite
 
 # 重跑指定缺口（示例）
 PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/market_data.json \
-  --resume-from-task-file reports/search_tasks_stage2.jsonl \
+  --market-data data/runs/${DATE_NH}/market_data.json \
+  --resume-from-task-file data/runs/${DATE_NH}/search_tasks_stage2.jsonl \
   --tasks industrial,bdi \
   --execute-search
 
 # 仅补资金流向（选择 Tavily 后端）
 PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/market_data.json \
+  --market-data data/runs/${DATE_NH}/market_data.json \
   --tasks northbound,southbound,etf \
   --fund-flow-backend tavily \
   --execute-search
@@ -491,7 +492,7 @@ datasource/
 - 提供故障转移和缓存功能
 # 资金流向后端选择（默认 tavily，可选 mcp/hybrid）
 PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/market_data.json \
+  --market-data data/runs/${DATE_NH}/market_data.json \
   --execute-search \
   --fund-flow-backend tavily
 # Datasource Stage2 快速运行（Tavily + DeepSeek）
@@ -506,14 +507,14 @@ PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
 PYTHONPATH=./src \
 TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
 python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/20251203_market_data.json \
-  --output data/20251203_market_data_stage2_new.json \
+  --market-data data/runs/20251203/market_data.json \
+  --output data/runs/20251203/market_data_stage2.json \
   --execute-search \
   --fund-flow-backend tavily \
-  --log-output logs/stage2_unified_log_20251203_new.json \
-  --gap-monitor reports/gap_monitor_20251203_new.json \
-  --websearch-results reports/websearch_results_20251203_new.json \
-  --task-log logs/stage_task_log_new.jsonl
+  --log-output logs/runs/20251203/stage2_unified_log.json \
+  --gap-monitor data/runs/20251203/gap_monitor.json \
+  --websearch-results data/runs/20251203/websearch_results_auto.json \
+  --task-log logs/runs/20251203/stage_task_log.jsonl
 ```
 
 可选：开启队列化抽取以削峰限流
@@ -532,6 +533,7 @@ python3 scripts/stage2_unified_enhancer.py \
 - score_filtered_drop, domain_filtered_drop, extract_calls, tavily_extract_calls
 - timeout_count, retry_count, queue_requeued, queue_dead_letters
 - cache_hit_rate, avg_elapsed_ms, success_by_category / total_by_category
+- 增量命中率请优先看 task_search_success / task_search_failed / task_skipped_existing / search_success_rate_incremental
 
 ## 兼容说明
 - 无 MCP 跳过逻辑，资金流统一 Tavily，零值且无方向直接标人工。

@@ -1,4 +1,11 @@
-from datasource.utils.policy_rules import evaluate_policy
+from datetime import datetime
+
+from datasource.utils.policy_rules import (
+    evaluate_policy,
+    get_estimated_allowlist_keys,
+    get_non_blocking_warning_rules,
+    is_estimated_allowlisted,
+)
 
 
 def test_policy_blocks_on_critical_missing():
@@ -31,3 +38,45 @@ def test_policy_blocks_on_critical_stale():
     result = evaluate_policy(market_payload)
     assert result["block_stage3"] is True
     assert result["stale_redlist"]
+
+
+def test_estimated_allowlist_defaults_include_cn10y_cdb_and_bdi():
+    keys = {item.lower() for item in get_estimated_allowlist_keys()}
+    assert "cn10y_cdb" in keys
+    assert "bdi" in keys
+
+
+def test_bdi_allowlist_requires_trusted_source():
+    today = datetime.now().strftime("%Y-%m-%d")
+    ok, _ = is_estimated_allowlisted(
+        "macro_indicators",
+        "bdi",
+        {
+            "current_value": 2233.0,
+            "unit": "points",
+            "date": today,
+            "source_url": "https://www.tradingeconomics.com/commodity/baltic",
+            "is_estimated": True,
+        },
+    )
+    assert ok is True
+
+    blocked, reasons = is_estimated_allowlisted(
+        "macro_indicators",
+        "bdi",
+        {
+            "current_value": 2233.0,
+            "unit": "points",
+            "date": today,
+            "source_url": "https://example.com/bdi",
+            "is_estimated": True,
+        },
+    )
+    assert blocked is False
+    assert any("untrusted" in reason for reason in reasons)
+
+
+def test_non_blocking_warning_defaults_loaded():
+    warning_cfg = get_non_blocking_warning_rules()
+    assert "gc_f_risk_domains" in warning_cfg
+    assert "gc_f_anomaly_threshold_pct" in warning_cfg

@@ -8,6 +8,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import scan_trend_history
 
 
@@ -26,8 +27,7 @@ def main() -> None:
     if args.output:
         output_path = Path(args.output)
     else:
-        date_compact = date_str.replace("-", "")
-        output_path = Path("reports") / f"trend_history_gap_{date_compact}.json"
+        output_path = build_run_paths(date_str).trend_history_gap
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:

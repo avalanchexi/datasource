@@ -40,7 +40,7 @@ class FakeExtractorTimeout:
 
 
 @pytest.mark.anyio("asyncio")
-async def test_extract_422_triggers_global_disable(tmp_path):
+async def test_extract_422_triggers_indicator_cooldown(tmp_path):
     client = FakeClient422()
     extractor = FakeExtractorTimeout()
     stats = {}
@@ -58,6 +58,17 @@ async def test_extract_422_triggers_global_disable(tmp_path):
             "preferred_domains": [],
         },
         {
+            "task_id": "test-etf-422-repeat",
+            "indicator_key": "etf",
+            "stage_phase": "assets",
+            "search_backend": "tavily",
+            "fund_flow_backend": "tavily",
+            "extraction_backend": "deepseek",
+            "query": "A股 ETF 资金流 申购赎回 近5日 120日",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+        {
             "task_id": "test-northbound-422",
             "indicator_key": "northbound",
             "stage_phase": "assets",
@@ -65,7 +76,7 @@ async def test_extract_422_triggers_global_disable(tmp_path):
             "fund_flow_backend": "tavily",
             "extraction_backend": "deepseek",
             "query": "北向资金 近5日 120日",
-            "created_at": 1700000001,
+            "created_at": 1700000002,
             "preferred_domains": [],
         },
     ]
@@ -96,15 +107,15 @@ async def test_extract_422_triggers_global_disable(tmp_path):
         llm_hard_timeout=10,
     )
 
-    assert len(completed) + len(failures) == 2
+    assert len(completed) + len(failures) == 3
     assert stats.get("tavily_extract_422_count", 0) >= 1
-    assert stats.get("extract_globally_disabled") is True
-    assert stats.get("extract_global_disable_reason") is not None
-    # 第二个任务应走全局禁用后路径，不再触发 client.extract
-    assert client.extract_calls == 1
+    assert stats.get("extract_globally_disabled") is False
+    assert stats.get("extract_cooldown_count", 0) >= 1
+    # 第二个 ETF 任务应走按指标冷却路径；northbound 仍会单独触发 extract
+    assert client.extract_calls == 2
     assert websearch_results
     assert any(
-        result.get("task", {}).get("extract_skipped_reason") == "extract_globally_disabled"
+        result.get("task", {}).get("extract_skipped_reason") == "extract_cooldown"
         for result in websearch_results
     )
 
@@ -180,3 +191,116 @@ async def test_deepseek_timeout_records_error(tmp_path):
 def anyio_backend():
     # 强制使用 asyncio，避免缺少 trio 依赖导致的参数化失败
     return "asyncio"
+
+
+class FakeClientCommodity422:
+    def __init__(self):
+        self.extract_calls = 0
+
+    async def search(self, **kwargs):
+        return {
+            "results": [
+                {
+                    "url": "https://www.cmegroup.com/gold",
+                    "snippet": "COMEX gold futures contract details",
+                    "content": "COMEX gold futures contract details",
+                    "score": 0.92,
+                }
+            ]
+        }
+
+    async def extract(self, **kwargs):
+        self.extract_calls += 1
+        return {"status": 422}
+
+
+class FakeExaClient:
+    def __init__(self):
+        self.calls = 0
+
+    async def search(self, **kwargs):
+        self.calls += 1
+        return {
+            "results": [
+                {
+                    "url": "https://www.investing.com/commodities/gold",
+                    "snippet": "Gold futures quote 3025.6 $/oz",
+                    "content": "Gold futures quote 3025.6 $/oz",
+                    "score": 0.9,
+                }
+            ]
+        }
+
+
+class FakeExtractorCommodity:
+    async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+        text = " ".join(str(s.get("content") or s.get("snippet") or "") for s in snippets)
+        if "3025.6" not in text:
+            return {
+                "value": None,
+                "unit": unit_hint,
+                "source_url": snippets[0].get("url") if snippets else None,
+                "confidence": 0.0,
+                "manual_required": True,
+                "manual_reason": "no_value",
+            }
+        return {
+            "value": 3025.6,
+            "unit": "$/oz",
+            "source_url": "https://www.investing.com/commodities/gold",
+            "confidence": 0.9,
+            "manual_required": False,
+            "manual_reason": None,
+        }
+
+
+@pytest.mark.anyio("asyncio")
+async def test_extract_422_uses_exa_fallback_for_non_fund_flow(tmp_path):
+    stats = {}
+    payload = {"commodities": [{"symbol": "GC=F", "current_price": None, "source": ""}]}
+    task = {
+        "task_id": "test-gold-422",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "preferred_domains": ["cmegroup.com", "investing.com"],
+        "query": "COMEX 黄金期货 最新价格",
+        "unit": "$/oz",
+        "issuer": "COMEX/CME",
+        "issuer_aliases": ["CME", "COMEX"],
+        "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        "required_keywords": ["gold", "黄金", "comex"],
+        "strict_required_keywords": True,
+        "retry_count": 0,
+        "created_at": 0,
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        payload,
+        FakeClientCommodity422(),
+        FakeExaClient(),
+        FakeExtractorCommodity(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        auto_disable_extract_on_422=True,
+        extract_422_threshold=1,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed
+    assert not failures
+    assert stats.get("tavily_extract_422_count", 0) >= 1
+    assert stats.get("exa_fallback_after_extract_422", 0) >= 1
+    assert websearch_results[0]["search_backend"] == "exa"
+    assert websearch_results[0]["result_type"] == "search_success"

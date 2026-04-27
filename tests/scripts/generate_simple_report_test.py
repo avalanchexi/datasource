@@ -7,13 +7,16 @@
 
 import sys
 from pathlib import Path
+from datetime import datetime
 from datasource.generators.simple_report import generate_report
+from datasource.utils.run_paths import build_run_paths
 
 
 def main():
-    market_data_file = Path('data/market_data_complete.json')
-    pring_result_file = Path('data/pring_result.json')
-    output_file = Path('reports/background_scan_120.md')
+    default_paths = build_run_paths(datetime.now().strftime("%Y-%m-%d"))
+    market_data_file = default_paths.market_data_complete
+    pring_result_file = default_paths.pring_result
+    output_file = default_paths.report_markdown
 
     if len(sys.argv) > 1:
         market_data_file = Path(sys.argv[1])

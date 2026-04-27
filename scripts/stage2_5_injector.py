@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-AI WebSearch数据注入脚本 (测试版)
-将websearch_results注入到market_data_enhanced文件中
+AI WebSearch 数据注入脚本。
+
+将 websearch_results 注入到 market_data 文件中，作为 Stage2.5 主入口。
 """
 
 import argparse
@@ -17,7 +18,14 @@ from datasource.models.market_data_contract import FundFlowData
 from datasource.utils.trend_history_store import write_from_market_data, DEFAULT_BASE_DIR, SERIES_WINDOWS
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
 from datasource.utils.quality_metrics import write_quality_metrics
-from datasource.utils.policy_rules import evaluate_policy, write_policy_evaluation
+from datasource.utils.policy_rules import (
+    evaluate_policy,
+    write_policy_evaluation,
+    load_policy_rules,
+    is_estimated_allowlisted,
+    get_non_blocking_warning_rules,
+)
+from datasource.utils.run_paths import build_run_paths_from_reference
 
 FUND_FLOW_KEY_MAP = {
     "etf_flow": "etf",
@@ -89,6 +97,112 @@ INDICATOR_CATEGORY = {
 
 DEFAULT_SOURCE_LABEL = "websearch_manual"
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
+
+_POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _policy_rules() -> Dict[str, Any]:
+    global _POLICY_RULES_CACHE
+    if _POLICY_RULES_CACHE is None:
+        _POLICY_RULES_CACHE = load_policy_rules()
+    return _POLICY_RULES_CACHE
+
+
+def _is_estimated_allowlisted_entry(category: str, key: str, entry: Optional[Dict[str, Any]]) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    allowed, _ = is_estimated_allowlisted(category, key, entry, rules=_policy_rules())
+    return allowed
+
+
+def _extract_domain(value: Optional[str]) -> str:
+    if not value:
+        return ""
+    text = str(value).strip().lower()
+    text = text.replace("https://", "").replace("http://", "")
+    return text.split("/")[0]
+
+
+def _append_non_blocking_warning(market_data: Dict[str, Any], warning: Dict[str, Any]) -> None:
+    metadata = market_data.setdefault("metadata", {})
+    warnings = metadata.setdefault("non_blocking_warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+        metadata["non_blocking_warnings"] = warnings
+    signature = (
+        warning.get("code"),
+        warning.get("key"),
+        warning.get("source_url"),
+        warning.get("message"),
+    )
+    for existing in warnings:
+        if not isinstance(existing, dict):
+            continue
+        if (
+            existing.get("code"),
+            existing.get("key"),
+            existing.get("source_url"),
+            existing.get("message"),
+        ) == signature:
+            return
+    warnings.append(warning)
+
+
+def _collect_gc_non_blocking_warnings(
+    market_data: Dict[str, Any],
+    websearch_raw: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    warning_rules = get_non_blocking_warning_rules(_policy_rules())
+    risk_domains = [str(d).lower() for d in (warning_rules.get("gc_f_risk_domains") or []) if str(d).strip()]
+    anomaly_threshold = float(warning_rules.get("gc_f_anomaly_threshold_pct") or 8.0)
+    warnings: List[Dict[str, Any]] = []
+
+    for item in websearch_raw.get("results", []) if isinstance(websearch_raw, dict) else []:
+        task = item.get("task", {}) if isinstance(item, dict) else {}
+        if task.get("indicator_key") != "GC=F":
+            continue
+        extraction = item.get("extraction", {}) if isinstance(item, dict) else {}
+        source_url = extraction.get("source_url")
+        if not source_url:
+            raw_results = item.get("raw_results") or []
+            if raw_results and isinstance(raw_results[0], dict):
+                source_url = raw_results[0].get("url")
+
+        domain = _extract_domain(source_url)
+        if domain and any(domain.endswith(d) for d in risk_domains):
+            warnings.append(
+                {
+                    "level": "warning",
+                    "code": "gc_f_source_risk",
+                    "key": "GC=F",
+                    "source_url": source_url,
+                    "message": f"GC=F 来源域名风险: {domain}",
+                }
+            )
+
+        value = _coerce_float(extraction.get("value"))
+        if value is None:
+            continue
+        for comm in market_data.get("commodities", []) or []:
+            if not isinstance(comm, dict) or comm.get("symbol") != "GC=F":
+                continue
+            prev_price = _coerce_float(comm.get("current_price"))
+            if prev_price is None or abs(prev_price) < 1e-9:
+                continue
+            pct = (value - prev_price) / abs(prev_price) * 100.0
+            if abs(pct) >= anomaly_threshold:
+                warnings.append(
+                    {
+                        "level": "warning",
+                        "code": "gc_f_price_anomaly",
+                        "key": "GC=F",
+                        "source_url": source_url,
+                        "message": f"GC=F 价格变动 {pct:.2f}% 超过阈值 {anomaly_threshold:.1f}%",
+                    }
+                )
+            break
+
+    return warnings
 
 
 def _derive_date_compact(payload: Dict[str, Any], override: Optional[str] = None) -> str:
@@ -237,6 +351,16 @@ def _remove_top_missing(market_data: Dict[str, Any], key: str) -> None:
     market_data['missing_items'] = filtered
 
 
+def _remove_top_missing_on_skip(
+    market_data: Dict[str, Any],
+    key: str,
+    entry: Optional[Dict[str, Any]],
+) -> None:
+    """已有有效值但跳过注入时，仍清理顶层 missing_items。"""
+    if isinstance(entry, dict) and _has_valid_value(entry.get("current_value")):
+        _remove_top_missing(market_data, key)
+
+
 def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str) -> bool:
     if category in ('macro_indicators', 'monetary_policy'):
         entry = market_data.get(category, {}).get(key)
@@ -246,7 +370,7 @@ def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str
             return False
         if entry.get("is_stale"):
             return False
-        if entry.get('is_estimated'):
+        if entry.get('is_estimated') and not _is_estimated_allowlisted_entry(category, key, entry):
             return False
         if category == 'macro_indicators':
             return entry.get('previous_value') is not None and entry.get('change_rate') is not None
@@ -259,22 +383,30 @@ def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str
     if category == 'commodities':
         for item in market_data.get('commodities', []):
             if item.get('symbol') == key:
-                return _has_valid_value(item.get('current_price')) and not bool(item.get('is_estimated'))
+                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('commodities', key, item):
+                    return False
+                return _has_valid_value(item.get('current_price'))
         return False
     if category == 'forex':
         for item in market_data.get('forex', []):
             if item.get('pair') == key:
-                return _has_valid_value(item.get('current_rate')) and not bool(item.get('is_estimated'))
+                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('forex', key, item):
+                    return False
+                return _has_valid_value(item.get('current_rate'))
         return False
     if category == 'bonds':
         for item in market_data.get('bonds', []):
             if item.get('symbol') == key:
-                return _has_valid_value(item.get('current_yield')) and not bool(item.get('is_estimated'))
+                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('bonds', key, item):
+                    return False
+                return _has_valid_value(item.get('current_yield'))
         return False
     if category == 'stock_indices':
         for item in market_data.get('stock_indices', []):
             if item.get('symbol') == key:
-                return _has_valid_value(item.get('current_price')) and not bool(item.get('is_estimated'))
+                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('stock_indices', key, item):
+                    return False
+                return _has_valid_value(item.get('current_price'))
         return False
     return False
 
@@ -363,7 +495,8 @@ def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str
     """
     严格质量门禁：
     1) 当前值已填但对比值缺失（macro previous/change；monetary 120d change）；
-    2) 当前值为估算值（is_estimated=True）。
+    2) 当前值为估算值（is_estimated=True，白名单除外）；
+    3) ETF 资金流窗口值缺失（recent_5d/total_120d 任一缺失）。
     """
     blockers: List[Dict[str, str]] = []
 
@@ -378,7 +511,7 @@ def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str
         if not isinstance(entry, dict):
             continue
         if _has_valid_value(entry.get("current_value")):
-            if entry.get("is_estimated"):
+            if entry.get("is_estimated") and not _is_estimated_allowlisted_entry("macro_indicators", str(key), entry):
                 _add("macro_indicators", key, "estimated_not_allowed")
             if entry.get("previous_value") is None or entry.get("change_rate") is None:
                 _add("macro_indicators", key, "missing_compare_values")
@@ -387,7 +520,7 @@ def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str
         if not isinstance(entry, dict):
             continue
         if _has_valid_value(entry.get("current_value")):
-            if entry.get("is_estimated"):
+            if entry.get("is_estimated") and not _is_estimated_allowlisted_entry("monetary_policy", str(key), entry):
                 _add("monetary_policy", key, "estimated_not_allowed")
             if entry.get("change_from_120d") is None:
                 _add("monetary_policy", key, "missing_compare_values")
@@ -396,29 +529,57 @@ def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str
         if not isinstance(bond, dict):
             continue
         symbol = bond.get("symbol")
-        if symbol and _has_valid_value(bond.get("current_yield")) and bond.get("is_estimated"):
+        if (
+            symbol
+            and _has_valid_value(bond.get("current_yield"))
+            and bond.get("is_estimated")
+            and not _is_estimated_allowlisted_entry("bonds", str(symbol), bond)
+        ):
             _add("bonds", str(symbol), "estimated_not_allowed")
 
     for fx in market_data.get("forex", []) or []:
         if not isinstance(fx, dict):
             continue
         pair = fx.get("pair")
-        if pair and _has_valid_value(fx.get("current_rate")) and fx.get("is_estimated"):
+        if (
+            pair
+            and _has_valid_value(fx.get("current_rate"))
+            and fx.get("is_estimated")
+            and not _is_estimated_allowlisted_entry("forex", str(pair), fx)
+        ):
             _add("forex", str(pair), "estimated_not_allowed")
 
     for comm in market_data.get("commodities", []) or []:
         if not isinstance(comm, dict):
             continue
         symbol = comm.get("symbol")
-        if symbol and _has_valid_value(comm.get("current_price")) and comm.get("is_estimated"):
+        if (
+            symbol
+            and _has_valid_value(comm.get("current_price"))
+            and comm.get("is_estimated")
+            and not _is_estimated_allowlisted_entry("commodities", str(symbol), comm)
+        ):
             _add("commodities", str(symbol), "estimated_not_allowed")
 
     for idx in market_data.get("stock_indices", []) or []:
         if not isinstance(idx, dict):
             continue
         symbol = idx.get("symbol")
-        if symbol and _has_valid_value(idx.get("current_price")) and idx.get("is_estimated"):
+        if (
+            symbol
+            and _has_valid_value(idx.get("current_price"))
+            and idx.get("is_estimated")
+            and not _is_estimated_allowlisted_entry("stock_indices", str(symbol), idx)
+        ):
             _add("stock_indices", str(symbol), "estimated_not_allowed")
+
+    for flow_key, flow in (market_data.get("fund_flow", {}) or {}).items():
+        if not isinstance(flow, dict):
+            continue
+        if str(flow_key) != "etf":
+            continue
+        if not (_has_valid_value(flow.get("recent_5d")) and _has_valid_value(flow.get("total_120d"))):
+            _add("fund_flow", str(flow_key), "fund_flow_window_missing")
 
     market_data.setdefault("metadata", {})["quality_blockers"] = blockers
     return blockers
@@ -457,7 +618,7 @@ def _normalize_fund_flow_payload(raw_key: str, payload: Dict[str, Any]) -> Dict[
 def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     将 Stage2 Unified 的 websearch_results（results 数组，含 task/extraction）转换为
-    inject_websearch_data_test.py 期望的 schema。
+    stage2_5_injector 期望的 schema。
     """
     if "results" not in raw or not isinstance(raw.get("results"), list):
         return raw
@@ -812,6 +973,12 @@ def inject_websearch_data(
     with open(market_data_path, 'r', encoding='utf-8') as f:
         market_data = json.load(f)
     metadata = market_data.setdefault('metadata', {})
+    run_paths = build_run_paths_from_reference(
+        date=date_override,
+        payload=market_data,
+        path=market_data_path,
+        fallback_to_today=True,
+    )
 
     # 读取WebSearch结果
     print(f"[INFO] 读取WebSearch结果: {websearch_path}")
@@ -826,6 +993,11 @@ def inject_websearch_data(
     websearch_data['commodities'] = _normalize_keyed_list(websearch_data.get('commodities'), 'symbol')
     websearch_data['stock_indices'] = _normalize_keyed_list(websearch_data.get('stock_indices'), 'symbol')
 
+    gc_warnings: List[Dict[str, Any]] = []
+    if is_stage2_results:
+        gc_warnings = _collect_gc_non_blocking_warnings(market_data, websearch_raw)
+        for warning in gc_warnings:
+            _append_non_blocking_warning(market_data, warning)
     is_manual = "manual" in Path(websearch_path).name.lower() and not is_stage2_results
     if is_manual:
         missing_urls = _collect_missing_source_urls(websearch_data)
@@ -861,7 +1033,7 @@ def inject_websearch_data(
         if key not in macro_section:
             # 缺失即创建占位，避免 industrial_sales 等被跳过
             macro_section[key] = _create_macro_placeholder(key, payload, metadata)
-        if _apply_macro_entry(
+        updated = _apply_macro_entry(
             key,
             macro_section[key],
             payload,
@@ -869,11 +1041,14 @@ def inject_websearch_data(
             is_manual=is_manual,
             override_stale=override_stale,
             force_override=force_override,
-        ):
+        )
+        if updated:
             inject_count += 1
             print(f"  [OK] {payload.get('indicator_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'macro_indicators', key)
             _remove_top_missing(market_data, key)
+        else:
+            _remove_top_missing_on_skip(market_data, key, macro_section.get(key))
 
     # 2. 注入货币政策
     print("\n[STEP 2] 注入货币政策数据...")
@@ -882,7 +1057,7 @@ def inject_websearch_data(
         key = MONETARY_KEY_MAP.get(raw_key, raw_key)
         if key not in monetary_section:
             monetary_section[key] = _create_monetary_placeholder(key, payload, metadata)
-        if _apply_monetary_entry(
+        updated = _apply_monetary_entry(
             key,
             monetary_section[key],
             payload,
@@ -890,11 +1065,14 @@ def inject_websearch_data(
             is_manual=is_manual,
             override_stale=override_stale,
             force_override=force_override,
-        ):
+        )
+        if updated:
             inject_count += 1
             print(f"  [OK] {payload.get('policy_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'monetary_policy', key)
             _remove_top_missing(market_data, key)
+        else:
+            _remove_top_missing_on_skip(market_data, key, monetary_section.get(key))
     _cleanup_monetary_aliases(market_data, metadata)
 
     # 3. 注入资金流向（标准化为浮点+统一来源）
@@ -1114,6 +1292,10 @@ def inject_websearch_data(
         for blocker in quality_blockers:
             print(f"    - {blocker.get('category')}.{blocker.get('key')}: {blocker.get('reason')}")
 
+    if gc_warnings:
+        print(f"  [WARN] 非阻断告警: {len(gc_warnings)}")
+        for warning in gc_warnings:
+            print(f"    - {warning.get('code')}: {warning.get('message')}")
     # Final write to trend_history (post Stage2.5)
     try:
         write_count = write_from_market_data(market_data, is_partial=False, source_path=output_path)
@@ -1133,11 +1315,9 @@ def inject_websearch_data(
         except Exception as exc:  # noqa: BLE001
             print(f"  [WARN] trend_history post-write backfill failed: {exc}")
 
-    date_compact = _derive_date_compact(market_data, date_override)
-
     # Refresh quality metrics after manual injection
     try:
-        quality_path = Path("reports") / f"quality_metrics_{date_compact}.json"
+        quality_path = run_paths.quality_metrics
         write_quality_metrics(market_data, quality_path)
         print(f"  - quality_metrics refreshed: {quality_path}")
     except Exception as exc:  # noqa: BLE001
@@ -1145,7 +1325,7 @@ def inject_websearch_data(
 
     # Refresh policy evaluation after manual injection
     try:
-        policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
+        policy_path = run_paths.policy_evaluation
         policy_payload = evaluate_policy(market_data, stage2_summary=None)
         write_policy_evaluation(policy_payload, policy_path)
         print(f"  - policy_evaluation refreshed: {policy_path}")
@@ -2552,8 +2732,12 @@ def _rewrite_gap_monitor_after_injection(
     extra_issues: Optional[List[Dict[str, Any]]] = None,
 ) -> Path:
     """按当前 market_data 状态重写 gap_monitor，避免遗留旧 manual_required。"""
-    date_compact = _derive_date_compact(market_data, date_override)
-    target_path = gap_monitor_path or (Path("reports") / f"gap_monitor_{date_compact}.json")
+    run_paths = build_run_paths_from_reference(
+        date=date_override,
+        payload=market_data,
+        fallback_to_today=True,
+    )
+    target_path = gap_monitor_path or run_paths.gap_monitor
 
     existing_payload: Dict[str, Any] = {}
     if target_path.exists():
@@ -2584,10 +2768,15 @@ def _sync_backfill_issues_to_logs(
     date_override: Optional[str] = None,
     gap_monitor_path: Optional[Path] = None,
 ) -> None:
-    """将趋势派生失败原因写入 observability，并按当前状态重写当日 gap_monitor。"""
+    """将趋势派生失败原因和非阻断告警写入 observability，并按当前状态重写当日 gap_monitor。"""
     metadata = market_data.get("metadata", {}) if isinstance(market_data, dict) else {}
     issues = metadata.get("trend_backfill_issues") or []
-    date_compact = _derive_date_compact(market_data, date_override)
+    non_blocking_warnings = metadata.get("non_blocking_warnings") or []
+    run_paths = build_run_paths_from_reference(
+        date=date_override,
+        payload=market_data,
+        fallback_to_today=True,
+    )
 
     _rewrite_gap_monitor_after_injection(
         market_data,
@@ -2596,10 +2785,10 @@ def _sync_backfill_issues_to_logs(
         extra_issues=issues,
     )
 
-    if not issues:
+    if not issues and not non_blocking_warnings:
         return
 
-    observability_path = Path("logs") / f"observability_{date_compact}.json"
+    observability_path = run_paths.observability
     payload: Dict[str, Any] = {}
     if observability_path.exists():
         try:
@@ -2608,9 +2797,25 @@ def _sync_backfill_issues_to_logs(
             payload = {}
     payload.setdefault("generated_at", datetime.now().isoformat())
     payload["data_quality_issues"] = _merge_quality_issues(payload.get("data_quality_issues", []), issues)
+
+    existing_warnings = payload.get("non_blocking_warnings", [])
+    if not isinstance(existing_warnings, list):
+        existing_warnings = []
+    merged_warnings: List[Dict[str, Any]] = []
+    seen = set()
+    for row in list(existing_warnings) + list(non_blocking_warnings or []):
+        if not isinstance(row, dict):
+            continue
+        sig = (row.get("code"), row.get("key"), row.get("source_url"), row.get("message"))
+        if sig in seen:
+            continue
+        seen.add(sig)
+        merged_warnings.append(row)
+    if merged_warnings:
+        payload["non_blocking_warnings"] = merged_warnings
+
     observability_path.parent.mkdir(parents=True, exist_ok=True)
     observability_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
 
 def _merge_stock_index_entry(orig: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
     """更新已存在的股票指数条目，缺失字段用原值或默认值兜底。"""
@@ -2873,11 +3078,11 @@ def _build_forex_entry(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 def _default_cli_paths() -> Tuple[Path, Path, Path]:
-    data_dir = Path(__file__).parent / "data"
+    run_paths = build_run_paths_from_reference(fallback_to_today=True)
     return (
-        data_dir / "20251114_market_data_enhanced_test.json",
-        data_dir / "websearch_results_20251114_test.json",
-        data_dir / "20251114_market_data_complete_test.json",
+        run_paths.market_data_stage2,
+        run_paths.websearch_results_manual,
+        run_paths.market_data_complete,
     )
 
 
@@ -2913,7 +3118,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gap-monitor-path",
         default=None,
-        help="指定重写的 gap_monitor 路径；不传则默认 reports/gap_monitor_<DATE>.json",
+        help="指定重写的 gap_monitor 路径；不传则默认 data/runs/YYYYMMDD/gap_monitor.json",
     )
     parser.add_argument(
         "--backfill-trend",

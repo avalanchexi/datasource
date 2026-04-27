@@ -37,11 +37,12 @@ def build_observability_log(
         base = index.get(key, {"indicator_key": key})
         base.update(
             {
-                "status": "success",
+                "status": "skipped_existing" if item.get("result_type") == "skipped_existing" else "success",
                 "elapsed_ms": item.get("elapsed_ms"),
                 "search_backend": item.get("search_backend"),
                 "extraction_backend": item.get("extraction_backend"),
                 "cache_hit": item.get("cache_hit"),
+                "result_type": item.get("result_type"),
             }
         )
         for field in (
@@ -84,6 +85,7 @@ def build_observability_log(
                 "error": item.get("error") or item.get("llm_error"),
                 "failure_type": failure_type,
                 "manual_required": item.get("manual_required", False),
+                "result_type": item.get("result_type"),
             }
         )
         for field in (

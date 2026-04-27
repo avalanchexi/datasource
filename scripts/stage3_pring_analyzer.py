@@ -20,7 +20,8 @@ from typing import Any, Dict, List, Optional
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
-from datasource.utils.policy_rules import load_policy_rules
+from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
+from datasource.utils.run_paths import build_run_paths_from_reference
 
 MIN_COMPLETENESS_DEFAULT = 0.80
 
@@ -60,31 +61,68 @@ def _flatten_missing_items(market_payload: Dict[str, Any]) -> List[str]:
     return unique
 
 
-def _collect_estimated_items(market_payload: Dict[str, Any]) -> List[str]:
-    """收集当前值存在但被标记为 is_estimated=True 的指标。"""
-    estimated: List[str] = []
+def _iter_estimated_entries(market_payload: Dict[str, Any]) -> List[tuple[str, str, Dict[str, Any]]]:
+    rows: List[tuple[str, str, Dict[str, Any]]] = []
 
     for key, entry in (market_payload.get("macro_indicators") or {}).items():
         if isinstance(entry, dict) and entry.get("current_value") not in (None, "N/A") and entry.get("is_estimated"):
-            estimated.append(f"macro_indicators.{key}")
+            rows.append(("macro_indicators", str(key), entry))
     for key, entry in (market_payload.get("monetary_policy") or {}).items():
         if isinstance(entry, dict) and entry.get("current_value") not in (None, "N/A") and entry.get("is_estimated"):
-            estimated.append(f"monetary_policy.{key}")
+            rows.append(("monetary_policy", str(key), entry))
     for item in market_payload.get("bonds", []) or []:
         if isinstance(item, dict) and item.get("current_yield") not in (None, 0, "N/A") and item.get("is_estimated"):
-            estimated.append(f"bonds.{item.get('symbol')}")
+            rows.append(("bonds", str(item.get("symbol")), item))
     for item in market_payload.get("forex", []) or []:
         if isinstance(item, dict) and item.get("current_rate") not in (None, 0, "N/A") and item.get("is_estimated"):
-            estimated.append(f"forex.{item.get('pair')}")
+            rows.append(("forex", str(item.get("pair")), item))
     for item in market_payload.get("commodities", []) or []:
         if isinstance(item, dict) and item.get("current_price") not in (None, 0, "N/A") and item.get("is_estimated"):
-            estimated.append(f"commodities.{item.get('symbol')}")
+            rows.append(("commodities", str(item.get("symbol")), item))
     for item in market_payload.get("stock_indices", []) or []:
         if isinstance(item, dict) and item.get("current_price") not in (None, 0, "N/A") and item.get("is_estimated"):
-            estimated.append(f"stock_indices.{item.get('symbol')}")
+            rows.append(("stock_indices", str(item.get("symbol")), item))
 
-    return estimated
+    return rows
 
+
+def _collect_estimated_items(
+    market_payload: Dict[str, Any],
+    *,
+    policy_rules: Optional[Dict[str, Any]] = None,
+) -> Dict[str, List[str]]:
+    """收集估算值并区分：白名单放行项 / 仍需阻断项。"""
+    blocked: List[str] = []
+    allowlisted: List[str] = []
+
+    for category, key, entry in _iter_estimated_entries(market_payload):
+        label = f"{category}.{key}"
+        allowed, reasons = is_estimated_allowlisted(category, key, entry, rules=policy_rules)
+        if allowed:
+            allowlisted.append(label)
+            continue
+        if reasons:
+            blocked.append(f"{label} ({'|'.join(reasons)})")
+        else:
+            blocked.append(label)
+
+    return {"blocked": blocked, "allowlisted": allowlisted}
+
+
+def _append_non_blocking_warning(market_payload: Dict[str, Any], warning: Dict[str, Any]) -> None:
+    metadata = market_payload.setdefault("metadata", {})
+    warnings = metadata.setdefault("non_blocking_warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+        metadata["non_blocking_warnings"] = warnings
+
+    signature = (warning.get("code"), warning.get("key"), warning.get("message"))
+    for existing in warnings:
+        if not isinstance(existing, dict):
+            continue
+        if (existing.get("code"), existing.get("key"), existing.get("message")) == signature:
+            return
+    warnings.append(warning)
 
 def _collect_compare_gaps(market_payload: Dict[str, Any]) -> List[str]:
     """收集“当前值存在但对比值未补齐”的指标。"""
@@ -137,20 +175,45 @@ def _require_data_completeness(
     skip_fund_flow_check: bool = False,
     block_on_stale: bool = True,
     critical_stale_keys: Optional[List[str]] = None,
+    policy_rules: Optional[Dict[str, Any]] = None,
 ) -> None:
     """在开始 Stage3 之前阻断缺失数据的情形。"""
-    metadata = market_payload.get("metadata", {})
+    metadata = market_payload.setdefault("metadata", {})
     completeness = metadata.get("data_completeness", 0.0) or 0.0
     missing_items = _flatten_missing_items(market_payload)
     compare_gaps = _collect_compare_gaps(market_payload)
-    estimated_items = _collect_estimated_items(market_payload)
+    estimated_info = _collect_estimated_items(market_payload, policy_rules=policy_rules)
+    blocked_estimated = estimated_info.get("blocked", [])
+    allowlisted_estimated = estimated_info.get("allowlisted", [])
     stale_items = _collect_stale_items(market_payload)
 
-    if estimated_items and not allow_estimated:
+    for item in allowlisted_estimated:
+        _append_non_blocking_warning(
+            market_payload,
+            {
+                "level": "warning",
+                "code": "estimated_allowlisted_pass",
+                "key": item.split(".", 1)[-1],
+                "message": f"估算值白名单放行: {item}",
+            },
+        )
+
+    if blocked_estimated and not allow_estimated:
         raise RuntimeError(
             "检测到估算值（is_estimated=True），按当前策略禁止进入 Stage3。"
-            f"\n估算项: {', '.join(estimated_items)}"
+            f"\n估算项: {', '.join(blocked_estimated)}"
             "\n请通过 Stage2/Stage2.5 获取真实值后重试。"
+        )
+
+    if blocked_estimated and allow_estimated:
+        _append_non_blocking_warning(
+            market_payload,
+            {
+                "level": "warning",
+                "code": "estimated_override_allow_estimated",
+                "key": "*",
+                "message": "--allow-estimated 已放宽以下估算项: " + ", ".join(blocked_estimated),
+            },
         )
 
     if compare_gaps:
@@ -240,20 +303,63 @@ def _require_data_completeness(
         )
         msg_lines.append(
             "  PYTHONPATH=. python scripts/stage2_unified_enhancer.py "
-            "--market-data data/market_data.json "
-            "--output data/market_data_stage2.json "
+            "--market-data data/runs/YYYYMMDD/market_data.json "
+            "--output data/runs/YYYYMMDD/market_data_stage2.json "
             "--execute-search --fund-flow-backend tavily "
-            "--cache-backend sqlite --cache-path reports/tavily_cache.sqlite "
-            "--websearch-results reports/websearch_results_auto.json "
-            "--gap-monitor reports/gap_monitor_<DATE_NH>.json"
+            "--cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite "
+            "--websearch-results data/runs/YYYYMMDD/websearch_results_auto.json "
+            "--gap-monitor data/runs/YYYYMMDD/gap_monitor.json"
         )
         msg_lines.append(
             "若仅需重注入 WebSearch: "
-            "python inject_websearch_data_test.py "
-            "data/market_data_stage2.json reports/websearch_results_auto.json data/market_data_complete.json"
+            "python scripts/stage2_5_injector.py "
+            "data/runs/YYYYMMDD/market_data_stage2.json "
+            "data/runs/YYYYMMDD/websearch_results_manual.json "
+            "data/runs/YYYYMMDD/market_data_complete.json"
         )
         raise RuntimeError("\n".join(msg_lines))
 
+
+def _find_estimated_entry_by_key(
+    market_payload: Dict[str, Any],
+    key: str,
+) -> Optional[tuple[str, str, Dict[str, Any]]]:
+    macro = market_payload.get("macro_indicators", {})
+    if isinstance(macro, dict) and isinstance(macro.get(key), dict):
+        return ("macro_indicators", key, macro[key])
+
+    monetary = market_payload.get("monetary_policy", {})
+    if isinstance(monetary, dict) and isinstance(monetary.get(key), dict):
+        return ("monetary_policy", key, monetary[key])
+
+    for item in market_payload.get("bonds", []) or []:
+        if isinstance(item, dict) and str(item.get("symbol")) == str(key):
+            return ("bonds", str(item.get("symbol")), item)
+    for item in market_payload.get("forex", []) or []:
+        if isinstance(item, dict) and str(item.get("pair")) == str(key):
+            return ("forex", str(item.get("pair")), item)
+    for item in market_payload.get("commodities", []) or []:
+        if isinstance(item, dict) and str(item.get("symbol")) == str(key):
+            return ("commodities", str(item.get("symbol")), item)
+    for item in market_payload.get("stock_indices", []) or []:
+        if isinstance(item, dict) and str(item.get("symbol")) == str(key):
+            return ("stock_indices", str(item.get("symbol")), item)
+    return None
+
+
+def _is_allowlisted_gap_item(
+    market_payload: Dict[str, Any],
+    key: str,
+    policy_rules: Optional[Dict[str, Any]] = None,
+) -> bool:
+    located = _find_estimated_entry_by_key(market_payload, key)
+    if not located:
+        return False
+    category, real_key, entry = located
+    if not isinstance(entry, dict) or not entry.get("is_estimated"):
+        return False
+    allowed, _ = is_estimated_allowlisted(category, real_key, entry, rules=policy_rules)
+    return allowed
 
 def _load_gap_monitor(gap_path: Path) -> Dict[str, List[str]]:
     if not gap_path.exists():
@@ -265,26 +371,16 @@ def _load_gap_monitor(gap_path: Path) -> Dict[str, List[str]]:
         return {"pending_tasks": [], "manual_required": []}
 
 
-def _derive_date_compact(market_payload: Dict[str, Any]) -> Optional[str]:
-    metadata = market_payload.get("metadata", {}) if isinstance(market_payload, dict) else {}
-    date_val = metadata.get("date") or metadata.get("end_date") or metadata.get("start_date")
-    if not date_val:
-        return None
-    return str(date_val).replace("-", "")
-
-
 def _resolve_gap_monitor_path(
     market_payload: Dict[str, Any],
     explicit_gap_path: Optional[Path] = None,
 ) -> Path:
-    """优先使用日期版 gap_monitor，避免误读默认 gap_monitor.json。"""
+    """优先使用同日运行目录下的 gap_monitor。"""
+    run_paths = build_run_paths_from_reference(payload=market_payload, fallback_to_today=True)
     candidates: List[Path] = []
-    date_compact = _derive_date_compact(market_payload)
-    if date_compact:
-        candidates.append(Path("reports") / f"gap_monitor_{date_compact}.json")
+    candidates.append(run_paths.gap_monitor)
     if explicit_gap_path:
         candidates.append(explicit_gap_path)
-    candidates.append(Path("reports/gap_monitor.json"))
 
     seen = set()
     for candidate in candidates:
@@ -326,26 +422,53 @@ async def _run_analysis(
     fallback_used = False
 
     # 1) policy gate
+    policy_rules = load_policy_rules()
     meta_date = (
         market_payload.get("metadata", {}).get("date")
         or market_payload.get("metadata", {}).get("end_date")
         or market_payload.get("metadata", {}).get("start_date")
     )
-    date_compact = str(meta_date).replace("-", "") if meta_date else None
-    if date_compact:
-        policy_path = Path("reports") / f"policy_evaluation_{date_compact}.json"
+    if meta_date:
+        policy_path = build_run_paths_from_reference(payload=market_payload, fallback_to_today=True).policy_evaluation
         if policy_path.exists():
             try:
                 policy_payload = json.loads(policy_path.read_text(encoding="utf-8"))
-                if policy_payload.get("block_stage3"):
+
+                raw_redlist = policy_payload.get("redlist") or []
+                redlist_keys: List[str] = []
+                for row in raw_redlist:
+                    if isinstance(row, dict):
+                        key = row.get("key") or row.get("indicator_key")
+                    else:
+                        key = row
+                    if key:
+                        redlist_keys.append(str(key))
+
+                allowlisted_redlist = [
+                    key for key in redlist_keys
+                    if _is_allowlisted_gap_item(market_payload, key, policy_rules)
+                ]
+                blocking_redlist = [key for key in redlist_keys if key not in allowlisted_redlist]
+                for key in allowlisted_redlist:
+                    _append_non_blocking_warning(
+                        market_payload,
+                        {
+                            "level": "warning",
+                            "code": "policy_allowlisted_redlist_ignored",
+                            "key": key,
+                            "message": f"policy_evaluation redlist 白名单放行: {key}",
+                        },
+                    )
+
+                stale_redlist = policy_payload.get("stale_redlist") or []
+                if policy_payload.get("block_stage3") and (blocking_redlist or stale_redlist):
                     blockers.append(
-                        f"policy: redlist={policy_payload.get('redlist')}, stale_redlist={policy_payload.get('stale_redlist')}"
+                        f"policy: redlist={blocking_redlist}, stale_redlist={stale_redlist}"
                     )
             except Exception as exc:  # noqa: BLE001
                 print(f"[WARN] policy_evaluation check skipped: {exc}")
 
     # 2) completeness gate
-    policy_rules = load_policy_rules()
     block_on_stale = bool(policy_rules.get("block_on_stale", True))
     critical_stale_keys = policy_rules.get("critical_stale_keys", ["cpi", "ppi", "pmi", "m1", "m2", "tsf"])
     completeness_error: Optional[str] = None
@@ -357,6 +480,7 @@ async def _run_analysis(
             skip_fund_flow_check=skip_fund_flow_check,
             block_on_stale=block_on_stale,
             critical_stale_keys=critical_stale_keys if isinstance(critical_stale_keys, list) else None,
+            policy_rules=policy_rules,
         )
     except RuntimeError as exc:
         completeness_error = str(exc)
@@ -373,15 +497,30 @@ async def _run_analysis(
     print(f"[META] gap_monitor 路径：{gap_path}")
     if not skip_gap_check:
         gap = _load_gap_monitor(gap_path)
-        pending = gap.get("pending_tasks", [])
-        manual = gap.get("manual_required", [])
-        if pending or manual:
+        pending = gap.get("pending_tasks", []) or []
+        manual_raw = gap.get("manual_required", []) or []
+        manual_blocking: List[str] = []
+        for item in manual_raw:
+            key = str(item)
+            if _is_allowlisted_gap_item(market_payload, key, policy_rules):
+                _append_non_blocking_warning(
+                    market_payload,
+                    {
+                        "level": "warning",
+                        "code": "gap_allowlisted_manual_ignored",
+                        "key": key,
+                        "message": f"gap_monitor 白名单放行: {key}",
+                    },
+                )
+            else:
+                manual_blocking.append(key)
+
+        if pending or manual_blocking:
             blockers.append(
-                f"gap_monitor({gap_path}): pending={pending}, manual_required={manual}"
+                f"gap_monitor({gap_path}): pending={pending}, manual_required={manual_blocking}"
             )
     else:
         print(f"[WARN] 已跳过 gap_monitor 检查（调试模式），路径: {gap_path}")
-
     # 4) stage2 completion gate
     if not ai_websearch_flag:
         blockers.append("stage2: 未检测到 metadata.ai_websearch_enhanced=true")
@@ -429,6 +568,9 @@ async def _run_analysis(
     pring_result.setdefault("pending_websearch", [])
     pring_result["data_completeness"] = completeness
     pring_result["weights_version"] = "stage_weights_v1"
+    non_blocking_warnings = market_payload.get("metadata", {}).get("non_blocking_warnings", [])
+    if isinstance(non_blocking_warnings, list) and non_blocking_warnings:
+        pring_result["metadata"]["non_blocking_warnings"] = non_blocking_warnings
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
@@ -467,11 +609,11 @@ async def _run_analysis(
             "asset": "market_price",
         },
         "fallback_used": fallback_used,
-        "warnings": [],
+        "warnings": non_blocking_warnings if isinstance(non_blocking_warnings, list) else [],
         "errors": [],
         "runtime_sec": round(runtime, 2),
     }
-    log_path = Path("reports/pring_stage3_log.json")
+    log_path = build_run_paths_from_reference(payload=market_payload, fallback_to_today=True).stage3_log
     log_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_log = log_path.with_suffix(".tmp")
     with tmp_log.open("w", encoding="utf-8") as fp:
@@ -482,18 +624,19 @@ async def _run_analysis(
 
 
 def parse_args() -> argparse.Namespace:
+    default_paths = build_run_paths_from_reference(fallback_to_today=True)
     parser = argparse.ArgumentParser(
         description="Stage 3: 执行 Pring 三层分析",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--market-data",
-        default="data/market_data.json",
+        default=str(default_paths.market_data_complete),
         help="Stage 1/2 生成的 market_data.json",
     )
     parser.add_argument(
         "--output",
-        default="data/pring_result.json",
+        default=None,
         help="Pring 分析结果输出路径",
     )
     parser.add_argument(
@@ -511,7 +654,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--gap-monitor",
         default=None,
-        help="可选：显式指定 gap monitor 路径；默认优先按 market_data 日期匹配 reports/gap_monitor_<DATE>.json"
+        help="可选：显式指定 gap monitor 路径；默认优先按 market_data 日期匹配 data/runs/YYYYMMDD/gap_monitor.json"
     )
     parser.add_argument(
         "--skip-gap-check",
@@ -544,12 +687,17 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     market_path = Path(args.market_data).resolve()
-    output_path = Path(args.output).resolve()
     min_completeness = float(args.min_completeness)
     days = int(args.days)
 
     if not market_path.exists():
         raise FileNotFoundError(f"未找到市场数据文件: {market_path}")
+
+    output_path = (
+        Path(args.output).resolve()
+        if args.output
+        else (market_path.parent / "pring_result.json").resolve()
+    )
 
     asyncio.run(_run_analysis(
         market_path,

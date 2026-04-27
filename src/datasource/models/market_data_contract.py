@@ -63,6 +63,9 @@ class BondYieldData(BaseModel):
     change_120d_bp: Optional[float] = None
     trend: str
     source: str
+    date: Optional[str] = None
+    as_of_date: Optional[str] = None
+    report_period: Optional[str] = None
     is_estimated: bool = False
     stage_task_id: Optional[str] = None
     note: Optional[str] = None

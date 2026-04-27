@@ -26,13 +26,14 @@
 PYTHONPATH=./src \
 TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
 python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/YYYYMMDD_market_data.json \
-  --output data/YYYYMMDD_market_data_stage2.json \
+  --market-data data/runs/YYYYMMDD/market_data.json \
+  --output data/runs/YYYYMMDD/market_data_stage2.json \
   --execute-search \
   --fund-flow-backend tavily \
-  --log-output logs/stage2_unified_log_YYYYMMDD.json \
-  --gap-monitor reports/gap_monitor_YYYYMMDD.json \
-  --websearch-results reports/websearch_results_YYYYMMDD.json
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --log-output logs/runs/YYYYMMDD/stage2_unified_log.json \
+  --gap-monitor data/runs/YYYYMMDD/gap_monitor.json \
+  --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json
 ```
 可选队列：追加 `--use-queue --queue-concurrency 3 --queue-retry-limit 1`
 
@@ -48,21 +49,21 @@ python3 scripts/stage2_unified_enhancer.py \
 - 极速模式（跳过 LLM）：`--extraction-backend regex --queue-concurrency 6 --deepseek-max-concurrency 0 --deepseek-timeout 8 --queue-retry-limit 0`，几分钟跑完但精度略降。
 - 必用 LLM 时：`--deepseek-timeout 8 --queue-concurrency 5 --deepseek-max-concurrency 4 --queue-retry-limit 0`，可分批跑 `--phase essential` 再 `--phase assets`。
 - 降低 Tavily extract 负载：如需手动调优，可把代码里 `top_for_extract = snippets[:3]` 改为 `[:2]`，或将商品/外汇任务的 `extract_depth` 设为 `"basic"`。
-- 复用缓存：保留 `reports/tavily_cache.sqlite`，第二轮只跑缺口，提升 `cache_hit_rate`。
+- 复用缓存：保留 `data/cache/tavily_cache.sqlite`，第二轮只跑缺口，提升 `cache_hit_rate`。
 - 新增快捷参数：`--fast-mode`（自动启用 regex 抽取、并发放大、8s 硬超时、fund_flow_backend=mcp、禁用 extract）；`--disable-extract` 跳过 Tavily extract；`--extract-topk N` 控制 extract 使用的搜索条数；`--llm-hard-timeout 12` 为 LLM 抽取增加 asyncio 硬超时。
 
 #### 多次 Stage2 产出的合并与避免错用（新增）
 - 原则：只让 Stage3 读取一份 `*_market_data_complete.json`。多次 Stage2 结果应合并 websearch 数据后再“注入一次”生成新的 complete。
 - 推荐步骤：
-  1) 选最新/最完整的 stage2 基底（如 `data/DATE_market_data_stage2.json`）。
+  1) 选最新/最完整的 stage2 基底（如 `data/runs/DATE/market_data_stage2.json`）。
   2) 合并多份 websearch 结果为一份：  
      ```bash
      jq -s 'reduce .[] as $it ({}; .fund_flow += ($it.fund_flow//{}) | .commodities += ($it.commodities//[]) | .bonds += ($it.bonds//[]) | .forex += ($it.forex//[]) | .macro_indicators += ($it.macro_indicators//{}) | .monetary_policy += ($it.monetary_policy//{}))' \
-       reports/websearch_results_*.json > reports/websearch_results_merged.json
+       data/runs/DATE/websearch_results*.json > data/runs/DATE/websearch_results_merged.json
      ```
      （如需去重同一 symbol，可先清理旧文件或改用 `tac ... | jq 'reduce .[] as $it ({}; .fund_flow += $it.fund_flow // {} )'` 让后写覆盖前写。）
-  3) 注入：`python inject_websearch_data_test.py data/DATE_market_data_stage2.json reports/websearch_results_merged.json data/DATE_market_data_complete.json`
-  4) 确认 `reports/gap_monitor_DATE.json` 为空，再跑 Stage3/报告。
+  3) 注入：`python scripts/stage2_5_injector.py data/runs/DATE/market_data_stage2.json data/runs/DATE/websearch_results_merged.json data/runs/DATE/market_data_complete.json`
+  4) 确认 `data/runs/DATE/gap_monitor.json` 为空，再跑 Stage3/报告。
 - 保留多个 stage2 版本时，请用不同文件名（如 `_stage2_v1.json` / `_stage2_fund.json`），但最终仅把“合并后注入”的 complete.json 传给 Stage3。
 
 
@@ -82,16 +83,16 @@ python3 scripts/stage2_unified_enhancer.py \
 ```bash
 python scripts/stage1_data_collector.py \
   --date 2025-11-14 \
-  --output data/20251114_market_data.json
+  --output data/runs/20251114/market_data.json
 ```
 
-**输出**: `data/YYYYMMDD_market_data.json` (~15KB)
+**输出**: `data/runs/YYYYMMDD/market_data.json` (~15KB)
 
 ---
 
-### 2. inject_websearch_data_test.py ✅ RECOMMENDED
+### 2. stage2_5_injector.py ✅ RECOMMENDED
 
-**位置**: `inject_websearch_data_test.py` (项目根目录)
+**位置**: `scripts/stage2_5_injector.py`
 **用途**: AI补全 - WebSearch数据注入
 **状态**: ✅ 新建推荐脚本
 
@@ -102,17 +103,17 @@ python scripts/stage1_data_collector.py \
 
 **使用**:
 ```bash
-python inject_websearch_data_test.py \
-  data/YYYYMMDD_market_data_enhanced.json \
-  data/websearch_results_YYYYMMDD.json \
-  data/YYYYMMDD_market_data_complete.json
+python scripts/stage2_5_injector.py \
+  data/runs/YYYYMMDD/market_data_stage2.json \
+  data/runs/YYYYMMDD/websearch_results_manual.json \
+  data/runs/YYYYMMDD/market_data_complete.json
 ```
 
 **输入**:
-- `market_data_enhanced.json`: Stage 2a输出
-- `websearch_results_YYYYMMDD.json`: AI手动创建
+- `market_data_stage2.json`: `data/runs/YYYYMMDD/market_data_stage2.json`
+- `websearch_results_manual.json`: `data/runs/YYYYMMDD/websearch_results_manual.json`
 
-**输出**: `data/YYYYMMDD_market_data_complete.json` (95% completeness)
+**输出**: `data/runs/YYYYMMDD/market_data_complete.json` (95% completeness)
 
 **验证结果** (2025-11-14):
 ```
@@ -137,12 +138,12 @@ python inject_websearch_data_test.py \
 **使用**:
 ```bash
 python run_pring_analysis.py \
-  data/YYYYMMDD_market_data_complete.json \
-  data/YYYYMMDD_pring_result.json
+  data/runs/YYYYMMDD/market_data_complete.json \
+  data/runs/YYYYMMDD/pring_result.json
 ```
 
 **输入**: `market_data_complete.json` (需95%数据)
-**输出**: `data/YYYYMMDD_pring_result.json` (custom format)
+**输出**: `data/runs/YYYYMMDD/pring_result.json` (custom format)
 
 **输出示例**:
 ```json
@@ -170,16 +171,16 @@ python run_pring_analysis.py \
 **使用**:
 ```bash
 python generate_simple_report.py \
-  data/YYYYMMDD_market_data_complete.json \
-  data/YYYYMMDD_pring_result.json \
-  reports/YYYYMMDD背景扫描120.md
+  data/runs/YYYYMMDD/market_data_complete.json \
+  data/runs/YYYYMMDD/pring_result.json \
+  reports/YYYY-MM-DD-背景扫描120.md
 ```
 
 **输入**:
 - `market_data_complete.json`: 95%完整数据
 - `pring_result.json`: Pring分析结果
 
-**输出**: `reports/YYYYMMDD背景扫描120.md` (~4.8KB, 9 sections)
+**输出**: `reports/YYYY-MM-DD-背景扫描120.md` (~4.8KB, 9 sections)
 
 **报告结构**:
 1. 核心结论
@@ -194,9 +195,9 @@ python generate_simple_report.py \
 
 ---
 
-### 5. fill_market_data_from_yahoo.py ✅ SUPPORT
+### 5. fill_market_data_from_yahoo.py ⚠️ LEGACY
 
-**位置**: `scripts/fill_market_data_from_yahoo.py`  
+**位置**: `scripts/legacy/fill_market_data_from_yahoo.py`  
 **用途**: Stage2 补齐商品/债券行情（替换 0 / 7.13 / “待获取” 占位）
 
 **依赖**:
@@ -207,7 +208,7 @@ pip install yfinance pandas
 
 **使用**:
 ```bash
-PYTHONPATH=. python3 scripts/fill_market_data_from_yahoo.py \
+PYTHONPATH=. python3 scripts/legacy/fill_market_data_from_yahoo.py \
   --input data/20251118_market_data_stage2.json \
   --output data/20251118_market_data_complete.json
 ```
@@ -215,7 +216,7 @@ PYTHONPATH=. python3 scripts/fill_market_data_from_yahoo.py \
 **行为**:
 - 自动替换 `current_price` 或 `current_yield` 为真实值，计算 5 日/120 日变动
 - 失败时将 `source` 标记为 `N/A (error)` 并输出 `[WARN]`：Stage2 会在 `metadata.stage2_notes` 中提示“需要 WebSearch/手动补数”
-- 可与 `stage2_mcp_enhancer.py` 联动：Stage2 完成后若仍检测到商品/债券缺口，会自动调用本脚本（可用 `--disable-yahoo-fallback` 关闭）
+- 仅供老流程排障使用；当前主路径优先走 `scripts/stage2_5_injector.py` 补数
 
 ---
 
@@ -254,8 +255,8 @@ python scripts/sanitize_market_data.py data/20251117_market_data_stage2.json \
 **使用**:
 ```bash
 python scripts/stage2a_mcp_enhancer.py \
-  --market-data data/YYYYMMDD_market_data.json \
-  --output data/YYYYMMDD_market_data_enhanced.json
+  --market-data data/runs/YYYYMMDD/market_data.json \
+  --output data/runs/YYYYMMDD/market_data_enhanced.json
 ```
 
 **注意事项**:
@@ -276,17 +277,17 @@ python scripts/stage2a_mcp_enhancer.py \
 **亮点**:
 - 直接复用 `datasource.calculators.pring_analyzer.PringAnalyzer`
 - 支持 DR007 领先指标平移、阶段关注资产等最新逻辑
-- 默认输出 `data/pring_result.json`，可被 Stage 4 直接消费
+- 默认输出 `data/runs/YYYYMMDD/pring_result.json`，可被 Stage 4 直接消费
 
 **用法**:
 ```bash
 PYTHONPATH=. python3 scripts/stage3_pring_analyzer.py \
-  --market-data data/YYYYMMDD_market_data_complete.json \
-  --output data/YYYYMMDD_pring_result.json
+  --market-data data/runs/YYYYMMDD/market_data_complete.json \
+  --output data/runs/YYYYMMDD/pring_result.json
 ```
 
 **注意事项**:
-- Stage 3 之前需通过 `inject_websearch_data_test.py` 将宏观/货币指标补齐，否则 Pring 会提示缺失
+- Stage 3 之前需通过 `scripts/stage2_5_injector.py` 将宏观/货币指标补齐，否则 Pring 会提示缺失
 - 如果想在交互式环境快速验证，可使用 `tests/scripts/run_pring_analysis_test.py`，两者输出结构一致
 
 ---
@@ -416,26 +417,26 @@ powershell -Command "(Get-Item 'reports\${DATE}背景扫描120.md').Length"
 
 
 ### Stage2：统一增强（默认）
-`python scripts/stage2_unified_enhancer.py --market-data data/market_data.json --output data/market_data_stage2.json --execute-search --fund-flow-backend hybrid --cache-backend sqlite --cache-path reports/tavily_cache.sqlite --websearch-results reports/websearch_results_auto.json --log-output logs/stage2_unified_log.json --gap-monitor reports/gap_monitor.json`
+`python scripts/stage2_unified_enhancer.py --market-data data/runs/YYYYMMDD/market_data.json --output data/runs/YYYYMMDD/market_data_stage2.json --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json --log-output logs/runs/YYYYMMDD/stage2_unified_log.json --gap-monitor data/runs/YYYYMMDD/gap_monitor.json`
 
 ### Stage2：高命中率（直连 + 低并发 + 易失败串行）
 ```bash
 PYTHONPATH=. source .venv/bin/activate && source .env && \
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
 python scripts/stage2_unified_enhancer.py \
-  --market-data data/market_data.json \
-  --output data/market_data_stage2.json \
+  --market-data data/runs/YYYYMMDD/market_data.json \
+  --output data/runs/YYYYMMDD/market_data_stage2.json \
   --execute-search \
-  --fund-flow-backend hybrid \
-  --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
-  --websearch-results reports/websearch_results_auto.json \
-  --log-output logs/stage2_unified_log.json \
-  --gap-monitor reports/gap_monitor.json \
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json \
+  --log-output logs/runs/YYYYMMDD/stage2_unified_log.json \
+  --gap-monitor data/runs/YYYYMMDD/gap_monitor.json \
   --deepseek-max-concurrency 1 --deepseek-timeout 25 --max-retries 3 \
   --deepseek-serial-keys BCOM,GSG,USDCNY,USDCNH \
   --extraction-backend regex
 ```
-说明：直连 Tavily，串行 DeepSeek，regex 兜底，资金流向仍由 MCP/人工（hybrid）负责。
+说明：直连 Tavily，串行 DeepSeek，regex 兜底；资金流向默认仍走 tavily，失败再转 Stage2.5 人工补数。
 
 ### Stage2：只跑指定任务
-`python scripts/stage2_unified_enhancer.py --market-data data/market_data.json --output data/market_data_stage2.json --tasks task1,task2 --execute-search --fund-flow-backend hybrid`
+`python scripts/stage2_unified_enhancer.py --market-data data/runs/YYYYMMDD/market_data.json --output data/runs/YYYYMMDD/market_data_stage2.json --tasks task1,task2 --execute-search --fund-flow-backend tavily`
