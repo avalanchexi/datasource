@@ -15,6 +15,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Any, Optional
 
+from datasource.utils.coercion import to_float
 from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import load_series_values
 
@@ -52,10 +53,7 @@ EVENTS_DIR = Path("data/trend_history/min/events")
 
 
 def _to_float(value: Any) -> Optional[float]:
-    try:
-        return float(value)
-    except Exception:
-        return None
+    return to_float(value)
 
 
 def _normalize_trend(trend: Any) -> Optional[str]:

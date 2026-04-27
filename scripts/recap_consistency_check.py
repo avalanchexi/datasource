@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from datasource.utils.json_io import load_json_optional
 from datasource.utils.run_paths import build_run_paths
 
 
@@ -31,12 +32,8 @@ def _parse_date(date_str: Optional[str]) -> Tuple[str, str]:
 
 
 def _load_json(path: Path) -> Optional[Dict[str, Any]]:
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
+    payload = load_json_optional(path)
+    return payload if isinstance(payload, dict) else None
 
 
 def _find_first(paths: List[Path]) -> Optional[Path]:

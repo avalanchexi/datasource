@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
+from datasource.utils.coercion import to_float
 
 try:
     from openai import AsyncOpenAI
@@ -239,10 +240,7 @@ class DeepSeekExtractionAgent:
 
     @staticmethod
     def _to_float(value: Any) -> Optional[float]:
-        try:
-            return float(value)
-        except Exception:
-            return None
+        return to_float(value)
 
     @staticmethod
     def _normalize_date(value: Any) -> Optional[str]:

@@ -24,7 +24,6 @@ import time
 from itertools import count
 from datetime import datetime, timedelta, timezone
 import re
-import shutil
 from urllib.parse import urlparse
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -55,6 +54,8 @@ except Exception:  # pragma: no cover - 可选依赖缺失时延迟报错
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
 from datasource.utils.quality_metrics import write_quality_metrics
 from datasource.utils.observability import build_observability_log, write_observability_log
+from datasource.utils.coercion import is_stage2_number_placeholder
+from datasource.utils.json_io import dump_json, load_json_strict
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -64,6 +65,7 @@ from datasource.utils.policy_rules import (
 from datasource.utils.run_paths import build_run_paths_from_reference
 from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
+from datasource.utils.text_markers import contains_ytd_marker
 
 CRITICAL_EXTRACT_KEYS = {
     "industrial",
@@ -79,8 +81,7 @@ CRITICAL_EXTRACT_KEYS = {
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+    return load_json_strict(path)
 
 
 def _merge_missing_items(market_payload: Dict[str, Any]) -> None:
@@ -400,14 +401,7 @@ def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
 
 
 def _is_placeholder_number(val: Any) -> bool:
-    """判断数值是否为空/占位/零。"""
-    if val is None or val == "" or val == "N/A":
-        return True
-    try:
-        num = float(val)
-    except Exception:
-        return True
-    return abs(num) < 1e-9
+    return is_stage2_number_placeholder(val)
 
 
 def _has_non_placeholder_value(market_payload: Dict[str, Any], indicator_key: str) -> (bool, Optional[float]):
@@ -470,19 +464,7 @@ def _has_non_placeholder_value(market_payload: Dict[str, Any], indicator_key: st
     return False, None
 
 def _dump_json(payload: Dict[str, Any], path: Path, backup: bool = False) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if backup and path.exists():
-        backup_path = path.with_name(path.name + f".bak")
-        timestamp_path = path.with_name(f"{path.stem}_{datetime.now():%Y%m%d%H%M%S}{path.suffix}")
-        try:
-            shutil.copy2(path, backup_path)
-            shutil.copy2(path, timestamp_path)
-        except Exception:
-            pass  # 备份失败不阻塞写入
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp_path.replace(path)
+    dump_json(payload, path, backup=backup)
 
 
 def _append_task_log(task_log_path: Path, record: Dict[str, Any]) -> None:
@@ -990,12 +972,7 @@ def _refine_extraction_value(
 
 
 def _contains_ytd_marker(text: str) -> bool:
-    if not text:
-        return False
-    lowered = text.lower()
-    if any(tok in lowered for tok in ["累计", "年初至今", "ytd", "year-to-date"]):
-        return True
-    return bool(re.search(r"1\\s*(?:-|—|~|至|到)\\s*\\d{1,2}\\s*月", lowered))
+    return contains_ytd_marker(text)
 
 
 def _infer_rrr_type(text: str) -> Optional[str]:

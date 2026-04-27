@@ -18,6 +18,7 @@ from datasource.models.market_data_contract import FundFlowData
 from datasource.utils.trend_history_store import write_from_market_data, DEFAULT_BASE_DIR, SERIES_WINDOWS
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
 from datasource.utils.quality_metrics import write_quality_metrics
+from datasource.utils.coercion import is_stage2_number_placeholder
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -26,6 +27,7 @@ from datasource.utils.policy_rules import (
     get_non_blocking_warning_rules,
 )
 from datasource.utils.run_paths import build_run_paths_from_reference
+from datasource.utils.text_markers import contains_ytd_marker
 
 FUND_FLOW_KEY_MAP = {
     "etf_flow": "etf",
@@ -300,15 +302,7 @@ def _collect_missing_source_urls(websearch_data: Dict[str, Any]) -> List[str]:
 
 
 def _is_placeholder_numeric(value: Any) -> bool:
-    if value in (None, "", "N/A"):
-        return True
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return True
-    if abs(numeric) < 1e-9:
-        return True
-    return abs(numeric - 7.13) < 1e-3
+    return is_stage2_number_placeholder(value)
 
 
 def _has_valid_value(value: Any) -> bool:
@@ -1473,12 +1467,7 @@ def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
 
 
 def _contains_ytd_marker(text: str) -> bool:
-    if not text:
-        return False
-    lowered = text.lower()
-    if any(tok in lowered for tok in ["累计", "年初至今", "ytd", "year-to-date"]):
-        return True
-    return bool(re.search(r"1\s*(?:-|—|~|至|到)\s*\d{1,2}\s*月", lowered))
+    return contains_ytd_marker(text)
 
 
 def _apply_macro_entry(

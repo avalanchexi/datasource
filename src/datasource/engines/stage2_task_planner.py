@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional
 
 from loguru import logger
 from datasource.config.search_profiles import SEARCH_PROFILES
+from datasource.utils.coercion import is_stage2_task_placeholder
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}
@@ -152,13 +153,7 @@ class Stage2TaskPlanner:
 
     @staticmethod
     def _is_placeholder(value: Any) -> bool:
-        if value in PLACEHOLDER_SENTINELS:
-            return True
-        try:
-            num = float(value)
-        except Exception:
-            return False
-        return abs(num - 7.13) < 1e-6
+        return is_stage2_task_placeholder(value)
 
     def _from_missing_items(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         tasks: List[Dict[str, Any]] = []

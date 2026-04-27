@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from datasource.utils.json_io import load_json_strict
 from datasource.utils.trend_history_store import SeriesRecord, write_series_record
 
 
@@ -16,7 +16,7 @@ METRICS = ("recent_5d", "total_120d")
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return load_json_strict(path)
 
 
 def _collect_snapshots(paths: List[Path]) -> List[Tuple[str, Dict[str, Any]]]:
