@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-120日背景扫描器 - 主执行脚本
+Archived 120-day background scanner - legacy execution script.
+
+当前日报主链路为 Stage1 -> Stage2 unified enhancer -> Stage2.5 injection ->
+Stage3 Pring analysis -> Stage4 report generation。本脚本仅保留历史比对用途，
+默认禁止直接运行，显式运行时也只能写入 reports/archive。
+
 根据120背景扫描方案.md V3.1实现的完整市场背景扫描器
 
 功能:
@@ -11,7 +16,7 @@
 - 结构化Markdown报告生成
 
 使用:
-python scripts/background_scan_120d.py --date 2025-09-17 --output reports/20250917背景扫描120日.md
+python scripts/legacy/background_scan_120d.py --run-archived --date 2025-09-17 --output reports/archive/20250917背景扫描120日_archived.md
 """
 
 import sys
@@ -985,11 +990,31 @@ class BackgroundScanner120D:
 
 async def main():
     """主函数"""
-    parser = argparse.ArgumentParser(description='120日背景扫描器')
+    parser = argparse.ArgumentParser(description='Archived 120日背景扫描器')
     parser.add_argument('--date', required=True, help='扫描日期 (YYYY-MM-DD)')
     parser.add_argument('--output', required=True, help='输出文件路径')
+    parser.add_argument('--run-archived', action='store_true',
+                        help='显式运行归档工具，仅用于历史比对；当前日报请使用 Stage1-Stage4 主链路')
 
     args = parser.parse_args()
+
+    if not args.run_archived:
+        print(
+            "[ARCHIVED] scripts/legacy/background_scan_120d.py 已停用为归档工具。\n"
+            "当前报告生成请使用 AGENTS.md 中的 Stage1 -> Stage2 -> Stage2.5 -> Stage3 -> Stage4 主链路。\n"
+            "如仅需历史比对，可显式添加 --run-archived 并输出到 reports/archive/。",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    output_path = os.path.abspath(args.output)
+    archive_dir = os.path.abspath(os.path.join(project_root, "reports", "archive"))
+    if os.path.commonpath([archive_dir, output_path]) != archive_dir:
+        print(
+            "[ARCHIVED] 归档脚本只能输出到 reports/archive/，避免覆盖正式日报路径。",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     try:
         # 验证日期格式
@@ -997,7 +1022,7 @@ async def main():
 
         # 创建扫描器并执行
         scanner = BackgroundScanner120D(args.date)
-        await scanner.run_scan(args.output)
+        await scanner.run_scan(output_path)
 
     except ValueError as e:
         print(f"[错误] 日期格式错误: {e}")

@@ -11,7 +11,7 @@ following steps for a given target date:
 
 1. Executes the enhanced background scan generator to produce the raw report
    Markdown.
-2. Copies the raw output to the canonical ``reports/{date}背景扫描120.md`` file.
+2. Copies the raw output to ``reports/archive/{date}背景扫描120_archived.md``.
 3. Runs structural and completeness validations expected by the workflow
    (mandatory指数/ETF覆盖、无 ``N/A`` 占位等)。
 

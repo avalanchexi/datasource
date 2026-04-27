@@ -1,12 +1,54 @@
+"""Archived network report generator.
+
+This Yahoo/yfinance-based helper is retained only for historical comparison.
+It is not part of the current Stage1 -> Stage4 daily pipeline.
+"""
+
+import argparse
 import os
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
-import yfinance as yf
 
 TARGET_DATE = "2025-10-11"
 DATA_SOURCE = "Yahoo Finance"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Archived Yahoo/yfinance network report generator")
+    parser.add_argument(
+        "--run-archived",
+        action="store_true",
+        help="Explicitly run this archived diagnostic; current reports use Stage1-Stage4",
+    )
+    parser.add_argument(
+        "--output",
+        default=f"reports/archive/{TARGET_DATE.replace('-', '')}背景扫描cx_V2_archived.md",
+        help="Output Markdown path under reports/archive/",
+    )
+    return parser.parse_args()
+
+
+ARGS = parse_args()
+if not ARGS.run_archived:
+    print(
+        "[ARCHIVED] scripts/utility/generate_network_report.py 已停用为归档工具。\n"
+        "当前报告生成请使用 AGENTS.md 中的 Stage1 -> Stage2 -> Stage2.5 -> Stage3 -> Stage4 主链路。\n"
+        "如仅需历史比对，可显式添加 --run-archived 并输出到 reports/archive/。",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+OUTPUT_PATH = Path(ARGS.output).resolve()
+ARCHIVE_DIR = (PROJECT_ROOT / "reports" / "archive").resolve()
+if ARCHIVE_DIR not in OUTPUT_PATH.parents:
+    print("[ARCHIVED] 归档脚本只能输出到 reports/archive/。", file=sys.stderr)
+    raise SystemExit(2)
+
+import yfinance as yf
 
 os.environ["SSL_CERT_FILE"] = "C:/temp/cacert.pem"
 os.environ["REQUESTS_CA_BUNDLE"] = "C:/temp/cacert.pem"
@@ -182,6 +224,7 @@ lines_md.append("")
 lines_md.append("*说明: 当前仅能通过公开渠道获取美国10年期国债收益率; 中国10年期数据暂无可靠免费接口。*")
 lines_md.append("")
 
-output_path = Path("reports/20251011背景扫描cx_V2.md")
+output_path = OUTPUT_PATH
+output_path.parent.mkdir(parents=True, exist_ok=True)
 output_path.write_text("\n".join(lines_md), encoding="utf-8")
 print(f"Report written to {output_path}")

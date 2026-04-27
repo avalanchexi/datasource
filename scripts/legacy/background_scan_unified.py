@@ -18,6 +18,8 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
@@ -274,7 +276,7 @@ def main() -> None:
 Examples:
   Current flow: use AGENTS.md Stage1 -> Stage2 unified -> Stage2.5 -> Stage3 -> Stage4.
   Historical diagnostics only:
-    python scripts/legacy/background_scan_unified.py --run-archived --date 2025-11-14 --output reports/20251114背景扫描120.md
+    python scripts/legacy/background_scan_unified.py --run-archived --date 2025-11-14 --output reports/archive/20251114背景扫描120_archived.md
 """,
     )
     parser.add_argument("--date", required=True, help="End date (YYYY-MM-DD)")
@@ -314,9 +316,17 @@ Examples:
             file=sys.stderr,
         )
         sys.exit(2)
+    output_path = Path(args.output).resolve()
+    archive_dir = (PROJECT_ROOT / "reports" / "archive").resolve()
+    if archive_dir not in output_path.parents:
+        print(
+            "[ARCHIVED] Archived diagnostics must write under reports/archive/.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     scanner = UnifiedBackgroundScanner(
         end_date=args.date,
-        output_path=args.output,
+        output_path=str(output_path),
         keep_intermediates=args.keep_intermediates,
         enable_mcp=args.enable_mcp,
         enable_full_mcp=args.enable_full_mcp,
