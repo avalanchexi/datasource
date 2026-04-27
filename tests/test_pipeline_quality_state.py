@@ -113,3 +113,49 @@ def test_pipeline_quality_state_flags_commodity_window_mismatch():
     reasons = {row["reason"] for row in state["window_metric_issues"]}
     assert "daily_change_from_change_5d" in reasons
     assert "ytd_change_from_change_120d" in reasons
+
+
+def test_pipeline_quality_state_requires_source_url_when_any_fund_flow_value_is_real():
+    payload = _base_payload()
+    payload["fund_flow"] = {
+        "northbound": {
+            "recent_5d": 0,
+            "total_120d": 520.3,
+            "trend": "流入",
+            "source": "websearch_manual",
+        }
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    assert {"category": "fund_flow", "key": "northbound", "reason": "missing_source_url"} in state["source_url_issues"]
+    assert {"category": "fund_flow", "key": "northbound", "reason": "missing_source_url"} in state["quality_blockers"]
+
+
+def test_pipeline_quality_state_flags_fund_flow_window_missing_for_missing_or_zero_values():
+    payload = _base_payload()
+    payload["fund_flow"] = {
+        "northbound": {
+            "recent_5d": 0,
+            "total_120d": 520.3,
+            "source_url": "https://example.com/northbound",
+        },
+        "southbound": {
+            "recent_5d": 31.2,
+            "source_url": "https://example.com/southbound",
+        },
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    fund_flow_blockers = [
+        row
+        for row in state["quality_blockers"]
+        if row["category"] == "fund_flow" and row["reason"] == "fund_flow_window_missing"
+    ]
+    assert {"key": "northbound", "field": "recent_5d"} in [
+        {"key": row["key"], "field": row["details"]["field"]} for row in fund_flow_blockers
+    ]
+    assert {"key": "southbound", "field": "total_120d"} in [
+        {"key": row["key"], "field": row["details"]["field"]} for row in fund_flow_blockers
+    ]

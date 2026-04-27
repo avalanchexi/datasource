@@ -53,11 +53,12 @@ def build_pipeline_quality_state(
     for category, key, entry in _iter_entries(payload):
         value = _entry_value(category, entry)
         has_real_value = _has_real_value(value)
+        has_any_real_value = _entry_has_any_real_value(category, entry)
 
         if has_real_value and _is_compare_missing(category, entry):
             add_issue(category, key, "missing_compare_values")
 
-        if has_real_value and _needs_source_url(entry):
+        if has_any_real_value and _needs_source_url(entry):
             issue = add_issue(category, key, "missing_source_url")
             if issue not in source_url_issues:
                 source_url_issues.append(issue)
@@ -166,6 +167,16 @@ def _entry_value(category: str, entry: Dict[str, Any]) -> Any:
 
 def _has_real_value(value: Any) -> bool:
     return not is_stage2_number_placeholder(value) and not is_legacy_713_placeholder(value)
+
+
+def _entry_has_any_real_value(category: str, entry: Dict[str, Any]) -> bool:
+    fields_by_category = {
+        "fund_flow": ("recent_5d", "total_120d", "current_value"),
+    }
+    fields = fields_by_category.get(category)
+    if not fields:
+        return _has_real_value(_entry_value(category, entry))
+    return any(_has_real_value(entry.get(field)) for field in fields if field in entry)
 
 
 def _is_compare_missing(category: str, entry: Dict[str, Any]) -> bool:
