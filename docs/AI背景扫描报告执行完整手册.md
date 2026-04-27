@@ -2,8 +2,11 @@
 
 **版本**: V4.2 数据完整性保障版
 **更新时间**: 2025-12-09
-**适用场景**: Claude Code AI执行120日背景扫描报告生成
-**文档定位**: AI执行与用户使用的统一权威手册
+**适用场景**: 历史背景扫描生成器参考
+**文档定位**: 已归档手册；当前权威流程以 `AGENTS.md` 为准
+
+> 当前生产流水线为 Stage1 → Stage2 unified → Stage2.5 → Stage3 → Stage4。
+> `scripts/utility/background_scan_120d_generator.py` 仅保留历史/手工分析用途，不作为报告主入口或补数入口。
 
 **版本历程**:
 - V2.1 (2025-10-22): MCP增强，资金流向优化，异常零值检测
@@ -582,15 +585,17 @@ python scripts/background_scan_unified.py \
 **从V2.1迁移到V3.1**:
 
 ```bash
-# 旧方式 (V2.1)
+# 旧方式 (V2.1，已归档)
 python scripts/utility/background_scan_120d_generator.py \
     --date 2025-11-10 \
     --output reports/20251110背景扫描120.md
 
-# 新方式 (V3.1) - 只需修改脚本路径
-python scripts/background_scan_unified.py \
-    --date 2025-11-10 \
-    --output reports/20251110背景扫描120.md
+# 当前方式：按 AGENTS.md 运行 Stage1 -> Stage4
+bash run_clean.sh python scripts/stage1_data_collector.py --date "$DATE" --output "data/runs/${DATE_NH}/market_data.json"
+bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data "data/runs/${DATE_NH}/market_data.json" --output "data/runs/${DATE_NH}/market_data_stage2.json" --phase all --execute-search --fund-flow-backend tavily
+bash run_clean.sh python scripts/stage2_5_injector.py "data/runs/${DATE_NH}/market_data_stage2.json" "data/runs/${DATE_NH}/websearch_results_manual.json" "data/runs/${DATE_NH}/market_data_complete.json"
+bash run_clean.sh python scripts/stage3_pring_analyzer.py --market-data "data/runs/${DATE_NH}/market_data_complete.json" --output "data/runs/${DATE_NH}/pring_result.json" --allow-estimated
+bash run_clean.sh python scripts/stage4_report_generator.py --market-data "data/runs/${DATE_NH}/market_data_complete.json" --pring-result "data/runs/${DATE_NH}/pring_result.json" --output "reports/${DATE}-背景扫描120.md"
 ```
 
 **高级用法**:
@@ -924,15 +929,14 @@ asyncio.run(validate_strict_data_policy())
 ### AI执行指令
 
 ```bash
-# 推荐：一键执行完整流程
-PYTHONIOENCODING=utf-8 python scripts/utility/background_scan_120d_generator.py --date YYYY-MM-DD --output reports/YYYY-MM-DD-背景扫描120_raw.md
-
-# 或使用流水线脚本
-python scripts/run_background_scan_pipeline.py --date YYYY-MM-DD [--use-mcp] [--skip-completion]
+# 当前推荐：按 AGENTS.md 的 Stage1 -> Stage4 执行
+bash run_preflight.sh
+bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
+bash run_clean.sh python scripts/stage2_5_injector.py --help
 ```
 
 ### 完成标志
-✅ 生成`reports/YYYY-MM-DD-背景扫描120_raw.md`，核心表格框架存在，资金流向数据完整
+✅ 生成 `reports/${DATE}-背景扫描120.md`，且 `gap_monitor.json` 无 pending/manual_required，资金流向通过 Stage2.5 注入或 Stage2 unified 校验
 
 **预计时间**: 12分钟
 
@@ -1334,37 +1338,30 @@ Read reports/20251030背景扫描120_v2.md
 - **可能原因1**: WebSearch结果为空或被异常零值策略拦截
 - **可能原因2**: 官方渠道未公布当日数据，需要人工补录
 
-**步骤3: 代码检查**
+**步骤3: 补数入口**
 ```bash
-Read scripts/utility/background_scan_120d_generator.py
-# 定位collect_fund_flow_data()函数
+# 不修改历史 generator；将实时来源写入 Stage2.5 manual JSON
+notepad data/runs/${DATE_NH}/websearch_results_manual.json
 ```
 
 **步骤4: 优化策略选择**
-- **策略选择**: 使用策略C(数据验证) + MCP补充
-- **实施方案**: 检测异常零值,使用WebSearch获取媒体报道数据
+- **策略选择**: Stage2.5 manual/WebSearch 注入
+- **实施方案**: 对 `recent_5d` / `total_120d` / `trend` 写入可解析数值，并提供 `source_url`
 
-**步骤5: 代码优化**
-```python
-Edit file_path="scripts/utility/background_scan_120d_generator.py"
-     old_string="""northbound_5d = float(northbound_data.get('5日流入', 0))
-    northbound_120d = float(northbound_data.get('120日流入', 0))"""
-     new_string="""northbound_5d = float(northbound_data.get('5日流入', 0))
-    northbound_120d = float(northbound_data.get('120日流入', 0))
-
-    # 数据合理性验证
-    if northbound_5d == 0 and northbound_120d == 0:
-        logger.warning("北向资金数据异常,使用MCP WebSearch补充")
-        # 使用WebSearch获取最新报道
-        northbound_trend = await fetch_fund_flow_trend_mcp()
-        northbound_5d_text = northbound_trend.get('5日', '连续净流入')
-        northbound_120d_text = northbound_trend.get('120日', '达三年高位')"""
+**步骤5: 注入**
+```bash
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
 **步骤6: 验证改进**
-```markdown
-# 优化后报告
-| 北向资金 | 连续净流入 | 达三年高位 | 持续流入 | 2024年8月16日起不再每日公布具体金额 |
+```bash
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated
 ```
 
 ---

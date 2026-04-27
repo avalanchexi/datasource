@@ -21,5 +21,5 @@ schema and injected through `scripts/stage2_5_injector.py`, following
 Older MCP and background-scan scripts in this directory, including
 `background_scan_120d.py`, `background_scan_unified.py`,
 `run_background_scan_pipeline.py`, `mcp_data_enhancer.py`, and
-`stage2_mcp_enhancer.py`, are deprecated. Their active replacement is
-Stage2 unified enhancement plus Stage2.5 injection.
+`stage2_mcp_enhancer.py` / `stage2a_mcp_enhancer.py`, are deprecated. Their
+active replacement is Stage2 unified enhancement plus Stage2.5 injection.

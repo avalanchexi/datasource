@@ -16,7 +16,7 @@
 
 ### 核心特点
 
-- **6个标准阶段**: Stage 1 → Stage 2a → AI补全 → Stage 2 → Stage 3 → 验证
+- **6个标准阶段**: 本节为归档流程；当前请使用 Stage1 → Stage2 unified → Stage2.5 → Stage3 → Stage4
 - **数据完整性**: 95% (验证结果)
 - **执行时间**: 5-6分钟
 - **输出质量**: 4.8KB, 9 sections, Markdown格式
@@ -58,29 +58,31 @@ python -c "import json; data=json.load(open('data/20251114_market_data.json', en
 
 ---
 
-### Stage 2a: MCP Essential增强 (60-90秒)
+### Stage 2a: MCP Essential增强（已归档，不执行）
 
-**脚本**: `scripts/stage2a_mcp_enhancer.py` [DEPRECATED但可用]
+**脚本**: `scripts/legacy/stage2a_mcp_enhancer.py` [ARCHIVED，不推荐]
 
-**命令**:
+**当前替代命令**:
 ```bash
-python scripts/stage2a_mcp_enhancer.py \
-  --market-data data/20251114_market_data.json \
-  --output data/20251114_market_data_enhanced.json
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data data/runs/${DATE_NH}/market_data.json \
+  --output data/runs/${DATE_NH}/market_data_stage2.json \
+  --phase all --execute-search \
+  --fund-flow-backend tavily
 ```
 
 **输出**:
-- 文件: `data/YYYYMMDD_market_data_enhanced.json`
-- 数据完整性: 50-60%
-- MCP提示日志: `logs/mcp_prompts_YYYY-MM-DD.md`
+- 旧 Stage2a 不再作为输出来源
+- Stage2 unified 输出: `data/runs/${DATE_NH}/market_data_stage2.json`
+- 缺口通过 Stage2.5 manual/WebSearch JSON 注入到 `market_data_complete.json`
 
 **增强目标**:
 - 债券收益率 (2): CN10Y, CN10Y_CDB
 - 商品价格 (5): COMEX黄金, WTI, Brent, COMEX铜, BCOM
 
 **注意事项**:
-- ⚠️ 脚本显示弃用警告，但功能正常
-- ⚠️ 如果无WebSearch results文件，部分增强可能失败
+- ⚠️ 不要使用旧 MCP flow
+- ✅ 当前主路径是 Stage2 unified + Stage2.5 注入
 
 ---
 
@@ -137,8 +139,8 @@ python scripts/stage2a_mcp_enhancer.py \
   },
   "monetary_policy": { ... },
   "fund_flow": { ... },
-  "bonds": { ... },  // 可选，如果Stage 2a失败
-  "commodities": [ ... ]  // 可选，如果Stage 2a失败
+  "bonds": { ... },  // 可选，Stage2 unified 仍有缺口时补
+  "commodities": [ ... ]  // 可选，Stage2 unified 仍有缺口时补
 }
 ```
 
@@ -355,17 +357,17 @@ grep -A 7 "## 六、宏观经济指标" reports/20251114背景扫描120.md
 
 ## 故障排查
 
-### 问题1: Stage 2a显示弃用警告
+### 问题1: Stage 2a/MCP 旧流程如何处理
 
 **现象**:
 ```
-[WARN] stage2a_mcp_enhancer.py 已弃用，请改用 stage2_mcp_enhancer.py
+[WARN] stage2a_mcp_enhancer.py 已归档
 ```
 
 **解决方案**:
-- 这是正常警告，不影响功能
-- 脚本仍会正常执行并输出数据
-- 可以忽略此警告继续执行
+- 不要继续执行旧 Stage2a/MCP flow
+- 改用 `scripts/stage2_unified_enhancer.py`
+- 剩余缺口写入 `websearch_results_manual.json` 后通过 `scripts/stage2_5_injector.py` 注入
 
 ### 问题2: WebSearch数据注入失败
 
@@ -410,16 +412,15 @@ python -c "import json; data=json.load(open('data/YYYYMMDD_market_data_complete.
 python scripts/stage1_data_collector.py --date 2025-11-24 --output data/20251124_market_data.json
 # ✅ Output: ~18KB, 40% completeness（休市自动回退）
 
-# Stage 2a
-python scripts/stage2a_mcp_enhancer.py --market-data data/20251114_market_data.json --output data/20251114_market_data_enhanced.json
-# ⚠️ Warning: Deprecated, but works
-# ✅ Output: Enhanced JSON, 50-60% completeness
+# Stage 2 unified
+bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data data/runs/20251124/market_data.json --output data/runs/20251124/market_data_stage2.json --phase all --execute-search --fund-flow-backend tavily
+# ✅ Output: market_data_stage2.json
 
 # AI补全 (Manual WebSearch + Injection)
 # 1. Execute 14 WebSearch queries
 # 2. Create websearch_results_20251114.json
 # 3. Inject data
-python inject_websearch_data.py data/20251124_market_data_enhanced.json data/websearch_results_20251124.json data/20251124_market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py data/runs/20251124/market_data_stage2.json data/runs/20251124/websearch_results_manual.json data/runs/20251124/market_data_complete.json
 # ✅ Output: 21 items injected, 100.0% completeness
 
 # Stage 2
@@ -444,8 +445,8 @@ powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
 | 脚本 | 状态 | 说明 |
 |------|------|------|
 | `stage1_data_collector.py` | ✅ ACTIVE | API数据收集 |
-| `stage2a_mcp_enhancer.py` | ⚠️ DEPRECATED | 功能正常但已弃用 |
-| `inject_websearch_data.py` | ✅ RECOMMENDED | AI补全数据注入 |
+| `scripts/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | 旧 MCP flow，不推荐 |
+| `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage2.5 WebSearch/manual 数据注入 |
 | `run_pring_analysis.py` | ✅ RECOMMENDED | 简化Pring分析 |
 | `generate_simple_report.py` | ✅ RECOMMENDED | 简化报告生成 |
 | `scripts/stage3_pring_analyzer.py` | ✅ UPDATED | Pring分析主入口（含DR007领先指标） |
@@ -456,7 +457,7 @@ powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
 | 阶段 | 文件名 | 说明 |
 |------|--------|------|
 | Stage 1 | `YYYYMMDD_market_data.json` | API原始数据 |
-| Stage 2a | `YYYYMMDD_market_data_enhanced.json` | MCP增强数据 |
+| Stage 2 | `data/runs/YYYYMMDD/market_data_stage2.json` | Stage2 unified 增强数据 |
 | AI补全 | `websearch_results_YYYYMMDD.json` | WebSearch结果 |
 | AI补全 | `YYYYMMDD_market_data_complete.json` | 完整数据 |
 | Stage 2 | `YYYYMMDD_pring_result.json` | Pring分析结果 |

@@ -182,14 +182,17 @@ PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
   --fund-flow-backend tavily \
   --execute-search
 
-# 资金流向为零值时，请运行 MCP 专属脚本
-python scripts/utility/background_scan_120d_generator.py
+# 资金流向为零值时：写入 Stage2.5 manual/WebSearch JSON 后注入
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 
 # 工具脚本 (移动到 scripts/utility/)
 python scripts/utility/get_real_economic_data.py     # 获取最新经济数据用于库存周期验证
 python scripts/utility/calculate_na_data.py         # 基于最新数据计算NA值填充
 python scripts/utility/generate_background_scan.py  # 背景市场扫描报告生成
-python scripts/utility/background_scan_120d_generator.py  # 120日背景扫描生成器
+python scripts/utility/background_scan_120d_generator.py  # 历史/手工分析用，不作为补数入口
 ```
 
 **V2.0 重构特色功能**：
@@ -345,7 +348,7 @@ datasource/
 │   │   ├── calculate_na_data.py   # NA数据计算工具
 │   │   ├── get_real_economic_data.py # 经济数据获取工具
 │   │   ├── generate_background_scan.py # 背景扫描生成工具
-│   │   └── background_scan_120d_generator.py # 120日背景扫描生成器
+│   │   └── background_scan_120d_generator.py # 历史/手工分析用，不作为补数入口
 │   └── archive/                   # 🆕 已归档脚本
 ├── templates/                     # 📝 报告模板
 ├── assets/                        # 🖼️ 图片和静态资源
@@ -491,7 +494,7 @@ datasource/
 - 支持 AKShare 和 TuShare 数据源
 - 实现统一的数据接口
 - 提供故障转移和缓存功能
-# 资金流向后端选择（默认 tavily，可选 mcp/hybrid）
+# 资金流向后端固定为 tavily；缺口转 Stage2.5 manual/WebSearch 注入
 PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
   --market-data data/runs/${DATE_NH}/market_data.json \
   --execute-search \

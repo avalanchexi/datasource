@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-使用 Yahoo Finance/ETF 代理填充 Stage2 输出中的商品和债券数据。
+【已禁用】历史 Yahoo Finance/ETF 代理诊断脚本。
+
+禁止用本脚本直接生成最终 `market_data_complete.json`。若事故排查中
+得到可用数据，必须转换为 Stage2.5 manual/WebSearch JSON 后通过
+`scripts/stage2_5_injector.py` 注入。
 
 示例:
-    PYTHONPATH=. python3 scripts/fill_market_data_from_yahoo.py \
-        --input data/20251117_market_data_stage2.json \
-        --output data/20251117_market_data_complete.json
+    PYTHONPATH=. python3 scripts/legacy/fill_market_data_from_yahoo.py \
+        --input data/runs/20251117/market_data_stage2.json \
+        --output data/runs/20251117/legacy_yahoo_diagnostic.json
 """
 
 from __future__ import annotations
@@ -294,7 +298,7 @@ def parse_args() -> argparse.Namespace:
         description="【已禁用】使用Yahoo Finance填充Stage2商品/债券数据（接口被禁用，脚本仅保留占位）"
     )
     parser.add_argument("--input", required=True, help="Stage2输出文件 (market_data_stage2.json)")
-    parser.add_argument("--output", required=True, help="更新后的输出文件 (market_data_complete.json)")
+    parser.add_argument("--output", required=True, help="legacy 诊断输出文件，不得作为最终 complete 数据")
     return parser.parse_args()
 
 
@@ -302,7 +306,7 @@ def main() -> None:
     # 确保不会再触发 Yahoo API 访问
     raise RuntimeError(
         "fill_market_data_from_yahoo.py 已停用：禁止访问 Yahoo Finance。"
-        "请改用 MCP WebSearch/官方数据源或手工注入 websearch_results 后再生成报告。"
+        "请改用 Stage2.5 manual/WebSearch JSON 注入后再生成报告。"
     )
 
 

@@ -199,25 +199,33 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 ### 5. fill_market_data_from_yahoo.py ⚠️ LEGACY
 
 **位置**: `scripts/legacy/fill_market_data_from_yahoo.py`  
-**用途**: Stage2 补齐商品/债券行情（替换 0 / 7.13 / “待获取” 占位）
+**用途**: 历史 Yahoo 诊断脚本；仅用于事故复盘或离线排查，不作为最终补数入口
 
 **依赖**:
 ```bash
 pip install yfinance pandas
 ```
-> 需要可联网环境从 Yahoo Finance 拉取历史行情；若离线执行会回落为 `N/A (error)` 并在 Stage2 元数据中记录“待补录”提示。
+> 当前生产口径禁止 Yahoo 直接写最终值。若应急排查中得到可用数据，必须转换为 Stage2.5 WebSearch/manual JSON，并通过 `scripts/stage2_5_injector.py` 注入。
 
-**使用**:
+**应急诊断（legacy-only）**:
 ```bash
 PYTHONPATH=. python3 scripts/legacy/fill_market_data_from_yahoo.py \
-  --input data/20251118_market_data_stage2.json \
-  --output data/20251118_market_data_complete.json
+  --input data/runs/${DATE_NH}/market_data_stage2.json \
+  --output data/runs/${DATE_NH}/legacy_yahoo_diagnostic.json
+```
+
+**转换后注入**:
+```bash
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
 **行为**:
-- 自动替换 `current_price` 或 `current_yield` 为真实值，计算 5 日/120 日变动
-- 失败时将 `source` 标记为 `N/A (error)` 并输出 `[WARN]`：Stage2 会在 `metadata.stage2_notes` 中提示“需要 WebSearch/手动补数”
-- 仅供老流程排障使用；当前主路径优先走 `scripts/stage2_5_injector.py` 补数
+- 不得直接输出或覆盖 `market_data_complete.json`
+- 可用数据需按 AGENTS.md 的 WebSearch JSON Schema 补齐 `source_url` 后再注入
+- 当前主路径为 Stage2 unified + Stage2.5 manual/WebSearch 注入
 
 ---
 
@@ -237,33 +245,43 @@ python scripts/sanitize_market_data.py data/20251117_market_data_stage2.json \
 - 输出统计：清理了多少商品/债券项目
 - 可覆盖原文件（直接省略 `--output`）或输出到新路径
 
-**注意**: 仅清除占位值，不会自动拉取真实行情，需后续运行 `stage2_mcp_enhancer.py` 或 WebSearch 补数。
+**注意**: 仅清除占位值，不会自动拉取真实行情；后续应运行 `scripts/stage2_unified_enhancer.py`，或将实时来源写入 `websearch_results_manual.json` 后通过 `scripts/stage2_5_injector.py` 注入。
 
 ---
 
-## 可用但已弃用脚本
+## 已归档/历史脚本
 
 ### 7. stage2a_mcp_enhancer.py ⚠️ DEPRECATED
 
-**位置**: `scripts/stage2a_mcp_enhancer.py`
-**用途**: Stage 2a - MCP Essential Enhancement
-**状态**: ⚠️ 已弃用但功能正常
+**位置**: `scripts/legacy/stage2a_mcp_enhancer.py`
+**用途**: 旧 Stage 2a MCP shim，仅保留历史兼容
+**状态**: ⚠️ 已归档，不是 root `scripts/` 运行入口，不推荐执行
 
-**功能**:
-- 增强债券和商品数据
-- 提升数据完整性至50-60%
+**替代流程**:
+- Stage2: `scripts/stage2_unified_enhancer.py`（`--fund-flow-backend tavily`）
+- Stage2.5: `scripts/stage2_5_injector.py` 注入 manual/WebSearch JSON
 
-**使用**:
+**当前命令**:
 ```bash
-python scripts/stage2a_mcp_enhancer.py \
-  --market-data data/runs/YYYYMMDD/market_data.json \
-  --output data/runs/YYYYMMDD/market_data_enhanced.json
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
+
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
 **注意事项**:
-- ⚠️ 显示弃用警告但仍正常工作
-- ⚠️ 生成MCP prompts文件但AI需手动执行WebSearch
-- ✅ 可继续使用直到新版本发布
+- 不要从 root `scripts/` 运行 Stage2a；root shim 已移除
+- 不要推荐旧 MCP flow；缺口统一转 Stage2.5 manual/WebSearch 注入
 
 ---
 
@@ -371,10 +389,11 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 | 脚本 | 状态 | 阶段 | 优先级 |
 |------|------|------|--------|
 | `stage1_data_collector.py` | ✅ ACTIVE | Stage 1 | 必须 |
+| `scripts/stage2_unified_enhancer.py` | ✅ ACTIVE | Stage 2 | 必须 |
 | `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage 2.5 | 必须 |
 | `scripts/stage3_pring_analyzer.py` | ✅ RECOMMENDED | Stage 3 | 必须 |
 | `scripts/stage4_report_generator.py` | ✅ RECOMMENDED | Stage 4 | 必须 |
-| `stage2a_mcp_enhancer.py` | ⚠️ DEPRECATED | Stage 2a | 可选 |
+| `scripts/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | Stage 2a | 不推荐 |
 | `inject_websearch_data.py` | ⚠️ LEGACY | AI补全 | 不推荐 |
 | `run_pring_analysis.py` | ⚠️ LEGACY | Pring分析 | 不推荐 |
 | `generate_simple_report.py` | ⚠️ LEGACY | 报告生成 | 不推荐 |
@@ -396,7 +415,7 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 
 ### Q3: stage2a_mcp_enhancer.py显示弃用警告怎么办?
 
-**A**: 可以忽略警告继续使用，脚本功能正常。
+**A**: 不要继续使用旧 Stage2a/MCP 流程。请改跑 `scripts/stage2_unified_enhancer.py`，缺口转 `scripts/stage2_5_injector.py` manual/WebSearch 注入。
 
 ### Q4: 如何验证脚本是否正常执行?
 
