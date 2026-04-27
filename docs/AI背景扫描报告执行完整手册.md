@@ -1412,9 +1412,9 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 - 解决: 记录缺口，继续 Stage2 unified；仍缺失时进入 Stage2.5 manual/WebSearch JSON 注入
 - 标注: `tavily+deepseek` 或 Stage2.5 `source_url`
 
-**问题2: WebFetch返回错误**
-- 解决: 切换WebSearch多源搜索
-- 备用: 使用不同目标网站
+**问题2: 历史 WebFetch/WebSearch 口径失败**
+- 解决: 不再手工切换旧 MCP 工具；检查 `gap_monitor.json`，将缺口写入 Stage2.5 manual/WebSearch JSON 后注入
+- 备用: 在 `websearch_results_manual.json` 中保留 `source_url` 与期次说明
 
 **问题3: 数据格式异常**
 - 解决: 人工校验并重新获取
