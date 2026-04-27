@@ -93,22 +93,22 @@ PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
   --gap-monitor data/runs/${DATE_NH}/gap_monitor.json
 
 # Stage 2.5: WebSearch 注入补缺（脚本位于项目根目录）
-python scripts/stage2_5_injector.py \
-  data/runs/${DATE_NH}/market_data_stage2.json \
-  data/runs/${DATE_NH}/websearch_results_manual.json \
-  data/runs/${DATE_NH}/market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 
 # Stage 3: Pring 分析（--allow-estimated 让 is_estimated=True 的数据参与评分）
-PYTHONPATH=./src python scripts/stage3_pring_analyzer.py \
-  --market-data data/runs/${DATE_NH}/market_data_complete.json \
-  --output data/runs/${DATE_NH}/pring_result.json \
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
   --allow-estimated
 
 # Stage 4: 报告生成（正式入口）
-PYTHONPATH=./src python scripts/stage4_report_generator.py \
-  --market-data data/runs/${DATE_NH}/market_data_complete.json \
-  --pring-result data/runs/${DATE_NH}/pring_result.json \
-  --output reports/${DATE}-背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md"
 # 兼容入口：tests/scripts/generate_simple_report_test.py（保留历史调用）
 
 # 验证：确保无缺口
@@ -148,7 +148,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - 解法：直接 Python 编辑 complete.json：
   ```bash
   python3 -c “
-  import json; p='data/${DATE_NH}_market_data_complete.json'
+  import json; p='data/runs/${DATE_NH}/market_data_complete.json'
   d=json.load(open(p))
   d['macro_indicators']['bdi']['is_estimated']=False
   # 同时从顶层 missing_items 移除 bdi
@@ -189,7 +189,7 @@ json.dump(gm,open('data/runs/${DATE_NH}/gap_monitor.json','w'),ensure_ascii=Fals
 ```bash
 python -c "
 import json
-d = json.load(open('data/${DATE_NH}_market_data_complete.json'))
+d = json.load(open('data/runs/${DATE_NH}/market_data_complete.json'))
 comp = d.get('metadata',{}).get('data_completeness', 0)
 print(f'数据完整度: {comp*100:.1f}%')
 if comp < 0.8:

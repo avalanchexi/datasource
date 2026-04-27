@@ -152,6 +152,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 将实时搜索结果写入 `data/runs/${DATE_NH}/websearch_results_manual.json`，再执行：
 
 ```bash
+# Stage2.5 -> Stage3 -> Stage4 使用统一 run path contract
 bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/market_data_stage2.json" \
   "data/runs/${DATE_NH}/websearch_results_manual.json" \

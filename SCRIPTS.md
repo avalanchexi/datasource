@@ -62,7 +62,7 @@ python3 scripts/stage2_unified_enhancer.py \
        data/runs/DATE/websearch_results*.json > data/runs/DATE/websearch_results_merged.json
      ```
      （如需去重同一 symbol，可先清理旧文件或改用 `tac ... | jq 'reduce .[] as $it ({}; .fund_flow += $it.fund_flow // {} )'` 让后写覆盖前写。）
-  3) 注入：`python scripts/stage2_5_injector.py data/runs/DATE/market_data_stage2.json data/runs/DATE/websearch_results_merged.json data/runs/DATE/market_data_complete.json`
+  3) 注入：`bash run_clean.sh python scripts/stage2_5_injector.py "data/runs/${DATE_NH}/market_data_stage2.json" "data/runs/${DATE_NH}/websearch_results_manual.json" "data/runs/${DATE_NH}/market_data_complete.json"`
   4) 确认 `data/runs/DATE/gap_monitor.json` 为空，再跑 Stage3/报告。
 - 保留多个 stage2 版本时，请用不同文件名（如 `_stage2_v1.json` / `_stage2_fund.json`），但最终仅把“合并后注入”的 complete.json 传给 Stage3。
 
@@ -103,10 +103,10 @@ python scripts/stage1_data_collector.py \
 
 **使用**:
 ```bash
-python scripts/stage2_5_injector.py \
-  data/runs/YYYYMMDD/market_data_stage2.json \
-  data/runs/YYYYMMDD/websearch_results_manual.json \
-  data/runs/YYYYMMDD/market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
 **输入**:
@@ -137,9 +137,10 @@ python scripts/stage2_5_injector.py \
 
 **使用**:
 ```bash
-python run_pring_analysis.py \
-  data/runs/YYYYMMDD/market_data_complete.json \
-  data/runs/YYYYMMDD/pring_result.json
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated
 ```
 
 **输入**: `market_data_complete.json` (需95%数据)
@@ -170,10 +171,10 @@ python run_pring_analysis.py \
 
 **使用**:
 ```bash
-python generate_simple_report.py \
-  data/runs/YYYYMMDD/market_data_complete.json \
-  data/runs/YYYYMMDD/pring_result.json \
-  reports/YYYY-MM-DD-背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md"
 ```
 
 **输入**:
@@ -281,9 +282,10 @@ python scripts/stage2a_mcp_enhancer.py \
 
 **用法**:
 ```bash
-PYTHONPATH=. python3 scripts/stage3_pring_analyzer.py \
-  --market-data data/runs/YYYYMMDD/market_data_complete.json \
-  --output data/runs/YYYYMMDD/pring_result.json
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated
 ```
 
 **注意事项**:
@@ -327,6 +329,7 @@ SyntaxError: f-string: single '}' is not allowed
 ```bash
 # 设置日期变量
 DATE=2025-11-14
+DATE_NH=${DATE//-/}
 
 # Stage 1: API数据收集
 python scripts/stage1_data_collector.py \
@@ -342,24 +345,25 @@ python scripts/stage2a_mcp_enhancer.py \
 # 1. AI执行14个WebSearch查询
 # 2. 创建 websearch_results_${DATE}.json
 # 3. 运行注入脚本
-python inject_websearch_data.py \
-  data/${DATE}_market_data_enhanced.json \
-  data/websearch_results_${DATE}.json \
-  data/${DATE}_market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 
 # Stage 2: Pring分析
-python run_pring_analysis.py \
-  data/${DATE}_market_data_complete.json \
-  data/${DATE}_pring_result.json
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated
 
 # Stage 3: 报告生成
-python generate_simple_report.py \
-  data/${DATE}_market_data_complete.json \
-  data/${DATE}_pring_result.json \
-  reports/${DATE}背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md"
 
 # 验证
-powershell -Command "(Get-Item 'reports\${DATE}背景扫描120.md').Length"
+powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 ```
 
 ---

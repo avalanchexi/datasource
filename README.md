@@ -88,15 +88,16 @@ python tests/test_datasource.py
 
 ```bash
 # Pring 分析快速验证（tests/scripts）
-PYTHONPATH=.:src python tests/scripts/run_pring_analysis_test.py \
-  data/runs/YYYYMMDD/market_data_complete.json \
-  data/runs/YYYYMMDD/pring_result.json
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated
 
 # 正式报告生成
-PYTHONPATH=.:src python scripts/stage4_report_generator.py \
-  --market-data data/runs/YYYYMMDD/market_data_complete.json \
-  --pring-result data/runs/YYYYMMDD/pring_result.json \
-  --output reports/YYYY-MM-DD-背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md"
 ```
 
 
