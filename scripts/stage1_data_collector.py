@@ -438,7 +438,8 @@ class MarketDataCollector:
                 )
 
                 stock_data_list.append(stock_info)
-                print(f"    [OK] 收盘:{analysis['current_price']:.2f}, 120日涨跌:{change_120d:+.1f}%")
+                change_120d_text = f"{change_120d:+.1f}%" if change_120d is not None else "N/A"
+                print(f"    [OK] 收盘:{analysis['current_price']:.2f}, 120日涨跌:{change_120d_text}")
 
             except Exception as e:
                 print(f"    [ERROR] {name} 处理失败: {e}")
@@ -733,6 +734,7 @@ class MarketDataCollector:
                 total_120d=None,
                 trend='待获取',
                 source='待WebSearch补充',
+                metric_basis=None,
                 note='需要WebSearch/Tavily实时获取'
             )
             pending_missing.append(flow)
@@ -754,6 +756,7 @@ class MarketDataCollector:
                 total_120d=round(float(nb_total), 2) if nb_total is not None else None,
                 trend='流入' if nb_recent > 0 else '流出' if nb_recent < 0 else '未知',
                 source='TuShare moneyflow_hsgt',
+                metric_basis='net_flow_sum',
                 note=f'北向资金近5日/120日累计（亿元，原始字段万元）{note_suffix}',
             )
             if nb_total is not None and full_120_window:
@@ -769,6 +772,7 @@ class MarketDataCollector:
                 total_120d=round(float(sb_total), 2) if sb_total is not None else None,
                 trend='流入' if sb_recent > 0 else '流出' if sb_recent < 0 else '未知',
                 source='TuShare moneyflow_hsgt',
+                metric_basis='net_flow_sum',
                 note=f'南向资金近5日/120日累计（亿元，原始字段万元）{note_suffix}',
             )
             if sb_total is not None and full_120_window:
@@ -1283,16 +1287,18 @@ class MarketDataCollector:
             print(f"    [ERROR] 数据准备失败: {e}")
             return None
 
-    def _calculate_change(self, df: pd.DataFrame, days: int) -> float:
-        """计算指定天数的涨跌幅"""
+    def _calculate_change(self, df: pd.DataFrame, days: int) -> Optional[float]:
+        """计算指定交易日窗口涨跌幅，days=120 表示 current vs t-120。"""
         try:
-            if len(df) < days:
-                return 0.0
+            if len(df) <= days:
+                return None
             latest = df.iloc[-1]['close']
-            previous = df.iloc[-days]['close']
+            previous = df.iloc[-(days + 1)]['close']
+            if previous in (None, 0):
+                return None
             return round(((latest / previous) - 1) * 100, 1)
-        except:
-            return 0.0
+        except Exception:
+            return None
 
     def _calculate_slope(self, series: pd.Series) -> float:
         """计算斜率"""
@@ -1945,6 +1951,7 @@ class MarketDataCollector:
                 total_120d=total_delta,
                 trend=self._infer_trend(recent_delta),
                 source="TuShare margin(SSE+SZSE)",
+                metric_basis="balance_delta",
                 note=note
             )
         except Exception:
@@ -1988,6 +1995,7 @@ class MarketDataCollector:
             total_120d=total_delta,
             trend=self._infer_trend(recent_delta),
             source="TuShare daily_info估算",
+            metric_basis="estimated_net_flow",
             note="; ".join(note_parts)
         )
 
@@ -2125,6 +2133,9 @@ class MarketDataCollector:
                 "expected_period": expected_period,
             }
         )
+
+
+Stage1DataCollector = MarketDataCollector
 
 
 def _calc_change_from_trend_history(

@@ -109,3 +109,23 @@ def test_collect_macro_indicators_records_stale_items(monkeypatch):
         if isinstance(item, dict) and "stale_data" in str(item.get("reason"))
     }
     assert {"cpi", "ppi", "pmi"} <= stale_keys
+
+
+def test_calculate_change_uses_true_t_minus_window_baseline():
+    import pandas as pd
+    from scripts.stage1_data_collector import Stage1DataCollector
+
+    df = pd.DataFrame({"close": list(range(1, 123))})
+    collector = Stage1DataCollector.__new__(Stage1DataCollector)
+
+    assert collector._calculate_change(df, 120) == round(((122 / 2) - 1) * 100, 1)
+
+
+def test_calculate_change_returns_none_when_window_unavailable():
+    import pandas as pd
+    from scripts.stage1_data_collector import Stage1DataCollector
+
+    df = pd.DataFrame({"close": list(range(1, 121))})
+    collector = Stage1DataCollector.__new__(Stage1DataCollector)
+
+    assert collector._calculate_change(df, 120) is None

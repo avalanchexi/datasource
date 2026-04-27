@@ -923,3 +923,62 @@ def test_stage25_preserves_manual_source_url_and_fund_flow_metric_basis(tmp_path
     assert output["commodities"][0]["source_url"] == "https://example.com/gold"
     assert output["fund_flow"]["northbound"]["source_url"] == "https://example.com/northbound"
     assert output["fund_flow"]["northbound"]["metric_basis"] == "net_flow_sum"
+
+
+def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):
+    existing = {
+        "symbol": "GC=F",
+        "name": "COMEX黄金",
+        "current_price": None,
+        "daily_change": None,
+        "ytd_change": None,
+        "source": "占位",
+    }
+    payload = {
+        "symbol": "GC=F",
+        "current_price": "3450.0",
+        "source": "manual https://example.com/gold",
+        "source_url": "https://example.com/gold",
+    }
+
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_5d": 1.5,
+            "change_120d": 12.3,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        },
+    )
+
+    merged = injector._merge_commodity_entry(existing, payload, is_manual=True)
+
+    assert merged["daily_change"] is None
+    assert merged["ytd_change"] is None
+    assert merged["change_120d"] == pytest.approx(12.3)
+    assert merged["change_120d_basis"] == "trend_history"
+    assert "daily_change_basis" not in merged
+    assert "ytd_change_basis" not in merged
+
+
+def test_build_forex_entry_keeps_unknown_changes_as_none(monkeypatch):
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
+    )
+
+    entry = injector._build_forex_entry(
+        {"pair": "USDCNY", "current_rate": "7.1", "source": "manual https://example.com/fx", "source_url": "https://example.com/fx"}
+    )
+
+    assert entry["daily_change"] is None
+    assert entry["change_120d"] is None

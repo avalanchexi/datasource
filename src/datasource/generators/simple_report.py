@@ -722,7 +722,9 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     for idx in stock_indices:
         above_ma50 = "向上" if idx['above_ma50'] else "向下"
         above_ma200 = "向上" if idx['above_ma200'] else "向下"
-        report += f"| {idx['name']} | {idx['current_price']:.2f} | {idx['change_5d']:+.2f}% | {idx['change_120d']:+.1f}% | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
+        change_5d = _fmt_change_cell(idx.get("change_5d"), digits=2, suffix="%")
+        change_120d = _fmt_change_cell(idx.get("change_120d"), digits=1, suffix="%")
+        report += f"| {idx['name']} | {idx['current_price']:.2f} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
 
     report += """
 

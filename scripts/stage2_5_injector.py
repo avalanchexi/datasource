@@ -2635,33 +2635,36 @@ def _backfill_trend_changes(
         if not symbol or current is None:
             continue
         hist = _calc_change_from_trend_history("commodities", symbol, current, base_dir=base_dir, reference_date=reference_date)
+        daily_hist = _calc_daily_change_from_trend_history("commodities", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
-        used_hist_5d = False
-        if _should_backfill_numeric(comm.get("ytd_change")):
+        used_hist_1d = False
+        if _should_backfill_numeric(comm.get("change_120d")):
             if hist.get("change_120d") is not None:
-                comm["ytd_change"] = round(float(hist["change_120d"]), 2)
+                comm["change_120d"] = round(float(hist["change_120d"]), 2)
+                comm["change_120d_basis"] = "trend_history"
                 stats["commodities"] += 1
                 used_hist_120d = True
             else:
-                comm["ytd_change"] = None
+                comm["change_120d"] = None
                 reason = hist.get("reason_120d") or "trend_history_missing"
-                _record_backfill_issue(metadata, "commodities", symbol, "ytd_change", reason)
+                _record_backfill_issue(metadata, "commodities", symbol, "change_120d", reason)
                 _append_note(comm, f"reason={reason}")
         if comm.get("daily_change") is None:
-            if hist.get("change_5d") is not None:
-                comm["daily_change"] = round(float(hist["change_5d"]), 2)
+            if daily_hist.get("change_1d") is not None:
+                comm["daily_change"] = round(float(daily_hist["change_1d"]), 2)
+                comm["daily_change_basis"] = "change_1d"
                 stats["commodities"] += 1
-                used_hist_5d = True
+                used_hist_1d = True
             else:
                 comm["daily_change"] = None
-                reason = hist.get("reason_5d") or "trend_history_missing"
+                reason = daily_hist.get("reason_1d") or "trend_history_missing"
                 _record_backfill_issue(metadata, "commodities", symbol, "daily_change", reason)
                 _append_note(comm, f"reason={reason}")
-        if (used_hist_120d and hist.get("base_120d_estimated")) or (used_hist_5d and hist.get("base_5d_estimated")):
+        if (used_hist_120d and hist.get("base_120d_estimated")) or (used_hist_1d and daily_hist.get("base_1d_estimated")):
             _append_note(comm, "trend_history_base_estimated")
         confidence, confidence_reason = _derive_trend_confidence(
             hist,
-            used_5d=used_hist_5d,
+            used_5d=used_hist_1d,
             used_120d=used_hist_120d,
         )
         if confidence:
@@ -2672,7 +2675,7 @@ def _backfill_trend_changes(
             comm["trend"] = _infer_asset_trend(
                 None,
                 comm.get("daily_change"),
-                comm.get("ytd_change"),
+                comm.get("ytd_change") if comm.get("ytd_change") is not None else comm.get("change_120d"),
                 "commodity",
             )
 
@@ -3139,7 +3142,6 @@ def _merge_commodity_entry(
     # 从 trend_history 计算变化值
     current_price = merged.get('current_price')
     symbol = merged.get('symbol')
-    used_hist_5d = False
     used_hist_120d = False
     if current_price and symbol and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
@@ -3148,27 +3150,22 @@ def _merge_commodity_entry(
             current_price,
             base_dir=trend_history_base_dir,
         )
-        # daily_change 优先使用 payload，否则用历史计算的 change_5d
         merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
         if merged['daily_change'] is None:
-            hist_5d = _coerce_float(hist_changes.get('change_5d'))
-            if hist_5d is not None:
-                merged['daily_change'] = hist_5d
-                used_hist_5d = True
-            else:
-                merged['daily_change'] = existing.get('daily_change', 0.0)
-        # ytd_change 使用 trend_history 的 change_120d
+            merged['daily_change'] = existing.get('daily_change')
         merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))
         if merged['ytd_change'] is None:
-            hist_120d = _coerce_float(hist_changes.get('change_120d'))
-            if hist_120d is not None:
-                merged['ytd_change'] = hist_120d
-                used_hist_120d = True
-            else:
-                merged['ytd_change'] = existing.get('ytd_change', 0.0)
+            merged['ytd_change'] = existing.get('ytd_change')
+        elif payload.get('ytd_change_basis') or 'ytd_change_basis' not in merged:
+            merged['ytd_change_basis'] = payload.get('ytd_change_basis') or 'year_to_date'
+        hist_120d = _coerce_float(hist_changes.get('change_120d'))
+        if hist_120d is not None:
+            merged['change_120d'] = hist_120d
+            merged['change_120d_basis'] = 'trend_history'
+            used_hist_120d = True
         confidence, confidence_reason = _derive_trend_confidence(
             hist_changes,
-            used_5d=used_hist_5d,
+            used_5d=False,
             used_120d=used_hist_120d,
         )
         if confidence:
@@ -3176,8 +3173,14 @@ def _merge_commodity_entry(
         if confidence_reason:
             _append_note(merged, confidence_reason)
     else:
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change')) or existing.get('daily_change', 0.0)
-        merged['ytd_change'] = _coerce_percent(payload.get('ytd_change')) or existing.get('ytd_change', 0.0)
+        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        if merged['daily_change'] is None:
+            merged['daily_change'] = existing.get('daily_change')
+        merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))
+        if merged['ytd_change'] is None:
+            merged['ytd_change'] = existing.get('ytd_change')
+        elif payload.get('ytd_change_basis') or 'ytd_change_basis' not in merged:
+            merged['ytd_change_basis'] = payload.get('ytd_change_basis') or 'year_to_date'
     _copy_source_url(merged, payload)
     _copy_payload_metadata_fields(
         merged,
@@ -3187,7 +3190,12 @@ def _merge_commodity_entry(
 
     # 自动推断商品趋势（基于涨跌幅）
     raw_trend = payload.get('trend', existing.get('trend'))
-    merged['trend'] = _infer_asset_trend(raw_trend, merged.get('daily_change'), merged.get('ytd_change'), "commodity")
+    merged['trend'] = _infer_asset_trend(
+        raw_trend,
+        merged.get('daily_change'),
+        merged.get('ytd_change') if merged.get('ytd_change') is not None else merged.get('change_120d'),
+        "commodity",
+    )
     merged['source'] = _format_source_label(payload.get('source') or existing.get('source'))
     merged['timestamp'] = payload.get('timestamp') or existing.get('timestamp') or datetime.now().strftime("%Y-%m-%d")
     merged['note'] = payload.get('note', existing.get('note'))
@@ -3234,7 +3242,7 @@ def _merge_forex_entry(
                 merged['daily_change'] = hist_1d
                 used_hist_1d = True
             else:
-                merged['daily_change'] = orig.get('daily_change', 0.0)
+                merged['daily_change'] = orig.get('daily_change')
         merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
         if merged['change_120d'] is None:
             hist_120d = _coerce_float(hist_changes.get('change_120d'))
@@ -3242,7 +3250,7 @@ def _merge_forex_entry(
                 merged['change_120d'] = hist_120d
                 used_hist_120d = True
             else:
-                merged['change_120d'] = orig.get('change_120d', 0.0)
+                merged['change_120d'] = orig.get('change_120d')
         confidence, confidence_reason = _derive_trend_confidence(
             hist_changes,
             used_5d=used_hist_1d,
@@ -3256,8 +3264,12 @@ def _merge_forex_entry(
             _merge_trend_confidence(merged, "low")
             _append_note(merged, "trend_history_base_estimated")
     else:
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change')) or orig.get('daily_change', 0.0)
-        merged['change_120d'] = _coerce_percent(payload.get('change_120d')) or orig.get('change_120d', 0.0)
+        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        if merged['daily_change'] is None:
+            merged['daily_change'] = orig.get('daily_change')
+        merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
+        if merged['change_120d'] is None:
+            merged['change_120d'] = orig.get('change_120d')
     _copy_source_url(merged, payload)
     _copy_payload_metadata_fields(
         merged,
@@ -3296,19 +3308,17 @@ def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optio
             base_dir=trend_history_base_dir,
         )
         if daily_change is None:
-            daily_change = daily_hist.get('change_1d') or 0.0
+            daily_change = daily_hist.get('change_1d')
         if change_120d is None:
-            change_120d = hist_changes.get('change_120d') or 0.0
+            change_120d = hist_changes.get('change_120d')
 
-    daily_change_val = daily_change or 0.0
-    change_120d_val = change_120d or 0.0
     entry = {
         "pair": pair,
         "name": payload.get('name', pair),
         "current_rate": current_rate,
-        "daily_change": daily_change_val,
-        "change_120d": change_120d_val,
-        "trend": _infer_asset_trend(payload.get('trend'), daily_change_val, change_120d_val, "forex"),
+        "daily_change": daily_change,
+        "change_120d": change_120d,
+        "trend": _infer_asset_trend(payload.get('trend'), daily_change, change_120d, "forex"),
         "source": _format_source_label(payload.get('source')),
     }
     _copy_source_url(entry, payload)

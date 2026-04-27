@@ -17,8 +17,8 @@ class StockIndexData(BaseModel):
     symbol: str
     name: str
     current_price: float
-    change_5d: float
-    change_120d: float
+    change_5d: Optional[float] = None
+    change_120d: Optional[float] = None
     above_ma50: bool
     above_ma200: bool
     ma50_slope: float
@@ -48,10 +48,11 @@ class ForexData(BaseModel):
     pair: str
     name: str
     current_rate: float
-    daily_change: float
-    change_120d: float
+    daily_change: Optional[float] = None
+    change_120d: Optional[float] = None
     trend: str
     source: str
+    source_url: Optional[str] = None
 
 
 class BondYieldData(BaseModel):
@@ -79,6 +80,8 @@ class FundFlowData(BaseModel):
     total_120d: Optional[float] = None
     trend: str
     source: str
+    source_url: Optional[str] = None
+    metric_basis: Optional[str] = None
     note: Optional[str] = None
     stage_task_id: Optional[str] = None
 
