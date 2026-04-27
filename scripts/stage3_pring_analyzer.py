@@ -21,6 +21,7 @@ from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
 from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
+from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
 from datasource.utils.run_paths import build_run_paths_from_reference
 
@@ -139,6 +140,66 @@ def _collect_stale_items(market_payload: Dict[str, Any]) -> List[Dict[str, Any]]
     return stale_items
 
 
+def _effective_policy_rules(
+    policy_rules: Optional[Dict[str, Any]],
+    *,
+    block_on_stale: bool,
+    critical_stale_keys: Optional[List[str]],
+) -> Dict[str, Any]:
+    rules = dict(policy_rules or load_policy_rules())
+    rules["block_on_stale"] = block_on_stale
+    if critical_stale_keys is not None:
+        rules["critical_stale_keys"] = critical_stale_keys
+    return rules
+
+
+def _issue_label(issue: Dict[str, Any], market_payload: Dict[str, Any]) -> str:
+    category = str(issue.get("category") or "unknown")
+    key = str(issue.get("key") or "unknown")
+    reason = str(issue.get("reason") or "unknown")
+    details = issue.get("details")
+
+    parts = [f"{category}.{key}", reason]
+    if isinstance(details, dict) and details:
+        detail_text = ",".join(f"{k}={v}" for k, v in sorted(details.items()))
+        parts.append(detail_text)
+
+    if reason == "critical_stale":
+        entry = None
+        section = market_payload.get(category)
+        if isinstance(section, dict):
+            candidate = section.get(key)
+            if isinstance(candidate, dict):
+                entry = candidate
+        if isinstance(entry, dict):
+            parts.append(
+                "actual={actual} expected={expected} stale_reason={stale_reason}".format(
+                    actual=entry.get("date"),
+                    expected=entry.get("expected_period"),
+                    stale_reason=entry.get("stale_reason") or "actual_period_behind_expected",
+                )
+            )
+
+    return " ".join(parts)
+
+
+def _filtered_quality_blockers(
+    quality_state: Dict[str, Any],
+    *,
+    skip_fund_flow_check: bool,
+) -> List[Dict[str, Any]]:
+    blockers = quality_state.get("quality_blockers") or []
+    if not isinstance(blockers, list):
+        return []
+    if not skip_fund_flow_check:
+        return [item for item in blockers if isinstance(item, dict)]
+    return [
+        item
+        for item in blockers
+        if isinstance(item, dict) and item.get("category") != "fund_flow"
+    ]
+
+
 def _require_data_completeness(
     market_payload: Dict[str, Any],
     min_completeness: float,
@@ -151,114 +212,38 @@ def _require_data_completeness(
     """在开始 Stage3 之前阻断缺失数据的情形。"""
     metadata = market_payload.setdefault("metadata", {})
     completeness = metadata.get("data_completeness", 0.0) or 0.0
-    missing_items = _flatten_missing_items(market_payload)
-    compare_gaps = _collect_compare_gaps(market_payload)
-    estimated_info = _collect_estimated_items(market_payload, policy_rules=policy_rules)
-    blocked_estimated = estimated_info.get("blocked", [])
-    allowlisted_estimated = estimated_info.get("allowlisted", [])
-    stale_items = _collect_stale_items(market_payload)
+    rules = _effective_policy_rules(
+        policy_rules,
+        block_on_stale=block_on_stale,
+        critical_stale_keys=critical_stale_keys,
+    )
+    quality_state = build_pipeline_quality_state(
+        market_payload,
+        policy_rules=rules,
+        stage="stage3",
+        allow_estimated=allow_estimated,
+    )
+    quality_blockers = _filtered_quality_blockers(
+        quality_state,
+        skip_fund_flow_check=skip_fund_flow_check,
+    )
 
-    for item in allowlisted_estimated:
-        _append_non_blocking_warning(
-            market_payload,
-            {
-                "level": "warning",
-                "code": "estimated_allowlisted_pass",
-                "key": item.split(".", 1)[-1],
-                "message": f"估算值白名单放行: {item}",
-            },
-        )
-
-    if blocked_estimated and not allow_estimated:
-        raise RuntimeError(
-            "检测到估算值（is_estimated=True），按当前策略禁止进入 Stage3。"
-            f"\n估算项: {', '.join(blocked_estimated)}"
-            "\n请通过 Stage2/Stage2.5 获取真实值后重试。"
-        )
-
-    if blocked_estimated and allow_estimated:
-        _append_non_blocking_warning(
-            market_payload,
-            {
-                "level": "warning",
-                "code": "estimated_override_allow_estimated",
-                "key": "*",
-                "message": "--allow-estimated 已放宽以下估算项: " + ", ".join(blocked_estimated),
-            },
-        )
-
-    if compare_gaps:
-        raise RuntimeError(
-            "检测到“当前值已填但对比值未补齐”的指标，禁止进入 Stage3。"
-            f"\n缺口: {', '.join(compare_gaps)}"
-            "\n请通过 Stage2/Stage2.5 补齐 previous_value/change 后重试。"
-        )
-
-    if block_on_stale and stale_items:
-        critical = {str(k).lower() for k in (critical_stale_keys or ["cpi", "ppi", "pmi", "m1", "m2", "tsf"])}
-        critical_stale = [item for item in stale_items if item.get("key", "").lower() in critical]
-        if critical_stale:
-            details = []
-            for item in critical_stale:
-                details.append(
-                    f"{item.get('category')}.{item.get('key')} actual={item.get('date')} expected={item.get('expected_period')} reason={item.get('reason')}"
-                )
-            raise RuntimeError(
-                "检测到关键月度指标过期(stale)，禁止进入 Stage3。"
-                "\n请先通过 Stage2/Stage2.5 覆盖到预期期次。"
-                f"\nstale项: {'; '.join(details)}"
-            )
-
-    if skip_fund_flow_check:
-        fund_flow_keys = set(market_payload.get("fund_flow", {}).keys())
-        for flow in market_payload.get("fund_flow", {}).values():
-            if isinstance(flow, dict) and flow.get("type"):
-                fund_flow_keys.add(str(flow.get("type")))
-        missing_items = [k for k in missing_items if k not in fund_flow_keys]
-    # 硬阻断占位/零值：fund_flow/forex/bonds/commodities 中的 0 或 None
-    hard_gaps = []
-    if not skip_fund_flow_check:
-        for flow in market_payload.get("fund_flow", {}).values():
-            if flow.get("recent_5d") in (0, None) or flow.get("total_120d") in (0, None):
-                hard_gaps.append(flow.get("type"))
-    for fx in market_payload.get("forex", []):
-        if fx.get("current_rate") in (0, None):
-            hard_gaps.append(fx.get("pair"))
-    for bond in market_payload.get("bonds", []):
-        if bond.get("current_yield") in (0, None):
-            hard_gaps.append(bond.get("symbol"))
-    for com in market_payload.get("commodities", []):
-        if com.get("current_price") in (0, None):
-            hard_gaps.append(com.get("symbol"))
-    if hard_gaps:
-        raise RuntimeError(f"检测到占位/零值数据: {', '.join(set(map(str, hard_gaps)))}。请补齐真实数据后再运行 Stage3。")
-
-    if missing_items or completeness < min_completeness:
+    errors: List[str] = []
+    if completeness < min_completeness:
         msg_lines = [
-            f"检测到数据缺口或完整性不足: completeness={completeness:.3f} (<{min_completeness})",
+            f"data_completeness={completeness:.3f} (<{min_completeness})",
+            "run Stage2/Stage2.5 to refresh market_data_complete.json before Stage3",
         ]
-        if missing_items:
-            msg_lines.append(f"缺口: {', '.join(missing_items)}")
-        msg_lines.append(
-            "请先运行 Stage2/Stage2.5 补数，示例："
-        )
-        msg_lines.append(
-            "  PYTHONPATH=. python scripts/stage2_unified_enhancer.py "
-            "--market-data data/runs/YYYYMMDD/market_data.json "
-            "--output data/runs/YYYYMMDD/market_data_stage2.json "
-            "--execute-search --fund-flow-backend tavily "
-            "--cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite "
-            "--websearch-results data/runs/YYYYMMDD/websearch_results_auto.json "
-            "--gap-monitor data/runs/YYYYMMDD/gap_monitor.json"
-        )
-        msg_lines.append(
-            "若仅需重注入 WebSearch: "
-            "python scripts/stage2_5_injector.py "
-            "data/runs/YYYYMMDD/market_data_stage2.json "
-            "data/runs/YYYYMMDD/websearch_results_manual.json "
-            "data/runs/YYYYMMDD/market_data_complete.json"
-        )
-        raise RuntimeError("\n".join(msg_lines))
+        errors.append("completeness: " + " ".join(msg_lines))
+
+    if quality_blockers:
+        issue_lines = [_issue_label(item, market_payload) for item in quality_blockers]
+        errors.append("unified_quality: " + "; ".join(issue_lines))
+
+    if errors:
+        raise RuntimeError("\n".join(errors))
+    return
+
 
 
 def _find_estimated_entry_by_key(
@@ -403,8 +388,17 @@ async def _run_analysis(
 
                 stale_redlist = policy_payload.get("stale_redlist") or []
                 if policy_payload.get("block_stage3") and (blocking_redlist or stale_redlist):
-                    blockers.append(
-                        f"policy: redlist={blocking_redlist}, stale_redlist={stale_redlist}"
+                    _append_non_blocking_warning(
+                        market_payload,
+                        {
+                            "level": "warning",
+                            "code": "policy_file_diagnostic_only",
+                            "key": "*",
+                            "message": (
+                                "policy_evaluation.json retained for diagnostics only: "
+                                f"redlist={blocking_redlist}, stale_redlist={stale_redlist}"
+                            ),
+                        },
                     )
             except Exception as exc:  # noqa: BLE001
                 print(f"[WARN] policy_evaluation check skipped: {exc}")
@@ -429,7 +423,9 @@ async def _run_analysis(
             fallback_used = True
             print(f"[WARN] 数据完整性未达标，但 allow_fallback=True，继续运行。原因: {exc}")
         else:
-            blockers.append(f"completeness: {completeness_error}")
+            blockers.extend(
+                line for line in completeness_error.splitlines() if line.strip()
+            )
 
     # 3) gap monitor gate
     ai_websearch_flag = bool(market_payload.get("metadata", {}).get("ai_websearch_enhanced"))
