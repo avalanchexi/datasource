@@ -1,7 +1,11 @@
 ﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Stage 2: MCP Data Enhancer（全量补齐）
+Archived Stage 2: MCP Data Enhancer（全量补齐）
+
+ARCHIVED/DEPRECATED: this module remains runnable only for historical
+diagnostics. Current daily runs use scripts/stage2_unified_enhancer.py followed
+by scripts/stage2_5_injector.py for manual/WebSearch injection.
 
 职责:
 - 读取 Stage 1 生成的 market_data.json
@@ -27,8 +31,18 @@ from mcp_data_enhancer import MCPDataEnhancer
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stage 2: MCP Full Enhancer（资金流向 + 财经要闻补充）",
+        description=(
+            "ARCHIVED/DEPRECATED legacy Stage2 MCP enhancer; for historical "
+            "diagnostics only. Current flow: scripts/stage2_unified_enhancer.py "
+            "+ scripts/stage2_5_injector.py."
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        epilog=(
+            "当前生产路径: run Stage2 with scripts/stage2_unified_enhancer.py, "
+            "then inject remaining WebSearch/manual data with "
+            "scripts/stage2_5_injector.py. Do not use this legacy script as "
+            "the daily Stage2 entry point or补数入口."
+        ),
     )
     parser.add_argument("--market-data", required=True, help="Stage 1 输出的 market_data.json 路径")
     parser.add_argument("--pring-result", help="Pring 结果路径（重新生成报告时必填）")
@@ -44,17 +58,23 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--disable-yahoo-fallback",
         action="store_true",
-        help="禁用 Yahoo Finance 回填（默认启用以替换 7.13/空值占位）",
+        help=(
+            "禁用 legacy Yahoo Finance diagnostic fallback；当前生产流程不依赖 "
+            "Yahoo 回填，缺口应转 scripts/stage2_5_injector.py"
+        ),
     )
     parser.add_argument(
         "--regenerate-report",
         action="store_true",
-        help="增强完成后立即调用 Stage 4 重新生成 Markdown 报告",
+        help="legacy diagnostic only；当前请单独运行 scripts/stage4_report_generator.py",
     )
     parser.add_argument("--report-output", help="配合 --regenerate-report 使用的报告输出路径")
     parser.add_argument(
         "--websearch-results",
-        help="WebSearch 结果JSON（由Codex/MCP执行后生成），用于在Stage2中直接注入真实数据",
+        help=(
+            "legacy-only direct Stage2 injection input；当前请把 WebSearch/manual "
+            "结果交给 scripts/stage2_5_injector.py"
+        ),
     )
     return parser.parse_args()
 

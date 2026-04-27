@@ -1,7 +1,7 @@
 # AI报告生成标准流程 V3.3+
 
-> **注意**: 本文档描述的是V3.3流程。当前推荐使用V4.0流水线，详见 [../CLAUDE.md](../CLAUDE.md)。
-> V4.0流水线更简洁（4阶段，3-5分钟），且命令统一。
+> **注意**: 本文档描述的是已归档的V3.3流程，不是当前执行路径。
+> 当前权威流程请以 [../AGENTS.md](../AGENTS.md) / [../README.md](../README.md) 的 Stage1 → Stage2 unified → Stage2.5 → Stage3 → Stage4 为准。
 
 **文档版本**: V3.3+ (归档参考)
 **验证日期**: 2025-11-24
@@ -149,10 +149,10 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 #### Step 3: 运行数据注入脚本
 
 ```bash
-python inject_websearch_data.py \
-  data/20251114_market_data_enhanced.json \
-  data/websearch_results_20251114.json \
-  data/20251114_market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
 **输出**:
@@ -204,15 +204,18 @@ python -c "import json; data=json.load(open('data/20251114_market_data_complete.
 
 ---
 
-### Stage 2: Pring三层框架分析 (15-25秒)
+### 当前 Stage3: Pring三层框架分析 (15-25秒)
 
-**脚本**: `run_pring_analysis.py`
+**脚本**: `scripts/stage3_pring_analyzer.py`
+
+> 归档说明：旧 root 脚本 `run_pring_analysis.py` 仅作为历史入口记录，不推荐在当前流水线中使用。
 
 **命令**:
 ```bash
-python run_pring_analysis.py \
-  data/20251114_market_data_complete.json \
-  data/20251114_pring_result.json
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated
 ```
 
 **输出**:
@@ -273,16 +276,18 @@ python run_pring_analysis.py \
 
 ---
 
-### Stage 3: Markdown报告生成 (10-15秒)
+### 当前 Stage4: Markdown报告生成 (10-15秒)
 
-**脚本**: `generate_simple_report.py`
+**脚本**: `scripts/stage4_report_generator.py`
+
+> 归档说明：旧 root 脚本 `generate_simple_report.py` 仅作为历史入口记录，不推荐在当前流水线中直接执行。
 
 **命令**:
 ```bash
-python generate_simple_report.py \
-  data/20251124_market_data_complete.json \
-  data/20251124_pring_result.json \
-  reports/20251124背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md"
 ```
 
 **输出**:
@@ -378,7 +383,7 @@ UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'
 
 **解决方案**:
 - 检查Windows控制台编码设置
-- 使用修复后的 `inject_websearch_data.py` (使用[OK]而非✓)
+- 使用当前 `scripts/stage2_5_injector.py` 注入；旧 `inject_websearch_data.py` 已归档，不推荐
 
 ### 问题3: Pring分析显示"分析失败"
 
@@ -423,12 +428,12 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data data/r
 bash run_clean.sh python scripts/stage2_5_injector.py data/runs/20251124/market_data_stage2.json data/runs/20251124/websearch_results_manual.json data/runs/20251124/market_data_complete.json
 # ✅ Output: 21 items injected, 100.0% completeness
 
-# Stage 2
-python run_pring_analysis.py data/20251124_market_data_complete.json data/20251124_pring_result.json
+# Stage 3
+bash run_clean.sh python scripts/stage3_pring_analyzer.py --market-data data/runs/20251124/market_data_complete.json --output data/runs/20251124/pring_result.json --allow-estimated
 # ✅ Output: Stage=第Ⅱ阶段, Confidence=85%
 
-# Stage 3
-python generate_simple_report.py data/20251124_market_data_complete.json data/20251124_pring_result.json reports/20251124背景扫描120.md
+# Stage 4
+bash run_clean.sh python scripts/stage4_report_generator.py --market-data data/runs/20251124/market_data_complete.json --pring-result data/runs/20251124/pring_result.json --output reports/2025-11-24-背景扫描120.md
 # ✅ Output: 9 sections, no N/A, completeness 100%
 
 # 验证
@@ -447,10 +452,10 @@ powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
 | `stage1_data_collector.py` | ✅ ACTIVE | API数据收集 |
 | `scripts/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | 旧 MCP flow，不推荐 |
 | `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage2.5 WebSearch/manual 数据注入 |
-| `run_pring_analysis.py` | ✅ RECOMMENDED | 简化Pring分析 |
-| `generate_simple_report.py` | ✅ RECOMMENDED | 简化报告生成 |
-| `scripts/stage3_pring_analyzer.py` | ✅ UPDATED | Pring分析主入口（含DR007领先指标） |
-| `scripts/stage4_report_generator.py` | ✅ UPDATED | 调用 `generate_simple_report.generate_report`  |
+| `run_pring_analysis.py` | ⚠️ LEGACY / 不推荐 | 旧 root Pring 分析入口 |
+| `generate_simple_report.py` | ⚠️ LEGACY / 不推荐 | 旧 root 报告生成入口 |
+| `scripts/stage3_pring_analyzer.py` | ✅ RECOMMENDED | 当前 Stage3 Pring 分析主入口（含DR007领先指标） |
+| `scripts/stage4_report_generator.py` | ✅ RECOMMENDED | 当前 Stage4 报告生成主入口 |
 
 ### B. 数据文件命名
 
@@ -468,9 +473,9 @@ powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
 - **CLAUDE.md**: 完整技术文档
 - **docs/Stage2数据获取设计分析.md**: 历史问题分析
 - **data/websearch_results_20251114_test.json**: WebSearch结果模板
-- **inject_websearch_data.py**: 数据注入脚本源码
-- **run_pring_analysis.py**: Pring分析脚本源码
-- **generate_simple_report.py**: 报告生成脚本源码
+- **inject_websearch_data.py**: LEGACY/已归档数据注入脚本源码，不推荐；当前使用 `scripts/stage2_5_injector.py`
+- **run_pring_analysis.py**: LEGACY/已归档Pring分析脚本源码，不推荐；当前使用 `scripts/stage3_pring_analyzer.py`
+- **generate_simple_report.py**: LEGACY/已归档报告生成脚本源码，不推荐；当前使用 `scripts/stage4_report_generator.py`
 
 ---
 
