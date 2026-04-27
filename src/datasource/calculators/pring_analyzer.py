@@ -8,6 +8,9 @@ from enum import Enum
 import asyncio
 from loguru import logger
 from datasource.models.market_data_contract import MarketDataContract
+from datasource.calculators.pring import scoring
+from datasource.calculators.pring import summaries
+from datasource.calculators.pring.stage_allocations import build_stage_allocations
 
 
 class PringStage(Enum):
@@ -124,99 +127,7 @@ class PringAnalyzer:
         self.last_commodity_correction: Dict[str, Any] = {}
 
     def _build_stage_allocations(self) -> Dict[PringStage, Dict[str, Any]]:
-        """构建普林格阶段的资产配置模板"""
-        return {
-            PringStage.STAGE_I: {
-                "description": "阶段Ⅰ：债券率先走强，股票与商品仍在筑底（衰退末期）",
-                "allocation": "长久期国债+现金是核心仓位，等待政策宽松传导；权益仅保留防守性仓位",
-                "bonds": "超配",
-                "stocks": "低配",
-                "commodities": "低配",
-                "cash": "超配",
-                "focus_assets": ["长久期国债", "政策利率债", "货币基金/现金管理"],
-                "allocation_pct": {
-                    "bond": "55-65%",
-                    "stock": "20-30%",
-                    "commodity": "5-10%",
-                    "cash": "10-15%"
-                }
-            },
-            PringStage.STAGE_II: {
-                "description": "阶段Ⅱ：债券与股票同步上行，商品仍偏弱（复苏初期）",
-                "allocation": "股票开始接棒，保留一部分优质国债做缓冲，商品仍以低配观察",
-                "bonds": "标配",
-                "stocks": "超配",
-                "commodities": "低配",
-                "cash": "低配",
-                "focus_assets": ["高β股票/宽基指数", "长久期国债"],
-                "allocation_pct": {
-                    "bond": "40-50%",
-                    "stock": "30-40%",
-                    "commodity": "10-15%",
-                    "cash": "5-10%"
-                }
-            },
-            PringStage.STAGE_III: {
-                "description": "阶段Ⅲ：权益与商品全面走强，债券收益率触顶（扩张前期）",
-                "allocation": "超配股票并增配工业金属/能源，债券降至低配，现金保持流动性",
-                "bonds": "低配",
-                "stocks": "超配",
-                "commodities": "标配",
-                "cash": "低配",
-                "focus_assets": ["权益指数", "工业金属ETF", "资源股"],
-                "allocation_pct": {
-                    "bond": "25-35%",
-                    "stock": "45-55%",
-                    "commodity": "15-20%",
-                    "cash": "5-10%"
-                }
-            },
-            PringStage.STAGE_IV: {
-                "description": "阶段Ⅳ：通胀抬升，商品与股票同涨、债券承压（扩张后期）",
-                "allocation": "股票回归标配但偏价值/资源，商品（尤其能源）超配承接通胀交易",
-                "bonds": "低配",
-                "stocks": "标配",
-                "commodities": "超配",
-                "cash": "低配",
-                "focus_assets": ["能源/资源股", "原油&大宗商品ETF"],
-                "allocation_pct": {
-                    "bond": "20-30%",
-                    "stock": "35-45%",
-                    "commodity": "20-30%",
-                    "cash": "5-10%"
-                }
-            },
-            PringStage.STAGE_V: {
-                "description": "阶段Ⅴ：通胀高位回落，商品冲高而股票转弱（滞胀末期）",
-                "allocation": "大宗+贵金属维持超配，股票降至低配，债券和现金用于管理波动",
-                "bonds": "低配",
-                "stocks": "低配",
-                "commodities": "超配",
-                "cash": "标配",
-                "focus_assets": ["贵金属", "能源/大宗商品指数", "抗通胀资产"],
-                "allocation_pct": {
-                    "bond": "10-20%",
-                    "stock": "25-35%",
-                    "commodity": "35-45%",
-                    "cash": "10-15%"
-                }
-            },
-            PringStage.STAGE_VI: {
-                "description": "阶段Ⅵ：经济下行，债券与股票同步疲弱，现金为王（衰退期）",
-                "allocation": "全面防守，现金+短久期债+黄金(贵金属)组合等待下一轮债券领先",
-                "bonds": "短久期",
-                "stocks": "低配",
-                "commodities": "低配",
-                "cash": "超配",
-                "focus_assets": ["短久期国债/政策性金融债", "现金", "黄金/贵金属"],
-                "allocation_pct": {
-                    "bond": "35-45%",
-                    "stock": "15-25%",
-                    "commodity": "5-10%",
-                    "cash": "15-25%"
-                }
-            }
-        }
+        return build_stage_allocations(PringStage)
 
     def _shift_stage(self, stage: PringStage, steps: int) -> PringStage:
         """按照固定顺序对阶段做有限平移（不循环）"""
@@ -649,77 +560,25 @@ class PringAnalyzer:
         return None
 
     def _score_ppi_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "PPI缺失，按中性处理"
-        if value >= 0.5:
-            return weight, "PPI转正，企业补库意愿增强"
-        if value >= -1.0:
-            return weight * 0.7, "PPI降幅收窄，价格端改善"
-        return weight * 0.3, "PPI深度通缩，库存压力仍大"
+        return scoring._score_ppi_indicator(value, weight, entry)
 
     def _score_cpi_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "CPI缺失，按中性处理"
-        if 0 <= value <= 3:
-            return weight, "CPI温和运行，内需韧性可接受"
-        if -0.5 <= value < 0:
-            return weight * 0.6, "轻微通缩，需求仍偏弱"
-        if 3 < value <= 5:
-            return weight * 0.6, "温和通胀，库存去化继续"
-        return weight * 0.3, "高通胀或深度通缩波动，压制补库"
+        return scoring._score_cpi_indicator(value, weight, entry)
 
     def _score_pmi_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "PMI缺失，按中性处理"
-        if value >= 50.5:
-            return weight, "PMI站稳荣枯线上方，补库动能充足"
-        if value >= 50.0:
-            return weight * 0.85, "PMI略高于荣枯线，补库初显"
-        if value >= 48.0:
-            return weight * 0.55, "PMI仍在收缩区，景气承压"
-        return weight * 0.25, "PMI深度低于荣枯线，库存主动去化"
+        return scoring._score_pmi_indicator(value, weight, entry)
 
     def _score_industrial_value_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "工业增加值缺失，按中性处理"
-        if value >= 5.5:
-            return weight, "工业增加值维持高位增长"
-        if value >= 4.5:
-            return weight * 0.8, "工业增速平稳，库存逐步修复"
-        if value >= 3.5:
-            return weight * 0.6, "工业增速放缓，库存回补偏谨慎"
-        return weight * 0.3, "工业增速疲弱，库存去化压力大"
+        return scoring._score_industrial_value_indicator(value, weight, entry)
 
     def _score_industrial_sales_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "工业营收缺失，按中性处理"
-        if value >= 5.0:
-            return weight, "工业企业营收高增，终端需求改善"
-        if value >= 0.0:
-            return weight * 0.6, "营收小幅增长，需求恢复仍不均衡"
-        return weight * 0.3, "营收同比为负，需求拖累库存"
+        return scoring._score_industrial_sales_indicator(value, weight, entry)
 
     def _score_gdp_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "GDP缺失，按中性处理"
-        if value >= 5.5:
-            return weight, "GDP保持高景气，补库动力充足"
-        if value >= 5.0:
-            return weight * 0.8, "GDP略高于潜在增速，库存温和回补"
-        if value >= 4.0:
-            return weight * 0.6, "GDP放缓，需要政策托底"
-        return weight * 0.3, "GDP增速偏弱，库存去化占主导"
+        return scoring._score_gdp_indicator(value, weight, entry)
 
     def _score_bdi_indicator(self, value: Optional[float], weight: float, entry: Optional[Dict[str, Any]]) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "BDI缺失，按中性处理"
-        if value >= 2000:
-            return weight, "BDI高位运行，全球补库交易旺盛"
-        if value >= 1500:
-            return weight * 0.7, "BDI维持景气区间"
-        if value >= 1000:
-            return weight * 0.5, "BDI中性震荡"
-        return weight * 0.3, "BDI偏弱，需求侧仍谨慎"
+        return scoring._score_bdi_indicator(value, weight, entry)
 
     def _get_monetary_change(self, data: Dict, raw_values: Dict, field: str) -> Optional[float]:
         entry = raw_values.get(field)
@@ -744,134 +603,37 @@ class PringAnalyzer:
         return f"{value:.2f}"
 
     def _score_rrr_change(self, change: Optional[float], weight: float) -> Tuple[float, str]:
-        if change is None:
-            return weight * 0.5, "缺少降准幅度，按中性处理"
-        if change <= -0.5:
-            return weight, "年内累计降准≥50bp，货币环境显著宽松"
-        if change <= -0.25:
-            return weight * 0.8, "累计降准25-50bp，宽松力度偏强"
-        if change < 0:
-            return weight * 0.6, "小幅降准，流动性边际改善"
-        if change == 0:
-            return weight * 0.4, "无降准调整，维持中性"
-        return weight * 0.2, "准备金率上调或回升，呈现偏紧"
+        return scoring._score_rrr_change(change, weight)
 
     def _score_policy_rate_change(self, change: Optional[float], weight: float) -> Tuple[float, str]:
-        if change is None:
-            return weight * 0.5, "缺少逆回购利率变动，按中性处理"
-        if change <= -0.15:
-            return weight, "逆回购利率累计下调≥15bp，政策明显宽松"
-        if change <= -0.05:
-            return weight * 0.75, "逆回购利率小幅下调"
-        if change < 0.02:
-            return weight * 0.45, "利率基本持平"
-        return weight * 0.25, "逆回购利率上调，政策趋紧"
+        return scoring._score_policy_rate_change(change, weight)
 
     def _score_dr007_change(self, change: Optional[float], weight: float) -> Tuple[float, str]:
-        if change is None:
-            return weight * 0.5, "缺少DR007变化，按中性处理"
-        if change <= -0.2:
-            return weight, "DR007较四个月前下行≥20bp，流动性充裕"
-        if change <= -0.1:
-            return weight * 0.8, "DR007下降10-20bp，货币边际宽松"
-        if change <= 0.05:
-            return weight * 0.5, "DR007变化不大"
-        if change <= 0.15:
-            return weight * 0.35, "DR007小幅抬升，偏中性偏紧"
-        return weight * 0.15, "DR007显著上行，流动性趋紧"
+        return scoring._score_dr007_change(change, weight)
 
     def _score_tsf_growth(self, value: Optional[float], weight: float) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "缺少TSF增速，按中性处理"
-        if value >= 10:
-            return weight, "社融增速≥10%，融资需求旺盛"
-        if value >= 8:
-            return weight * 0.8, "社融增速8-10%，宽信用持续"
-        if value >= 6:
-            return weight * 0.5, "社融增速6-8%，中性"
-        return weight * 0.2, "社融增速低于6%，信用扩张偏弱"
+        return scoring._score_tsf_growth(value, weight)
 
     def _score_m2_growth(self, value: Optional[float], weight: float) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "缺少M2增速，按中性处理"
-        if value >= 10:
-            return weight, "M2两位数增长，流动性充沛"
-        if value >= 8:
-            return weight * 0.8, "M2增速8-10%，温和宽松"
-        if value >= 6:
-            return weight * 0.55, "M2增速6-8%，中性"
-        return weight * 0.3, "M2增速<6%，货币供给偏紧"
+        return scoring._score_m2_growth(value, weight)
 
     def _score_m1_growth(self, value: Optional[float], weight: float) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "缺少M1增速，按中性处理"
-        if value >= 8:
-            return weight, "M1快速增长，企业活期需求上升"
-        if value >= 5:
-            return weight * 0.75, "M1增速温和回升"
-        if value >= 3:
-            return weight * 0.5, "M1增速中性"
-        return weight * 0.25, "M1低增或为负，实体需求偏弱"
+        return scoring._score_m1_growth(value, weight)
 
     def _score_m1_m2_spread(self, value: Optional[float], weight: float) -> Tuple[float, str]:
-        if value is None:
-            return weight * 0.5, "缺少剪刀差数据，按中性处理"
-        if value >= 1.0:
-            return weight, "M1-M2剪刀差>1pct，流动性向实体回流"
-        if value >= 0.0:
-            return weight * 0.7, "剪刀差大致为正"
-        if value >= -1.0:
-            return weight * 0.45, "剪刀差略负，需求恢复有限"
-        return weight * 0.2, "剪刀差深度为负，货币传导不畅"
+        return scoring._score_m1_m2_spread(value, weight)
 
     def _summarize_leading_indicator_text(self, indicator: Dict[str, Any]) -> str:
-        if not indicator:
-            return "领先指标缺失，暂无阶段前瞻"
-        status = indicator.get("status")
-        if status == "missing":
-            return "缺少DR007/M1-M2数据，需补充WebSearch"
-        parts = []
-        if indicator.get("message"):
-            parts.append(indicator["message"])
-        if indicator.get("m1_m2_spread") is not None and "M1-M2" not in parts[0]:
-            parts.append(f"M1-M2剪刀差{indicator['m1_m2_spread']:+.1f}pct")
-        shift = indicator.get("applied_shift", indicator.get("expected_shift", 0))
-        if shift:
-            arrow = "前" if shift < 0 else "后"
-            parts.append(f"阶段可能向{arrow}{abs(shift)}档")
-        return "；".join(parts) if parts else "领先指标暂无显著变化"
+        return summaries._summarize_leading_indicator_text(indicator)
 
     def _extract_highlights(self, details: Dict[str, str], keys: List[str], limit: int = 3) -> List[str]:
-        highlights: List[str] = []
-        for key in keys:
-            text = details.get(key)
-            if not text:
-                continue
-            comment = text.split(" - ", 1)[1] if " - " in text else text
-            highlights.append(f"{key}{comment}")
-            if len(highlights) >= limit:
-                break
-        return highlights
+        return summaries._extract_highlights(details, keys, limit)
 
     def _build_inventory_summary_text(self, details: Dict[str, str], stage: str, bias: str) -> str:
-        prefix = f"{stage}，{bias}。"
-        highlights = self._extract_highlights(
-            details,
-            ["PPI同比", "PMI综合", "PMI新订单", "PMI生产", "工业增加值", "工业营收", "GDP同比"]
-        )
-        if highlights:
-            return prefix + "关键驱动：" + "；".join(highlights)
-        return prefix + "指标数据待WebSearch补全。"
+        return summaries._build_inventory_summary_text(details, stage, bias)
 
     def _build_monetary_summary_text(self, details: Dict[str, str], stage: str, equity_bias: str, bond_bias: str) -> str:
-        prefix = f"{stage}，权益偏向{equity_bias}，债券偏向{bond_bias}。"
-        highlights = self._extract_highlights(
-            details,
-            ["降准幅度", "7天逆回购", "DR007变化", "M1-M2剪刀差", "M1增速", "TSF增速", "M2增速"]
-        )
-        if highlights:
-            return prefix + "流动性信号：" + "；".join(highlights)
-        return prefix + "货币指标待补数。"
+        return summaries._build_monetary_summary_text(details, stage, equity_bias, bond_bias)
 
     def _build_stage_summary_text(
         self,
@@ -881,11 +643,7 @@ class PringAnalyzer:
         monetary_stage: str,
         leading_summary: str
     ) -> str:
-        return (
-            f"{final_stage.to_display_format()}（置信度{confidence:.0%}）。"
-            f"库存周期：{inventory_stage}，货币周期：{monetary_stage}。"
-            f"领先指标：{leading_summary}"
-        )
+        return summaries._build_stage_summary_text(final_stage, confidence, inventory_stage, monetary_stage, leading_summary)
 
     def calculate_inventory_cycle_score(self, macro_data: Dict) -> Dict:
         """
