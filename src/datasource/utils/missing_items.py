@@ -107,7 +107,7 @@ def remove_missing_item(payload: Dict[str, Any], category: Optional[str], key: s
             else:
                 metadata_missing.pop(cat, None)
         if not metadata_missing:
-            metadata.pop("missing_items", None)
+            metadata["missing_items"] = {}
 
     top_level = payload.get("missing_items")
     if isinstance(top_level, list):

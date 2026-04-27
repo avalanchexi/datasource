@@ -501,6 +501,17 @@ def _extract_date_from_text(text: str) -> Optional[str]:
     return None
 
 
+def _bond_display_date(bond: dict, report_date: str) -> str:
+    explicit_date = bond.get("as_of_date") or bond.get("date") or bond.get("report_period")
+    if explicit_date:
+        return _extract_date_from_text(str(explicit_date)) or str(explicit_date)[:10]
+
+    note_date = _extract_date_from_text(str(bond.get("note") or ""))
+    if note_date and note_date == str(report_date)[:10]:
+        return note_date
+    return "N/A"
+
+
 def _collect_quality_issues(market_data: dict) -> list[dict]:
     issues: list[dict] = []
 
@@ -792,16 +803,8 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         bp120_str = _fmt_change_cell(bp120, digits=1, suffix="bp", low_confidence=low_confidence)
         trend = bond.get('trend') or ("待 WebSearch" if is_placeholder else "未知")
 
-        date_val = (
-            bond.get('as_of_date')
-            or bond.get('date')
-            or bond.get('report_period')
-            or _extract_date_from_text(str(bond.get('note') or ''))
-        )
-        date_str = "N/A"
-        if date_val:
-            date_str = _extract_date_from_text(str(date_val)) or str(date_val)[:10]
-        elif is_placeholder:
+        date_str = _bond_display_date(bond, report_date)
+        if is_placeholder:
             date_str = NA_TEXT
         source_str = bond.get('source') or "-"
 
