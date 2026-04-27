@@ -38,8 +38,10 @@ def _sanitize(payload: Dict[str, Any]) -> Tuple[int, int]:
             item["current_price"] = None
             item["daily_change"] = None
             item["ytd_change"] = None
-            item["trend"] = "待 WebSearch"
-            item["source"] = "MCP WebFetch待获取"
+            item["trend"] = "待Stage2.5补数"
+            item["source"] = "Stage2.5 manual_required"
+            item["manual_required"] = True
+            item["manual_reason"] = "placeholder_value_reset"
 
     for item in bonds:
         if _is_placeholder(item.get("current_yield")):
@@ -47,9 +49,11 @@ def _sanitize(payload: Dict[str, Any]) -> Tuple[int, int]:
             item["current_yield"] = None
             item["change_5d_bp"] = None
             item["change_120d_bp"] = None
-            item["trend"] = "待 WebSearch"
-            item["source"] = "MCP WebFetch待获取"
-            item["is_estimated"] = True
+            item["trend"] = "待Stage2.5补数"
+            item["source"] = "Stage2.5 manual_required"
+            item["manual_required"] = True
+            item["manual_reason"] = "placeholder_value_reset"
+            item["is_estimated"] = False
 
     return commodity_cleaned, bond_cleaned
 
