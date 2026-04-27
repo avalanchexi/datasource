@@ -161,6 +161,67 @@ def test_index_daily_fallback_short_window_returns_none_changes(monkeypatch):
     assert result.change_120d is None
 
 
+def test_index_daily_fallback_calculates_exact_5d_window(monkeypatch):
+    class _Pro:
+        def index_daily(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "trade_date": [f"202604{day:02d}" for day in range(20, 26)],
+                    "close": [100.0, 101.0, 102.0, 103.0, 104.0, 106.0],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(
+        collector._fallback_index_from_tushare("000001", "SH", "2026-04-01", "2026-04-27")
+    )
+
+    assert result is not None
+    assert result.change_5d == pytest.approx(6.0)
+    assert result.change_120d is None
+
+
+def test_index_daily_fallback_calculates_exact_120d_window(monkeypatch):
+    class _Pro:
+        def index_daily(self, **_kwargs):
+            closes = list(range(100, 221))
+            return pd.DataFrame(
+                {
+                    "trade_date": [f"2026{i:04d}" for i in range(len(closes))],
+                    "close": closes,
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(
+        collector._fallback_index_from_tushare("000001", "SH", "2026-04-01", "2026-04-27")
+    )
+
+    assert result is not None
+    assert result.change_5d is not None
+    assert result.change_120d == pytest.approx(120.0)
+
+
 def test_minute_fallback_returns_none_window_changes(monkeypatch):
     class _Pro:
         def index_daily(self, **_kwargs):

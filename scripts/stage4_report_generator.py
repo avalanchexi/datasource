@@ -81,13 +81,11 @@ def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
 
 def _gap_item_label(item: Any) -> str:
     if isinstance(item, dict):
-        return str(
-            item.get("indicator_key")
-            or item.get("key")
-            or item.get("task")
-            or item.get("field")
-            or item
-        )
+        for field in ("key", "indicator_key", "symbol", "pair", "task", "type", "name", "field"):
+            value = item.get(field)
+            if value not in (None, ""):
+                return str(value)
+        return str(item)
     return str(item)
 
 
@@ -125,7 +123,6 @@ def _payload_entries(market_payload: Dict[str, Any]) -> List[Tuple[str, str]]:
                 value = entry.get(field)
                 if value not in (None, ""):
                     entries.append((category, str(value)))
-                    break
     return entries
 
 

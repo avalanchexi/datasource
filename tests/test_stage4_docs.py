@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -81,6 +82,76 @@ def test_stage4_ignores_stale_gap_when_live_quality_state_is_clean(tmp_path, mon
         encoding="utf-8",
     )
     gap_path.write_text('{"pending_tasks": [], "manual_required": ["industrial"]}', encoding="utf-8")
+
+    called = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stage4, "generate_report", lambda *args: called.append(args))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    stage4.main()
+
+    assert called == [(market_path, pring_path, output_path)]
+
+
+@pytest.mark.parametrize(
+    "manual_required",
+    [
+        [{"category": "commodities", "symbol": "GC=F"}],
+        ["COMEX Gold"],
+    ],
+)
+def test_stage4_ignores_stale_commodity_gap_by_symbol_or_name_when_live_quality_is_clean(
+    tmp_path,
+    monkeypatch,
+    manual_required,
+):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+    output_path = reports_dir / "out.md"
+
+    market_path.write_text(
+        """
+{
+  "metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"},
+  "commodities": [
+    {
+      "symbol": "GC=F",
+      "name": "COMEX Gold",
+      "current_price": 2650.5,
+      "unit": "$/oz",
+      "source": "websearch_manual(https://example.com/gold)",
+      "source_url": "https://example.com/gold"
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}}',
+        encoding="utf-8",
+    )
+    gap_path.write_text(
+        '{"pending_tasks": [], "manual_required": %s}' % json.dumps(manual_required),
+        encoding="utf-8",
+    )
 
     called = []
     monkeypatch.chdir(tmp_path)
