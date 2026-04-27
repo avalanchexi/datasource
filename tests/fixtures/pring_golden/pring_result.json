@@ -1,0 +1,148 @@
+{
+  "stage": "第Ⅲ阶段",
+  "stage_description": "阶段Ⅲ：权益与商品全面走强，债券收益率触顶（扩张前期）",
+  "confidence": 0.725,
+  "asset_signals": {
+    "bonds": "Neutral",
+    "stocks": "Neutral",
+    "commodities": "Neutral"
+  },
+  "allocation_suggestion": "超配股票并增配工业金属/能源，债券降至低配，现金保持流动性",
+  "asset_recommendations": {
+    "bonds": "低配",
+    "stocks": "超配",
+    "commodities": "标配",
+    "cash": "低配"
+  },
+  "focus_assets": [
+    "权益指数",
+    "工业金属ETF",
+    "资源股"
+  ],
+  "asset_allocation_pct": {
+    "bond": "25-35%",
+    "stock": "45-55%",
+    "commodity": "15-20%",
+    "cash": "5-10%"
+  },
+  "confirm_signals": [
+    "商品信号：中性，库存周期处于主动补库存"
+  ],
+  "deny_signals": [],
+  "macro_stage": {
+    "stage_index": 2,
+    "confidence": 0.7
+  },
+  "layer_1_inventory_cycle": {
+    "cycle_stage": "主动补库存",
+    "commodity_bias": "强牛",
+    "fundamental_score": 59.0,
+    "score_details": {
+      "PPI同比": "10.0/10分 - PPI转正，企业补库意愿增强（0.50%）",
+      "CPI同比": "5.0/5分 - CPI温和运行，内需韧性可接受（1.00%）",
+      "PMI综合": "10.0/10分 - PMI站稳荣枯线上方，补库动能充足（51.60点）",
+      "PMI新订单": "10.0/10分 - PMI站稳荣枯线上方，补库动能充足（51.60点）",
+      "PMI生产": "5.0/5分 - PMI站稳荣枯线上方，补库动能充足（51.40点）",
+      "工业增加值": "8.0/8分 - 工业增加值维持高位增长（5.70%）",
+      "工业营收": "5.0/5分 - 工业企业营收高增，终端需求改善（5.30%）",
+      "GDP同比": "4.0/5分 - GDP略高于潜在增速，库存温和回补（5.00%）",
+      "BDI指数": "2.0/2分 - BDI高位运行，全球补库交易旺盛（2640.00点）",
+      "数据来源": "stage1_market_data",
+      "样本完整度": "9/9",
+      "基本面总分": "59.0/60分"
+    },
+    "data_source": "stage1_market_data",
+    "update_time": "2026-04-24 14:27:23",
+    "analysis": "主动补库存，强牛。关键驱动：PPI同比PPI转正，企业补库意愿增强（0.50%）；PMI综合PMI站稳荣枯线上方，补库动能充足（51.60点）；PMI新订单PMI站稳荣枯线上方，补库动能充足（51.60点）"
+  },
+  "layer_2_monetary_cycle": {
+    "cycle_stage": "中性",
+    "monetary_score": 52.8,
+    "equity_bias": "中性",
+    "bond_bias": "中性",
+    "score_details": {
+      "降准幅度": "8.0/20分 - 无降准调整，维持中性（0.00%）",
+      "7天逆回购": "6.8/15分 - 利率基本持平（0bp）",
+      "DR007变化": "7.5/15分 - DR007变化不大（-8bp）",
+      "TSF增速": "10.0/20分 - 社融增速6-8%，中性（7.92%）",
+      "M2增速": "12.0/15分 - M2增速8-10%，温和宽松（8.50%）",
+      "M1增速": "7.5/10分 - M1增速温和回升（5.10%）",
+      "M1-M2剪刀差": "1.0/5分 - 剪刀差深度为负，货币传导不畅（-3.40%）",
+      "数据来源": "stage1_market_data",
+      "货币层总分": "52.8/100分"
+    },
+    "data_source": "stage1_market_data",
+    "websearch_required": {},
+    "analysis": "中性，权益偏向中性，债券偏向中性。流动性信号：降准幅度无降准调整，维持中性（0.00%）；7天逆回购利率基本持平（0bp）；DR007变化DR007变化不大（-8bp）"
+  },
+  "layer_3_pring_final": {
+    "base_stage": "第Ⅲ阶段",
+    "base_confidence": 0.725,
+    "final_stage": "第Ⅲ阶段",
+    "final_confidence": 0.725,
+    "monetary_adjustment": 0.0,
+    "analysis": "第Ⅲ阶段（置信度72%）。库存周期：主动补库存，货币周期：中性。领先指标：DR007变化-8bp（中性）；M1-M2剪刀差-3.4pct（流动性收敛）。领先提示货币收紧；阶段可能向后1档"
+  },
+  "leading_indicator": {
+    "status": "ok",
+    "message": "DR007变化-8bp（中性）；M1-M2剪刀差-3.4pct（流动性收敛）。领先提示货币收紧",
+    "field": "dr007_rate",
+    "current_value": 1.3238,
+    "unit": "%",
+    "date": "2026-04-23",
+    "source": "TuShare repo_daily",
+    "lead_days": 35,
+    "m1_m2_spread": -3.4,
+    "m1_growth": 5.1,
+    "m2_growth": 8.5,
+    "bp_change": -7.519999999999993,
+    "direction": "tightening",
+    "expected_shift": 1,
+    "signal_confidence": 0.55,
+    "applied_shift": 1,
+    "adjustment": -0.025,
+    "note": "领先指标已介入：提前将阶段平移→1档，以反映DR007的领先信号"
+  },
+  "leading_summary": "DR007变化-8bp（中性）；M1-M2剪刀差-3.4pct（流动性收敛）。领先提示货币收紧；阶段可能向后1档",
+  "technical_score": 30.259848484848487,
+  "inventory_cycle_score": 59.0,
+  "commodity_signal_score": 48.940946969696974,
+  "commodity_signal": "Neutral",
+  "inventory_cycle_stage": "主动补库存",
+  "current_stage": "第Ⅲ阶段",
+  "commodity_bias": "强牛",
+  "analysis_date": "2026-04-24 14:27:42",
+  "data_period": "120天历史数据",
+  "methodology": "V4.3三层框架：库存周期(PPI/PMI/工增/BDI/CPI) → 货币周期(7D逆回购/MLF/降准/TSF/M2) → Pring六阶段修正",
+  "enhancement_notes": "V4.3重大升级：移除AKShare依赖，优先使用TuShare/WebSearch。三层框架：以中国市场+港股为主、国际市场为参考",
+  "final_stage": "第Ⅲ阶段",
+  "recommendation": "超配股票并增配工业金属/能源，债券降至低配，现金保持流动性",
+  "metadata": {
+    "analysis_method": "Pring V4.0 三层框架",
+    "analysis_time": "2026-04-24 14:27:42",
+    "data_period": "120天历史数据",
+    "stage_weights": {
+      "inventory": 0.35,
+      "monetary": 0.35,
+      "asset": 0.3
+    },
+    "legacy_stage_rules": false,
+    "analysis_date": "2026-04-24",
+    "data_completeness": 1.0,
+    "ai_websearch_enhanced": true,
+    "gap_monitor_cleared": true,
+    "min_completeness": 0.8,
+    "non_blocking_warnings": [
+      {
+        "level": "warning",
+        "code": "estimated_allowlisted_pass",
+        "key": "CN10Y_CDB",
+        "message": "估算值白名单放行: bonds.CN10Y_CDB"
+      }
+    ]
+  },
+  "fallback_used": false,
+  "pending_websearch": [],
+  "data_completeness": 1.0,
+  "weights_version": "stage_weights_v1"
+}
