@@ -96,8 +96,8 @@ def test_stage25_outputs_are_accepted_by_unified_quality_state(
                         "recent_5d": 85.6,
                         "total_120d": 1250.0,
                         "trend": "流入",
-                        "source": "websearch_manual https://example.com/northbound",
-                        "source_url": "https://example.com/northbound",
+                        "source": "websearch_manual https://example.com/north",
+                        "source_url": "https://example.com/north",
                     }
                 },
                 "commodities": [
@@ -133,7 +133,14 @@ def test_stage25_outputs_are_accepted_by_unified_quality_state(
     assert state["manual_required"] == []
     assert gap_monitor["manual_required"] == []
     assert gap_monitor.get("pending_tasks") in (None, [])
+    assert gap_monitor.get("quality_blockers", []) == []
+    assert gap_monitor.get("data_quality_issues", []) == []
     assert output["metadata"]["ai_websearch_enhanced"] is True
+    assert output["metadata"].get("quality_blockers", []) == []
+    assert output["metadata"].get("manual_required", []) == []
+    assert output["macro_indicators"]["industrial"]["source_url"] == "https://example.com/industrial"
+    assert output["fund_flow"]["northbound"]["source_url"] == "https://example.com/north"
+    assert output["commodities"][0]["source_url"] == "https://example.com/gold"
 
 
 def test_stage25_replay_normalizes_legacy_monetary_key_and_disables_trend_write(
