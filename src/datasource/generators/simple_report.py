@@ -775,9 +775,10 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             suffix="%",
             low_confidence=low_confidence,
         )
-        commodity_window_change = comm.get("ytd_change")
-        if commodity_window_change is None and use_commodity_120d_window:
+        if use_commodity_120d_window:
             commodity_window_change = comm.get("change_120d")
+        else:
+            commodity_window_change = comm.get("ytd_change")
         ytd_change = _fmt_change_cell(
             commodity_window_change,
             digits=2,
