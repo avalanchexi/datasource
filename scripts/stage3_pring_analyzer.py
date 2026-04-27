@@ -15,7 +15,7 @@ import json
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
@@ -26,6 +26,12 @@ from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 MIN_COMPLETENESS_DEFAULT = 0.80
+FUND_FLOW_SKIP_REASONS = {
+    "fund_flow_window_missing",
+    "missing_or_zero_value",
+    "missing_value",
+    "placeholder_value",
+}
 
 
 def _flatten_missing_items(market_payload: Dict[str, Any]) -> List[str]:
@@ -196,8 +202,35 @@ def _filtered_quality_blockers(
     return [
         item
         for item in blockers
-        if isinstance(item, dict) and item.get("category") != "fund_flow"
+        if isinstance(item, dict)
+        and not (
+            item.get("category") == "fund_flow"
+            and item.get("reason") in FUND_FLOW_SKIP_REASONS
+        )
     ]
+
+
+def _gap_item_key(item: Any) -> str:
+    if isinstance(item, dict):
+        for field in ("key", "indicator_key", "symbol", "pair", "task", "type", "name"):
+            value = item.get(field)
+            if value not in (None, ""):
+                return str(value)
+        return ""
+    return str(item)
+
+
+def _quality_blocker_keys(blockers: List[Dict[str, Any]]) -> Set[str]:
+    keys: Set[str] = set()
+    for item in blockers:
+        category = str(item.get("category") or "")
+        key = str(item.get("key") or "")
+        if not key:
+            continue
+        keys.add(key)
+        if category:
+            keys.add(f"{category}.{key}")
+    return keys
 
 
 def _require_data_completeness(
@@ -427,6 +460,23 @@ async def _run_analysis(
                 line for line in completeness_error.splitlines() if line.strip()
             )
 
+    live_quality_state = build_pipeline_quality_state(
+        market_payload,
+        policy_rules=_effective_policy_rules(
+            policy_rules,
+            block_on_stale=block_on_stale,
+            critical_stale_keys=critical_stale_keys if isinstance(critical_stale_keys, list) else None,
+        ),
+        stage="stage3",
+        allow_estimated=allow_estimated,
+    )
+    live_quality_blocker_keys = _quality_blocker_keys(
+        _filtered_quality_blockers(
+            live_quality_state,
+            skip_fund_flow_check=skip_fund_flow_check,
+        )
+    )
+
     # 3) gap monitor gate
     ai_websearch_flag = bool(market_payload.get("metadata", {}).get("ai_websearch_enhanced"))
 
@@ -436,9 +486,23 @@ async def _run_analysis(
         gap = _load_gap_monitor(gap_path)
         pending = gap.get("pending_tasks", []) or []
         manual_raw = gap.get("manual_required", []) or []
+        pending_blocking: List[str] = []
+        stale_gap_items: List[str] = []
+
+        for item in pending:
+            key = _gap_item_key(item)
+            if not key:
+                continue
+            if key in live_quality_blocker_keys:
+                pending_blocking.append(key)
+            else:
+                stale_gap_items.append(key)
+
         manual_blocking: List[str] = []
         for item in manual_raw:
-            key = str(item)
+            key = _gap_item_key(item)
+            if not key:
+                continue
             if _is_allowlisted_gap_item(market_payload, key, policy_rules):
                 _append_non_blocking_warning(
                     market_payload,
@@ -449,12 +513,28 @@ async def _run_analysis(
                         "message": f"gap_monitor 白名单放行: {key}",
                     },
                 )
-            else:
+            elif key in live_quality_blocker_keys:
                 manual_blocking.append(key)
+            else:
+                stale_gap_items.append(key)
 
-        if pending or manual_blocking:
+        if stale_gap_items:
+            _append_non_blocking_warning(
+                market_payload,
+                {
+                    "level": "warning",
+                    "code": "gap_monitor_file_diagnostic_only",
+                    "key": "*",
+                    "message": (
+                        "gap_monitor retained for diagnostics only; stale items ignored: "
+                        + ", ".join(sorted(set(stale_gap_items)))
+                    ),
+                },
+            )
+
+        if pending_blocking or manual_blocking:
             blockers.append(
-                f"gap_monitor({gap_path}): pending={pending}, manual_required={manual_blocking}"
+                f"gap_monitor({gap_path}): pending={pending_blocking}, manual_required={manual_blocking}"
             )
     else:
         print(f"[WARN] 已跳过 gap_monitor 检查（调试模式），路径: {gap_path}")
