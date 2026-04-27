@@ -40,16 +40,65 @@ def _has_live_current_value(entry: Any) -> bool:
     return not (is_stage2_number_placeholder(value) or is_legacy_713_placeholder(value))
 
 
-def _prefer_entry(existing: Any, incoming: Any, *, incoming_is_canonical: bool) -> Any:
+def _is_missing_metadata_value(value: Any) -> bool:
+    return value is None or value == ""
+
+
+def _is_non_placeholder_value(value: Any) -> bool:
+    return not (is_stage2_number_placeholder(value) or is_legacy_713_placeholder(value))
+
+
+MERGE_FIELDS = {
+    "source",
+    "source_url",
+    "date",
+    "as_of_date",
+    "report_period",
+    "change_from_120d",
+    "unit",
+    "policy_name",
+    "note",
+    "is_estimated",
+    "is_stale",
+    "expected_period",
+    "stale_reason",
+}
+
+
+def _merge_entry_metadata(kept: Dict[str, Any], discarded: Mapping[str, Any]) -> Dict[str, Any]:
+    merged = dict(kept)
+    if not _has_live_current_value(merged):
+        candidate_current = discarded.get("current_value")
+        if _is_non_placeholder_value(candidate_current):
+            merged["current_value"] = candidate_current
+
+    for field in MERGE_FIELDS:
+        if not _is_missing_metadata_value(merged.get(field)):
+            continue
+        candidate = discarded.get(field)
+        if _is_missing_metadata_value(candidate):
+            continue
+        if field == "change_from_120d" and not _is_non_placeholder_value(candidate):
+            continue
+        merged[field] = candidate
+    return merged
+
+
+def _merge_entries(existing: Any, incoming: Any, *, incoming_is_canonical: bool) -> Any:
+    if not isinstance(existing, Mapping):
+        return incoming if incoming_is_canonical or _has_live_current_value(incoming) else existing
+    if not isinstance(incoming, Mapping):
+        return existing
+
     existing_live = _has_live_current_value(existing)
     incoming_live = _has_live_current_value(incoming)
     if existing_live:
-        return existing
+        return _merge_entry_metadata(dict(existing), incoming)
     if incoming_live:
-        return incoming
+        return _merge_entry_metadata(dict(incoming), existing)
     if incoming_is_canonical:
-        return incoming
-    return existing
+        return _merge_entry_metadata(dict(incoming), existing)
+    return _merge_entry_metadata(dict(existing), incoming)
 
 
 def normalize_monetary_section(section: Any) -> Dict[str, Any]:
@@ -74,7 +123,7 @@ def normalize_monetary_section(section: Any) -> Dict[str, Any]:
         if canonical not in normalized:
             normalized[canonical] = entry
             continue
-        normalized[canonical] = _prefer_entry(
+        normalized[canonical] = _merge_entries(
             normalized[canonical],
             entry,
             incoming_is_canonical=str(raw_key) == canonical,

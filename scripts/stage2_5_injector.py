@@ -986,7 +986,7 @@ def inject_websearch_data(
         path=market_data_path,
         fallback_to_today=True,
     )
-    trend_base_dir = trend_history_base_dir or DEFAULT_BASE_DIR
+    trend_base_dir = trend_history_base_dir or (None if disable_trend_history_write else DEFAULT_BASE_DIR)
 
     # 读取WebSearch结果
     print(f"[INFO] 读取WebSearch结果: {websearch_path}")
@@ -1241,7 +1241,7 @@ def inject_websearch_data(
         _remove_top_missing(market_data, symbol)
 
     # 注入完成后回读 trend_history 补齐缺失变化值（默认开启）
-    if backfill_trend:
+    if backfill_trend and trend_base_dir is not None:
         try:
             backfill_stats = _backfill_trend_changes(market_data, base_dir=trend_base_dir)
             total_backfilled = sum(backfill_stats.values())
@@ -1351,7 +1351,7 @@ def inject_websearch_data(
             print(f"  - trend_history final write failed: {exc}")
 
     # Post-write backfill: use freshly written trend_history details to recompute change fields.
-    if backfill_trend:
+    if backfill_trend and trend_base_dir is not None:
         try:
             post_stats = _run_post_write_trend_backfill(
                 market_data,
@@ -1536,7 +1536,7 @@ def _apply_macro_entry(
     is_manual: bool = False,
     override_stale: bool = True,
     force_override: bool = False,
-    trend_history_base_dir: Optional[Path] = None,
+    trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -1620,12 +1620,16 @@ def _apply_macro_entry(
             entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
 
     # 先尝试事件序列回填 previous_value / change_rate（工业增加值仅在当月同比可用时回填）
-    if entry['previous_value'] is None and entry['current_value'] is not None:
+    if (
+        entry['previous_value'] is None
+        and entry['current_value'] is not None
+        and trend_history_base_dir is not None
+    ):
         hist_prev = _calc_prev_from_event_history(
             indicator_key,
             entry['current_value'],
             reference_date,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         if hist_prev.get("previous_value") is not None:
             entry['previous_value'] = hist_prev.get("previous_value")
@@ -1732,7 +1736,7 @@ def _apply_monetary_entry(
     is_manual: bool = False,
     override_stale: bool = True,
     force_override: bool = False,
-    trend_history_base_dir: Optional[Path] = None,
+    trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -1782,12 +1786,16 @@ def _apply_monetary_entry(
             entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
 
     fallback_reason = None
-    if entry['change_from_120d'] is None and entry['current_value'] is not None:
+    if (
+        entry['change_from_120d'] is None
+        and entry['current_value'] is not None
+        and trend_history_base_dir is not None
+    ):
         hist = _calc_change_from_event_history(
             indicator_key,
             entry['current_value'],
             reference_date,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         if hist.get("change_from_120d") is not None:
             entry['change_from_120d'] = hist.get("change_from_120d")
@@ -2932,7 +2940,7 @@ def _merge_bond_entry(
     payload: Dict[str, Any],
     *,
     is_manual: bool = False,
-    trend_history_base_dir: Optional[Path] = None,
+    trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
 ) -> Dict[str, Any]:
     merged = dict(existing)
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
@@ -2952,12 +2960,12 @@ def _merge_bond_entry(
     symbol = merged.get('symbol')
     used_hist_5d = False
     used_hist_120d = False
-    if current_yield and symbol:
+    if current_yield and symbol and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
             "bonds",
             symbol,
             current_yield,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         merged['change_5d_bp'] = _coerce_float(payload.get('change_5d_bp'))
         if merged['change_5d_bp'] is None:
@@ -3008,7 +3016,7 @@ def _merge_commodity_entry(
     payload: Dict[str, Any],
     *,
     is_manual: bool = False,
-    trend_history_base_dir: Optional[Path] = None,
+    trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
 ) -> Dict[str, Any]:
     merged = dict(existing)
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
@@ -3021,12 +3029,12 @@ def _merge_commodity_entry(
     symbol = merged.get('symbol')
     used_hist_5d = False
     used_hist_120d = False
-    if current_price and symbol:
+    if current_price and symbol and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
             "commodities",
             symbol,
             current_price,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         # daily_change 优先使用 payload，否则用历史计算的 change_5d
         merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
@@ -3076,7 +3084,7 @@ def _merge_forex_entry(
     payload: Dict[str, Any],
     *,
     is_manual: bool = False,
-    trend_history_base_dir: Optional[Path] = None,
+    trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
 ) -> Dict[str, Any]:
     merged = dict(orig)
     merged['pair'] = payload.get('pair', orig.get('pair'))
@@ -3088,18 +3096,18 @@ def _merge_forex_entry(
     symbol = merged.get('pair')
     used_hist_1d = False
     used_hist_120d = False
-    if current_rate and symbol:
+    if current_rate and symbol and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
             "forex",
             symbol,
             current_rate,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         daily_hist = _calc_daily_change_from_trend_history(
             "forex",
             symbol,
             current_rate,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
         if merged['daily_change'] is None:
@@ -3143,25 +3151,25 @@ def _merge_forex_entry(
     return merged
 
 
-def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optional[Path] = None) -> Dict[str, Any]:
+def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR) -> Dict[str, Any]:
     pair = payload.get('pair') or payload.get('symbol') or 'UNKNOWN'
     current_rate = _coerce_float(payload.get('current_rate'))
 
     # 从 trend_history 计算变化值（daily_change 取前一交易日变化）
     daily_change = _coerce_percent(payload.get('daily_change'))
     change_120d = _coerce_percent(payload.get('change_120d'))
-    if current_rate and pair:
+    if current_rate and pair and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
             "forex",
             pair,
             current_rate,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         daily_hist = _calc_daily_change_from_trend_history(
             "forex",
             pair,
             current_rate,
-            base_dir=trend_history_base_dir or DEFAULT_BASE_DIR,
+            base_dir=trend_history_base_dir,
         )
         if daily_change is None:
             daily_change = daily_hist.get('change_1d') or 0.0

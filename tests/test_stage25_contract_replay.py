@@ -95,3 +95,81 @@ def test_stage25_replay_normalizes_legacy_monetary_key_and_disables_trend_write(
     assert output["metadata"].get("missing_items") in (None, {})
     assert not trend_base.exists()
     assert not (tmp_path / "data" / "trend_history" / "min").exists()
+
+
+def test_stage25_disable_trend_write_without_base_skips_real_trend_reads(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    market_path = tmp_path / "market_data_stage2.json"
+    manual_path = tmp_path / "websearch_results_manual.json"
+    output_path = tmp_path / "market_data_complete.json"
+
+    market_path.write_text(
+        json.dumps(
+            {
+                "metadata": {"date": "2026-04-27", "data_completeness": 0.8},
+                "missing_items": ["US10Y"],
+                "monetary_policy": {},
+                "macro_indicators": {},
+                "fund_flow": {},
+                "commodities": [],
+                "forex": [],
+                "bonds": [
+                    {
+                        "symbol": "US10Y",
+                        "name": "US 10Y",
+                        "current_yield": None,
+                        "change_5d_bp": None,
+                        "change_120d_bp": None,
+                    }
+                ],
+                "stock_indices": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manual_path.write_text(
+        json.dumps(
+            {
+                "bonds": [
+                    {
+                        "symbol": "US10Y",
+                        "name": "US 10Y",
+                        "current_yield": 4.2,
+                        "source": "manual https://example.com/us10y",
+                        "source_url": "https://example.com/us10y",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    def _fail_trend_read(*args, **kwargs):
+        raise AssertionError("trend history read should be skipped")
+
+    def _fail_backfill(*args, **kwargs):
+        raise AssertionError("trend backfill should be skipped")
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fail_trend_read)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fail_trend_read)
+    monkeypatch.setattr(injector, "_calc_change_from_event_history", _fail_trend_read)
+    monkeypatch.setattr(injector, "_calc_prev_from_event_history", _fail_trend_read)
+    monkeypatch.setattr(injector, "_backfill_trend_changes", _fail_backfill)
+
+    injector.inject_websearch_data(
+        market_path,
+        manual_path,
+        output_path,
+        gap_monitor_path=tmp_path / "gap_monitor.json",
+        disable_trend_history_write=True,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+
+    assert output["bonds"][0]["current_yield"] == 4.2
+    assert not (tmp_path / "data" / "trend_history" / "min").exists()

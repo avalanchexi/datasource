@@ -61,3 +61,32 @@ def test_normalize_monetary_section_collapses_duplicate_live_entries_to_canonica
 
     assert list(normalized) == ["reverse_repo"]
     assert normalized["reverse_repo"]["current_value"] == 1.7
+
+
+def test_normalize_monetary_section_merges_alias_metadata_into_canonical_live_entry():
+    section = {
+        "mlf": {
+            "current_value": 2.0,
+            "source": "",
+            "date": None,
+            "change_from_120d": None,
+            "unit": "%",
+        },
+        "mlf_rate": {
+            "current_value": None,
+            "source": "legacy source",
+            "date": "2026-04",
+            "change_from_120d": 0.1,
+            "source_url": "https://example.com/mlf",
+        },
+    }
+
+    normalized = normalize_monetary_section(section)
+
+    assert list(normalized) == ["mlf"]
+    assert normalized["mlf"]["current_value"] == 2.0
+    assert normalized["mlf"]["source"] == "legacy source"
+    assert normalized["mlf"]["date"] == "2026-04"
+    assert normalized["mlf"]["change_from_120d"] == 0.1
+    assert normalized["mlf"]["source_url"] == "https://example.com/mlf"
+    assert normalized["mlf"]["unit"] == "%"
