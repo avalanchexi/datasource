@@ -20,7 +20,7 @@ EXECUTION_PHASES = {
                 "action": "检查.env文件、项目结构、Python依赖",
                 "bash_commands": [
                     "ls -la .env",
-                    "ls scripts/utility/background_scan_120d_generator.py",
+                    "echo 'ARCHIVED: background_scan_120d_generator.py is manual-only; use AGENTS.md Stage1->Stage4'",
                     "python -c \"from datasource import get_manager; print('DataSource OK')\""
                 ],
                 "expected_output": "环境配置正常，数据源可用"
@@ -39,20 +39,21 @@ EXECUTION_PHASES = {
             },
             {
                 "task": "更新脚本配置",
-                "action": "使用Edit工具修改background_scan_120d_generator.py中的日期配置",
+                "action": "归档说明：旧 generator 不再作为当前执行路径；按 AGENTS.md 运行 Stage1->Stage4",
                 "file_edits": [
-                    "self.end_date = \"目标日期\"",
-                    "self.start_date = \"起始日期\"",
-                    "report_filename = f\"reports/{目标日期}背景扫描120.md\""
+                    "不修改 scripts/utility/background_scan_120d_generator.py",
+                    "使用 scripts/stage1_data_collector.py --date 目标日期",
+                    "最终通过 scripts/stage4_report_generator.py 输出 reports/{目标日期}-背景扫描120.md"
                 ]
             },
             {
                 "task": "执行数据收集",
-                "action": "运行背景扫描生成器脚本",
+                "action": "运行当前 Stage1->Stage4 流水线，不运行 legacy generator",
                 "bash_commands": [
-                    "python scripts/utility/background_scan_120d_generator.py"
+                    "bash run_clean.sh python scripts/stage1_data_collector.py --date \"$DATE\" --output \"data/runs/${DATE_NH}/market_data.json\"",
+                    "bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data \"data/runs/${DATE_NH}/market_data.json\" --output \"data/runs/${DATE_NH}/market_data_stage2.json\" --phase all --execute-search --fund-flow-backend tavily"
                 ],
-                "expected_output": "生成初始报告文件到reports/目录"
+                "expected_output": "生成 data/runs/${DATE_NH}/market_data_stage2.json，缺口转 Stage2.5 注入"
             }
         ]
     },

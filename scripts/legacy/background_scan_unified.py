@@ -1,7 +1,11 @@
 ﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Unified Background Scan Generator (Stage 1→4 pipeline, V3.3+)
+Archived unified background scan generator.
+
+This legacy orchestrator is retained for historical diagnostics only. The
+active daily pipeline is Stage1 -> Stage2 unified -> Stage2.5 -> Stage3 ->
+Stage4, as documented in AGENTS.md.
 """
 
 import argparse
@@ -38,15 +42,15 @@ class UnifiedBackgroundScanner:
 
         if self.enable_full_mcp:
             self.mode = "V3.3-Full"
-            self.mode_desc = "Full mode (Stage 2 full MCP enhancement)"
+            self.mode_desc = "Archived full mode (legacy Stage 2 MCP enhancement)"
             self.stage2_mode = "full"
         elif self.enable_mcp:
             self.mode = "V3.3-Accurate"
-            self.mode_desc = "Accurate mode (Stage 2 supplement MCP)"
+            self.mode_desc = "Archived accurate mode (legacy Stage 2 MCP supplement)"
             self.stage2_mode = "supplement"
         else:
             self.mode = "V3.1-Fast"
-            self.mode_desc = "Fast mode (no Stage 2 MCP)"
+            self.mode_desc = "Archived fast mode (no legacy Stage 2 MCP)"
             self.stage2_mode = None
 
         date_token = end_date.replace("-", "")
@@ -95,11 +99,11 @@ class UnifiedBackgroundScanner:
 
     def _print_pipeline(self) -> None:
         if not self.stage2_mode:
-            steps = "Stage 1 -> Stage 3 -> Stage 4"
+            steps = "Archived Stage 1 -> Stage 3 -> Stage 4"
         elif self.stage2_mode == "supplement":
-            steps = "Stage 1 -> Stage 2 (MCP supplement) -> Stage 3 -> Stage 4"
+            steps = "Archived Stage 1 -> legacy Stage 2 (MCP supplement) -> Stage 3 -> Stage 4"
         else:
-            steps = "Stage 1 -> Stage 2 (MCP full) -> Stage 3 -> Stage 4"
+            steps = "Archived Stage 1 -> legacy Stage 2 (MCP full) -> Stage 3 -> Stage 4"
         print(f"Pipeline: {steps}")
 
     async def _run_stage1(self) -> None:
@@ -122,13 +126,13 @@ class UnifiedBackgroundScanner:
 
     async def _run_stage2(self, mode: str) -> None:
         print(f"\n{'─' * 70}")
-        print("[Stage 2] MCP data enhancement")
+        print("[Stage 2] Archived MCP data enhancement")
         print(f"{'─' * 70}")
         print(f"  Mode: {mode}")
 
         cmd = [
             sys.executable,
-            "scripts/stage2_mcp_enhancer.py",
+            "scripts/legacy/stage2_mcp_enhancer.py",
             "--market-data",
             str(self.market_data_path),
             "--output",
@@ -217,7 +221,7 @@ class UnifiedBackgroundScanner:
         print(f"\n{'=' * 70}")
         print("[WARNING] Pring prerequisites are incomplete")
         print(f"Missing macro indicators: {macro_missing}, monetary policies: {monetary_missing}")
-        print("建议: 补充 WebSearch 结果后重跑 Stage 2 (scripts/stage2_mcp_enhancer.py)")
+        print("建议: 写入 Stage2.5 manual/WebSearch JSON，并通过 scripts/stage2_5_injector.py 注入。")
         print(f"参考提示文件: {prompt_file}")
         print(f"{'=' * 70}\n")
         for seconds in range(5, 0, -1):
@@ -246,11 +250,11 @@ class UnifiedBackgroundScanner:
         print(f"{'=' * 70}")
 
         if self.mode == "V3.1-Fast":
-            print("\n[Hint] Use --enable-mcp for higher data completeness.")
+            print("\n[Hint] 当前生产流程请使用 scripts/stage2_unified_enhancer.py + scripts/stage2_5_injector.py。")
         elif self.mode == "V3.3-Accurate":
-            print("\n[Hint] Use --enable-full-mcp for full MCP coverage if needed.")
+            print("\n[Hint] 当前生产流程请使用 scripts/stage2_unified_enhancer.py + scripts/stage2_5_injector.py。")
         else:
-            print("\n[Info] Full MCP mode already applied.")
+            print("\n[Info] legacy full MCP mode already applied; do not use as current补数入口.")
 
         if self.keep_intermediates:
             print("\nIntermediate files kept:")
@@ -264,13 +268,13 @@ class UnifiedBackgroundScanner:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Unified background scan generator (Stage 1→4)",
+        description="ARCHIVED legacy background scan generator (not the current daily pipeline)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python background_scan_unified.py --date 2025-11-14 --output reports/20251114背景扫描120.md
-  python background_scan_unified.py --date 2025-11-14 --output reports/20251114背景扫描120.md --enable-mcp
-  python background_scan_unified.py --date 2025-11-14 --output reports/20251114背景扫描120.md --enable-full-mcp --keep-intermediates
+  Current flow: use AGENTS.md Stage1 -> Stage2 unified -> Stage2.5 -> Stage3 -> Stage4.
+  Historical diagnostics only:
+    python scripts/legacy/background_scan_unified.py --run-archived --date 2025-11-14 --output reports/20251114背景扫描120.md
 """,
     )
     parser.add_argument("--date", required=True, help="End date (YYYY-MM-DD)")
@@ -283,20 +287,33 @@ Examples:
     parser.add_argument(
         "--enable-mcp",
         action="store_true",
-        help="Run Stage 2 in supplement mode (fund flow + headlines)",
+        help="legacy diagnostic only: run archived Stage 2 MCP supplement mode",
     )
     parser.add_argument(
         "--enable-full-mcp",
         action="store_true",
-        help="Run Stage 2 in full mode (all MCP enhancements)",
+        help="legacy diagnostic only: run archived Stage 2 MCP full mode",
     )
     parser.add_argument(
         "--skip-validation",
         action="store_true",
         help="Legacy flag (no-op, kept for backward compatibility)",
     )
+    parser.add_argument(
+        "--run-archived",
+        action="store_true",
+        help="Explicitly run this archived diagnostic. Omit for current daily pipeline.",
+    )
 
     args = parser.parse_args()
+    if not args.run_archived:
+        print(
+            "[ARCHIVED] scripts/legacy/background_scan_unified.py is not the current daily pipeline.\n"
+            "Use AGENTS.md Stage1 -> Stage2 unified -> Stage2.5 -> Stage3 -> Stage4.\n"
+            "Pass --run-archived only for historical diagnostics.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
     scanner = UnifiedBackgroundScanner(
         end_date=args.date,
         output_path=args.output,

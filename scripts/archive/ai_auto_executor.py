@@ -64,7 +64,7 @@ class AIExecutionController:
                     "tool": "Bash",
                     "commands": [
                         "ls -la .env",
-                        "ls scripts/utility/background_scan_120d_generator.py"
+                        "echo 'ARCHIVED: background_scan_120d_generator.py is manual-only; use AGENTS.md Stage1->Stage4'"
                     ]
                 },
                 {
@@ -92,19 +92,19 @@ class AIExecutionController:
                 {
                     "action": "update_script_dates",
                     "tool": "Edit",
-                    "file": "scripts/utility/background_scan_120d_generator.py",
+                    "file": "AGENTS.md current Stage1->Stage4 pipeline",
                     "edits": [
                         {
-                            "old_string": "self.end_date = \"2025-09-18\"",
-                            "new_string": f"self.end_date = \"{self.formatted_date}\""
+                            "old_string": "legacy generator date edit",
+                            "new_string": f"run scripts/stage1_data_collector.py --date {self.formatted_date}"
                         },
                         {
-                            "old_string": "self.start_date = \"2025-05-21\"",
-                            "new_string": f"self.start_date = \"{self.start_date}\""
+                            "old_string": "legacy generator start_date edit",
+                            "new_string": "use trend history / Stage inputs instead of editing generator source"
                         },
                         {
-                            "old_string": "report_filename = f\"reports/20250918背景扫描120.md\"",
-                            "new_string": f"report_filename = f\"reports/{self.target_date}背景扫描120.md\""
+                            "old_string": "legacy generator report filename edit",
+                            "new_string": f"run scripts/stage4_report_generator.py --output reports/{self.formatted_date}-背景扫描120.md"
                         }
                     ]
                 },
@@ -112,7 +112,7 @@ class AIExecutionController:
                     "action": "execute_data_collection",
                     "tool": "Bash",
                     "commands": [
-                        "python scripts/utility/background_scan_120d_generator.py"
+                        "bash run_clean.sh python scripts/stage1_data_collector.py --date \"$DATE\" --output \"data/runs/${DATE_NH}/market_data.json\""
                     ]
                 },
                 {

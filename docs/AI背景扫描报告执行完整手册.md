@@ -1363,7 +1363,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ### 🎯 PHASE 5 最佳实践
 
-1. **优先使用MCP补充**: 对于外部数据(美股/汇率/商品),优先使用WebSearch/WebFetch
+1. **当前补数入口**: 外部数据缺口先走 Stage2 unified；仍缺失时写入 Stage2.5 manual/WebSearch JSON 后注入
 2. **异常零值必查**: 资金流向出现连续零值,必须验证数据合理性
 3. **估算值明确标注**: 确实无法获取的数据,使用估算值并明确标注"估"
 4. **迭代优化控制**: 最多3次迭代,每次针对不同类型的数据缺失
@@ -1408,9 +1408,9 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ### 常见问题及解决方案
 
-**问题1: 传统API连接失败**
-- 解决: 立即切换MCP WebFetch获取
-- 标注: "MCP WebSearch补充"
+**问题1: Stage1/API 连接失败**
+- 解决: 记录缺口，继续 Stage2 unified；仍缺失时进入 Stage2.5 manual/WebSearch JSON 注入
+- 标注: `tavily+deepseek` 或 Stage2.5 `source_url`
 
 **问题2: WebFetch返回错误**
 - 解决: 切换WebSearch多源搜索
@@ -1425,8 +1425,8 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 - 说明: 在数据说明中详细解释
 
 **问题5: 资金流向数据获取失败**
-- 解决: 立即执行MCP WebSearch补录，并记录原始来源
-- 标注: 数据来源和获取方式
+- 解决: 标记 `manual_required`，写入 `websearch_results_manual.json` 后通过 `scripts/stage2_5_injector.py` 注入
+- 标注: 数据来源、URL 和获取方式
 
 ---
 
@@ -1492,13 +1492,15 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ---
 
-## 🚀 V2.1版本优势
+## 🚀 V2.1版本优势（历史记录）
 
-### MCP服务集成核心优势
+> 本节仅保留历史背景，不是当前执行建议。当前补数优先级以 AGENTS.md 为准。
+
+### 历史 MCP服务集成核心优势
 
 **1. 数据获取能力增强**
-- WebFetch直接调用Yahoo Finance API
-- WebSearch智能识别权威财经网站
+- 历史方案曾使用 WebFetch 直接调用 Yahoo Finance API
+- 历史方案曾使用 WebSearch 智能识别权威财经网站
 - 实时性强，无API密钥维护负担
 
 **2. 数据完整性保证**
