@@ -44,6 +44,28 @@ def _is_missing_metadata_value(value: Any) -> bool:
     return value is None or value == ""
 
 
+METADATA_PLACEHOLDER_VALUES = {
+    "n/a",
+    "placeholder",
+    "占位",
+    "待获取",
+    "待 websearch",
+    "待人工补数(stage2 manual_required)",
+}
+
+
+def _is_metadata_placeholder_value(value: Any) -> bool:
+    if _is_missing_metadata_value(value):
+        return True
+    if not isinstance(value, str):
+        return False
+
+    normalized = value.strip().lower()
+    if normalized in METADATA_PLACEHOLDER_VALUES:
+        return True
+    return "待 websearch" in normalized
+
+
 def _is_non_placeholder_value(value: Any) -> bool:
     return not (is_stage2_number_placeholder(value) or is_legacy_713_placeholder(value))
 
@@ -73,10 +95,10 @@ def _merge_entry_metadata(kept: Dict[str, Any], discarded: Mapping[str, Any]) ->
             merged["current_value"] = candidate_current
 
     for field in MERGE_FIELDS:
-        if not _is_missing_metadata_value(merged.get(field)):
+        if not _is_metadata_placeholder_value(merged.get(field)):
             continue
         candidate = discarded.get(field)
-        if _is_missing_metadata_value(candidate):
+        if _is_metadata_placeholder_value(candidate):
             continue
         if field == "change_from_120d" and not _is_non_placeholder_value(candidate):
             continue
