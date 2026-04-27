@@ -18,7 +18,19 @@ sys.path.insert(0, os.path.join(project_root, 'src'))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-async def test_120d_integration():
+def test_legacy_120d_integration_is_manual_only():
+    """Keep pytest from executing deprecated 120d scanner diagnostics."""
+    import pytest
+
+    pytest.skip(
+        "legacy 120d background scan integration is manual-only; "
+        "use the documented Stage1 -> Stage4 pipeline for active runs"
+    )
+
+
+# Manual diagnostics only. These names deliberately do not start with `test_`
+# so pytest does not execute deprecated background-scan runtime paths.
+async def manual_120d_integration():
     """测试120日背景扫描系统集成"""
     
     print("🚀 开始120日背景扫描系统集成测试...")
@@ -121,7 +133,7 @@ async def test_120d_integration():
         traceback.print_exc()
         return False
 
-async def test_unified_scanner():
+async def manual_unified_scanner():
     """测试统一扫描器"""
     
     print("\n🔍 测试统一120日背景扫描器...")
@@ -165,11 +177,11 @@ async def main():
     print("=" * 60)
     
     # 基础集成测试
-    integration_success = await test_120d_integration()
+    integration_success = await manual_120d_integration()
     
     if integration_success:
         # 统一扫描器测试
-        scanner_success = await test_unified_scanner()
+        scanner_success = await manual_unified_scanner()
         
         if scanner_success:
             print("\n" + "=" * 60)
