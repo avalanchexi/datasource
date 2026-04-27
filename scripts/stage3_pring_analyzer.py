@@ -209,36 +209,6 @@ def _require_data_completeness(
                 f"\nstale项: {'; '.join(details)}"
             )
 
-    # 若允许估算值，自动忽略那些已经被估算填充但仍留在 missing 列表中的条目
-    if allow_estimated:
-        def _has_non_null_value(key: str) -> bool:
-            # fund flow
-            flow = market_payload.get("fund_flow", {}).get(key)
-            if isinstance(flow, dict) and flow.get("recent_5d") not in (None, 0) and flow.get("total_120d") not in (None, 0):
-                return True
-            # forex
-            for fx in market_payload.get("forex", []):
-                if fx.get("pair") == key and fx.get("current_rate") not in (None, 0):
-                    return True
-            # bonds
-            for bond in market_payload.get("bonds", []):
-                if bond.get("symbol") == key and bond.get("current_yield") not in (None, 0):
-                    return True
-            # commodities
-            for com in market_payload.get("commodities", []):
-                if com.get("symbol") == key and com.get("current_price") not in (None, 0):
-                    return True
-            # macro
-            indicator = market_payload.get("macro_indicators", {}).get(key)
-            if isinstance(indicator, dict) and indicator.get("current_value") is not None:
-                return True
-            # monetary
-            policy = market_payload.get("monetary_policy", {}).get(key)
-            if isinstance(policy, dict) and policy.get("current_value") is not None:
-                return True
-            return False
-
-        missing_items = [k for k in missing_items if not _has_non_null_value(k)]
     if skip_fund_flow_check:
         fund_flow_keys = set(market_payload.get("fund_flow", {}).keys())
         for flow in market_payload.get("fund_flow", {}).values():

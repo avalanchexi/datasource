@@ -33,6 +33,27 @@ def test_require_data_completeness_fail_on_missing():
         s3._require_data_completeness(payload, 0.8)
 
 
+def test_require_data_completeness_allow_estimated_still_blocks_metadata_missing():
+    payload = {
+        "metadata": {
+            "data_completeness": 0.95,
+            "missing_items": {"macro_indicators": ["cpi"]},
+        },
+        "missing_items": [],
+        "macro_indicators": {
+            "cpi": {
+                "current_value": 0.2,
+                "previous_value": 0.8,
+                "change_rate": -0.6,
+                "is_estimated": False,
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError):
+        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+
+
 def test_require_data_completeness_fail_on_low_score():
     payload = {
         "metadata": {"data_completeness": 0.5},

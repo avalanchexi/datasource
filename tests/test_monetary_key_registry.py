@@ -118,3 +118,26 @@ def test_normalize_monetary_section_keeps_alias_live_value_and_canonical_metadat
     assert normalized["mlf"]["report_period"] == "2026-04"
     assert normalized["mlf"]["change_from_120d"] == -0.2
     assert normalized["mlf"]["note"] == "来源: 中国人民银行"
+
+
+def test_normalize_monetary_section_keeps_zero_change_from_canonical_metadata():
+    section = {
+        "mlf_rate": {
+            "current_value": 2.0,
+            "source": "placeholder",
+        },
+        "mlf": {
+            "current_value": 7.13,
+            "change_from_120d": 0.0,
+            "source": "PBOC",
+            "date": "2026-04-25",
+        },
+    }
+
+    normalized = normalize_monetary_section(section)
+
+    assert list(normalized) == ["mlf"]
+    assert normalized["mlf"]["current_value"] == 2.0
+    assert normalized["mlf"]["change_from_120d"] == 0.0
+    assert normalized["mlf"]["source"] == "PBOC"
+    assert normalized["mlf"]["date"] == "2026-04-25"

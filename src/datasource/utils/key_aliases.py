@@ -70,6 +70,14 @@ def _is_non_placeholder_value(value: Any) -> bool:
     return not (is_stage2_number_placeholder(value) or is_legacy_713_placeholder(value))
 
 
+def _is_change_from_120d_placeholder(value: Any) -> bool:
+    if _is_metadata_placeholder_value(value):
+        return True
+    if not isinstance(value, str):
+        return False
+    return value.strip().lower() == "n/a"
+
+
 MERGE_FIELDS = {
     "source",
     "source_url",
@@ -100,7 +108,7 @@ def _merge_entry_metadata(kept: Dict[str, Any], discarded: Mapping[str, Any]) ->
         candidate = discarded.get(field)
         if _is_metadata_placeholder_value(candidate):
             continue
-        if field == "change_from_120d" and not _is_non_placeholder_value(candidate):
+        if field == "change_from_120d" and _is_change_from_120d_placeholder(candidate):
             continue
         merged[field] = candidate
     return merged
