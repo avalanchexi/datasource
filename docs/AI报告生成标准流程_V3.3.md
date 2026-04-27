@@ -6,7 +6,7 @@
 **文档版本**: V3.3+ (归档参考)
 **验证日期**: 2025-11-24
 **归档日期**: 2025-12-09
-**验证状态**: ✅ PASS (100% completeness after MCP/手工补数, 85% confidence)
+**验证状态**: ✅ PASS (100% completeness after Stage2/Stage2.5 补数, 85% confidence)
 
 ---
 
@@ -122,7 +122,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 {
   "collection_date": "2025-11-14",
   "collection_time": "2025-11-14T10:45:00",
-  "data_source": "MCP WebSearch",
+  "data_source": "Stage2.5 manual/WebSearch",
   "macro_indicators": {
     "ppi": {
       "indicator_name": "PPI",
@@ -200,7 +200,7 @@ python -c "import json; data=json.load(open('data/20251114_market_data_complete.
 
 **标准化说明**:
 - 注入脚本会把资金流向 `recent_5d` / `total_120d` 统一转换为“亿元”浮点，并自动推断 `trend` 与 `source`（`Tavily WebSearch+DeepSeek` 或 `异常零值-需核查`），`note` 中保留原始文本。
-- 宏观与货币字段会去掉 `%`、千分符等字符，同时把 `source` 规范化为 `MCP WebSearch` 前缀，并将 `is_estimated` 置为 `False`。
+- 宏观与货币字段会去掉 `%`、千分符等字符，同时把 `source` 规范化为 Stage2.5 manual/WebSearch 来源，并将 `is_estimated` 置为 `False`。
 
 ---
 

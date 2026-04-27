@@ -507,7 +507,7 @@ def _bond_display_date(bond: dict, report_date: str) -> str:
         return _extract_date_from_text(str(explicit_date)) or str(explicit_date)[:10]
 
     note_date = _extract_date_from_text(str(bond.get("note") or ""))
-    if note_date and note_date == str(report_date)[:10]:
+    if note_date:
         return note_date
     return "N/A"
 
@@ -981,9 +981,9 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     layer1 = pring_result.get('layer_1_inventory_cycle', {})
     layer2 = pring_result.get('layer_2_monetary_cycle', {})
     layer3 = pring_result.get('layer_3_pring_final', {})
-    analysis1 = layer1.get('analysis', '（暂无详细解析，待MCP补充）')
-    analysis2 = layer2.get('analysis', '（暂无详细解析，待MCP补充）')
-    analysis3 = layer3.get('analysis', '（暂无详细解析，待MCP补充）')
+    analysis1 = layer1.get('analysis', '（暂无详细解析，待Stage2.5补充）')
+    analysis2 = layer2.get('analysis', '（暂无详细解析，待Stage2.5补充）')
+    analysis3 = layer3.get('analysis', '（暂无详细解析，待Stage2.5补充）')
 
     report += """
 
@@ -1088,8 +1088,8 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
 ## 附录：数据来源
 
-- **API数据源**: TuShare, International Finance
-- **MCP增强**: WebSearch (债券、商品、宏观、货币、资金流向)
+- **API数据源**: TuShare
+- **补数链路**: Stage2 Tavily/DeepSeek + Stage2.5 manual/WebSearch JSON 注入
 - **数据完整性**: {completeness:.1%}
 - **分析方法**: {pring_result['metadata'].get('analysis_method', 'Pring三层框架')}
 {estimated_note}{warning_note}

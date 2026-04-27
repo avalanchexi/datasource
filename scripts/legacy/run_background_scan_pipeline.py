@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PYTHON_EXECUTABLE = sys.executable or "python3"
 SRC_ROOT = PROJECT_ROOT / "src"
 

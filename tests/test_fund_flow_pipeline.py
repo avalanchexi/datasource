@@ -4,8 +4,8 @@
 资金流向数据流水线测试
 
 测试范围:
-1. Stage 1: collect_fund_flow()创建4个占位符
-2. Stage 4: 识别占位符并生成MCP提示词
+1. Stage 1: collect_fund_flow()识别资金流缺口和TuShare可得项
+2. Stage 4: 识别占位符并生成 WebSearch 提示词
 3. manual_fund_flow_updater: 手动更新工具
 """
 
@@ -60,16 +60,22 @@ class TestFundFlowPipeline(unittest.TestCase):
             for key in expected_keys:
                 self.assertIn(key, fund_flow)
 
-            # 验证每个占位符的数据结构
+            placeholder_keys = []
             for key, flow_data in fund_flow.items():
                 self.assertEqual(flow_data.type, key)
-                self.assertIsNone(flow_data.recent_5d)
-                self.assertIsNone(flow_data.total_120d)
-                self.assertEqual(flow_data.trend, '待获取')
-                self.assertEqual(flow_data.source, 'MCP WebSearch待获取')
-                self.assertIn('需要MCP WebSearch实时获取', flow_data.note)
+                if flow_data.source == '待WebSearch补充':
+                    placeholder_keys.append(key)
+                    self.assertIsNone(flow_data.recent_5d)
+                    self.assertIsNone(flow_data.total_120d)
+                    self.assertEqual(flow_data.trend, '待获取')
+                    self.assertIn('WebSearch/Tavily', flow_data.note)
+                else:
+                    self.assertTrue(
+                        flow_data.recent_5d is not None or flow_data.total_120d is not None
+                    )
 
-            print("[OK] Stage 1正确创建了4个资金流向占位符")
+            self.assertLessEqual(len(placeholder_keys), 4)
+            print(f"[OK] Stage 1正确识别了{len(placeholder_keys)}个资金流向缺口")
 
         asyncio.run(run_test())
 
@@ -115,8 +121,8 @@ class TestFundFlowPipeline(unittest.TestCase):
 
         print(f"[OK] 手动更新工具存在: {updater_path}")
 
-    def test_manual_updater_updates_market_data(self):
-        """测试手动更新工具正确更新market_data"""
+    def test_manual_updater_direct_write_disabled(self):
+        """手动直写工具已停用，资金流补数必须走 Stage2.5 注入"""
         # 创建临时market_data.json
         market_data = {
             "metadata": {"date": self.test_date},
@@ -147,31 +153,16 @@ class TestFundFlowPipeline(unittest.TestCase):
         sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "utility"))
         from manual_fund_flow_updater import update_fund_flow
 
-        # 执行更新
-        update_fund_flow(
-            market_data_path=str(temp_file),
-            flow_type='northbound',
-            recent_5d='+132.6亿',
-            total_120d='+845.2亿',
-            trend='持续流入',
-            source='MCP WebSearch实时获取',
-            note='数据来源：东方财富网'
-        )
-
-        # 验证更新结果
-        with open(temp_file, 'r', encoding='utf-8') as f:
-            updated_data = json.load(f)
-
-        northbound = updated_data['fund_flow']['northbound']
-        self.assertAlmostEqual(northbound['recent_5d'], 132.6, places=2)
-        self.assertAlmostEqual(northbound['total_120d'], 845.2, places=2)
-        self.assertEqual(northbound['trend'], '流入')
-        self.assertEqual(northbound['source'], 'MCP WebSearch实时获取')
-        self.assertIn('来源:MCP WebSearch实时获取', northbound['note'])
-        self.assertIn('原始5日:+132.6亿', northbound['note'])
-        self.assertIn('原始120日:+845.2亿', northbound['note'])
-
-        print("[OK] 手动更新工具正确更新了market_data")
+        with self.assertRaisesRegex(RuntimeError, "stage2_5_injector"):
+            update_fund_flow(
+                market_data_path=str(temp_file),
+                flow_type='northbound',
+                recent_5d='+132.6亿',
+                total_120d='+845.2亿',
+                trend='持续流入',
+                source='Stage2.5 manual_required',
+                note='数据来源：东方财富网'
+            )
 
     def test_manual_updater_marks_zero_anomaly(self):
         market_data = {
@@ -202,28 +193,19 @@ class TestFundFlowPipeline(unittest.TestCase):
         sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "utility"))
         from manual_fund_flow_updater import update_fund_flow
 
-        update_fund_flow(
-            market_data_path=str(temp_file),
-            flow_type='southbound',
-            recent_5d='0',
-            total_120d='0',
-            trend='震荡',
-            source='AKShare官方数据',
-            note='零值待确认'
-        )
-
-        with open(temp_file, 'r', encoding='utf-8') as f:
-            updated = json.load(f)
-
-        southbound = updated['fund_flow']['southbound']
-        self.assertEqual(southbound['source'], 'MCP WebSearch实时获取')
-        self.assertIn('异常: 零值待WebSearch复核', southbound['note'])
-        self.assertIn('来源:AKShare官方数据', southbound['note'])
-
-        print("[OK] 手动更新工具正确更新了market_data")
+        with self.assertRaisesRegex(RuntimeError, "stage2_5_injector"):
+            update_fund_flow(
+                market_data_path=str(temp_file),
+                flow_type='southbound',
+                recent_5d='0',
+                total_120d='0',
+                trend='震荡',
+                source='Stage2.5 manual_required',
+                note='零值待确认'
+            )
 
     def test_stage4_generates_fund_flow_prompts(self):
-        """测试Stage 4生成资金流向MCP提示词"""
+        """测试Stage 4生成资金流向 WebSearch 提示词"""
         from src.datasource.mcp_adapter import MCPToolAdapter
 
         adapter = MCPToolAdapter(enable_validation=True)
@@ -243,7 +225,7 @@ class TestFundFlowPipeline(unittest.TestCase):
             self.assertTrue(len(prompt.query) > 0)
             self.assertTrue(len(prompt.data_source_hint) > 0)
 
-        print(f"[OK] Stage 4正确生成了{len(prompts)}个资金流向MCP提示词")
+        print(f"[OK] Stage 4正确生成了{len(prompts)}个资金流向 WebSearch 提示词")
 
     def test_integration_stage1_to_stage4(self):
         """集成测试: Stage 1 → Stage 4完整流程"""
@@ -261,27 +243,31 @@ class TestFundFlowPipeline(unittest.TestCase):
             # Step 2: 模拟扫描占位符
             placeholders = []
             for key, flow_data in fund_flow.items():
-                if flow_data.source == 'MCP WebSearch待获取':
+                if flow_data.source == '待WebSearch补充':
                     placeholders.append(key)
 
-            # 验证识别了4个占位符
-            self.assertEqual(len(placeholders), 4)
+            # 验证占位符识别与已填 TuShare 数据可以共存
+            self.assertLessEqual(len(placeholders), 4)
 
-            # Step 3: 生成MCP提示词
+            # Step 3: 生成 WebSearch 提示词
             from src.datasource.mcp_adapter import MCPToolAdapter
             adapter = MCPToolAdapter(enable_validation=True)
             prompts = adapter.generate_fund_flow_prompts(placeholders)
 
-            # 验证生成了4个提示词
-            self.assertEqual(len(prompts), 4)
+            # 验证按实际缺口生成提示词
+            self.assertEqual(len(prompts), len(placeholders))
 
             # Step 4: 验证提示词格式化输出
             formatted = adapter.format_prompts_for_ai(prompts)
             self.assertIsInstance(formatted, str)
-            self.assertIn('北向资金', formatted)
-            self.assertIn('南向资金', formatted)
-            self.assertIn('ETF资金流', formatted)
-            self.assertIn('融资融券', formatted)
+            prompt_name_by_key = {
+                'northbound': '北向资金',
+                'southbound': '南向资金',
+                'etf': 'ETF资金流',
+                'margin': '融资融券',
+            }
+            for key in placeholders:
+                self.assertIn(prompt_name_by_key[key], formatted)
 
             print("[OK] 集成测试: Stage 1 → Stage 4完整流程成功")
 

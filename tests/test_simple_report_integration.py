@@ -143,7 +143,7 @@ def test_report_monetary_no_previous_value_hides_zero_change(tmp_path: Path):
     assert "| 中国MLF利率 | 2.0% | N/A（待 WebSearch） | % | 2026-01 |" in text
 
 
-def test_bond_date_only_shows_same_day_and_supports_english_date(tmp_path: Path):
+def test_bond_date_uses_latest_available_note_date(tmp_path: Path):
     market = _base_market()
     market["metadata"]["date"] = "2026-02-09"
     market["bonds"] = [
@@ -186,5 +186,5 @@ def test_bond_date_only_shows_same_day_and_supports_english_date(tmp_path: Path)
     _write_json(p, pring)
     generate_report(m, p, out)
     text = out.read_text(encoding="utf-8")
-    assert "| 中国10年期国债 | 1.80% | -1.7bp | +1.3bp | 平稳 | N/A |" in text
+    assert "| 中国10年期国债 | 1.80% | -1.7bp | +1.3bp | 平稳 | 2026-02-06 |" in text
     assert "| 中国10年期国开债 | 1.96% | +10.9bp | -8.4bp | 上行 | 2026-02-09 |" in text
