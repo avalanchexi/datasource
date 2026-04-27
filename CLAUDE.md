@@ -72,10 +72,10 @@ source .venv/bin/activate && source .env
 env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
 PYTHONPATH=./src python scripts/stage1_data_collector.py \
   --date "$DATE" \
-  --output data/${DATE_NH}_market_data.json
+  --output data/runs/${DATE_NH}/market_data.json
 
 # Stage 1 后必跑：月度新鲜度检查（防止 TuShare 月度表滞后被误判为"完整"）
-PYTHONPATH=./src python scripts/check_monthly_freshness.py data/${DATE_NH}_market_data.json
+PYTHONPATH=./src python scripts/check_monthly_freshness.py data/runs/${DATE_NH}/market_data.json
 # 若输出 STALE/MISSING（典型：cpi/ppi/pmi/m1/m2/tsf），必须经 Stage2/Stage2.5 补齐后才能进入 Stage3
 
 # Stage 2: Tavily+DeepSeek 增强（当日只跑1次！）

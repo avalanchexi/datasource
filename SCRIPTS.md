@@ -45,12 +45,12 @@ python3 scripts/stage2_unified_enhancer.py \
 
 #### 性能优化 / 超时排查（2025-12-04新增）
 - 禁用无效代理：命令前加 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY` 或传 `--http-proxy '' --https-proxy ''`。
-- 减少长尾（资金流向走人工/MCP）：`--fund-flow-backend mcp` 或 `--fund-flow-backend hybrid`，northbound/southbound/etf 不实时搜索。
+- 资金流后端仅支持 Tavily：使用 `--fund-flow-backend tavily`；搜索失败、低分或超时后转 Stage2.5 manual JSON 补数。
 - 极速模式（跳过 LLM）：`--extraction-backend regex --queue-concurrency 6 --deepseek-max-concurrency 0 --deepseek-timeout 8 --queue-retry-limit 0`，几分钟跑完但精度略降。
 - 必用 LLM 时：`--deepseek-timeout 8 --queue-concurrency 5 --deepseek-max-concurrency 4 --queue-retry-limit 0`，可分批跑 `--phase essential` 再 `--phase assets`。
 - 降低 Tavily extract 负载：如需手动调优，可把代码里 `top_for_extract = snippets[:3]` 改为 `[:2]`，或将商品/外汇任务的 `extract_depth` 设为 `"basic"`。
 - 复用缓存：保留 `data/cache/tavily_cache.sqlite`，第二轮只跑缺口，提升 `cache_hit_rate`。
-- 新增快捷参数：`--fast-mode`（自动启用 regex 抽取、并发放大、8s 硬超时、fund_flow_backend=mcp、禁用 extract）；`--disable-extract` 跳过 Tavily extract；`--extract-topk N` 控制 extract 使用的搜索条数；`--llm-hard-timeout 12` 为 LLM 抽取增加 asyncio 硬超时。
+- 新增快捷参数：`--fast-mode`（自动启用 regex 抽取、并发放大、8s 硬超时、禁用 extract，资金流仍使用 Tavily）；`--disable-extract` 跳过 Tavily extract；`--extract-topk N` 控制 extract 使用的搜索条数；`--llm-hard-timeout 12` 为 LLM 抽取增加 asyncio 硬超时。
 
 #### 多次 Stage2 产出的合并与避免错用（新增）
 - 原则：只让 Stage3 读取一份 `*_market_data_complete.json`。多次 Stage2 结果应合并 websearch 数据后再“注入一次”生成新的 complete。
@@ -124,11 +124,11 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 ---
 
-### 3. run_pring_analysis.py ✅ RECOMMENDED
+### 3. scripts/stage3_pring_analyzer.py ✅ RECOMMENDED
 
-**位置**: `run_pring_analysis.py` (项目根目录)
-**用途**: Stage 2 - Pring三层框架分析
-**状态**: ✅ 新建推荐脚本
+**位置**: `scripts/stage3_pring_analyzer.py`
+**用途**: Stage 3 - Pring三层框架分析
+**状态**: ✅ 推荐正式入口
 
 **功能**:
 - 基于完整数据执行Pring V4.0三层框架分析
@@ -158,11 +158,11 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ---
 
-### 4. generate_simple_report.py ✅ RECOMMENDED
+### 4. scripts/stage4_report_generator.py ✅ RECOMMENDED
 
-**位置**: `generate_simple_report.py` (项目根目录)
-**用途**: Stage 3 - Markdown报告生成
-**状态**: ✅ 新建推荐脚本
+**位置**: `scripts/stage4_report_generator.py`
+**用途**: Stage 4 - Markdown报告生成
+**状态**: ✅ 推荐正式入口
 
 **功能**:
 - 生成9章节Markdown报告
@@ -294,19 +294,13 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ---
 
-### 7. scripts/stage4_report_generator.py ❌ HAS ENCODING ISSUES
+### 7. legacy report/test entrypoints ⚠️ LEGACY
 
-**位置**: `scripts/stage4_report_generator.py`
-**用途**: 报告生成
-**状态**: ❌ 编码问题
+**位置**: `generate_simple_report.py`, `tests/scripts/generate_simple_report_test.py`
+**用途**: 历史兼容入口
+**状态**: ⚠️ 不作为推荐主路径
 
-**问题**:
-```
-SyntaxError: f-string: single '}' is not allowed
-```
-
-**原因**: 中文字符编码问题
-**替代方案**: 使用 `generate_simple_report.py`
+当前推荐使用 `scripts/stage4_report_generator.py`，并通过 `--market-data`、`--pring-result`、`--output` 显式传参。
 
 ---
 
@@ -373,12 +367,13 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 | 脚本 | 状态 | 阶段 | 优先级 |
 |------|------|------|--------|
 | `stage1_data_collector.py` | ✅ ACTIVE | Stage 1 | 必须 |
-| `inject_websearch_data.py` | ✅ RECOMMENDED | AI补全 | 必须 |
-| `run_pring_analysis.py` | ✅ RECOMMENDED | Stage 2 | 必须 |
-| `generate_simple_report.py` | ✅ RECOMMENDED | Stage 3 | 必须 |
+| `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage 2.5 | 必须 |
+| `scripts/stage3_pring_analyzer.py` | ✅ RECOMMENDED | Stage 3 | 必须 |
+| `scripts/stage4_report_generator.py` | ✅ RECOMMENDED | Stage 4 | 必须 |
 | `stage2a_mcp_enhancer.py` | ⚠️ DEPRECATED | Stage 2a | 可选 |
-| `stage3_pring_analyzer.py` | ✅ UPDATED | Pring分析 | WebSearch补齐后运行 |
-| `stage4_report_generator.py` | ❌ ISSUES | - | 不推荐 |
+| `inject_websearch_data.py` | ⚠️ LEGACY | AI补全 | 不推荐 |
+| `run_pring_analysis.py` | ⚠️ LEGACY | Pring分析 | 不推荐 |
+| `generate_simple_report.py` | ⚠️ LEGACY | 报告生成 | 不推荐 |
 
 ---
 
