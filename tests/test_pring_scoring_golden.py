@@ -97,24 +97,48 @@ def _load_json(path: Path):
         return json.load(fp)
 
 
-def _assert_json_stable_equal(actual, expected, ignored_keys=None):
-    ignored_keys = ignored_keys or set()
+def _strip_dynamic_fields(value, path=()):
+    dynamic_paths = {
+        ("analysis_date",),
+        ("metadata", "analysis_time"),
+        ("layer_1_inventory_cycle", "update_time"),
+        ("runtime_sec",),
+        ("metadata", "runtime_sec"),
+    }
+    if path in dynamic_paths:
+        return None
+
+    if isinstance(value, dict):
+        stripped = {}
+        for key, item in value.items():
+            item_path = (*path, key)
+            if item_path in dynamic_paths:
+                continue
+            stripped[key] = _strip_dynamic_fields(item, item_path)
+        return stripped
+
+    if isinstance(value, list):
+        return [
+            _strip_dynamic_fields(item, (*path, str(index)))
+            for index, item in enumerate(value)
+        ]
+
+    return value
+
+
+def _assert_json_stable_equal(actual, expected):
     if isinstance(expected, dict):
         assert isinstance(actual, dict)
-        actual_keys = set(actual.keys()) - ignored_keys
-        expected_keys = set(expected.keys()) - ignored_keys
-        assert actual_keys == expected_keys
+        assert actual.keys() == expected.keys()
         for key, expected_value in expected.items():
-            if key in ignored_keys:
-                continue
-            _assert_json_stable_equal(actual[key], expected_value, ignored_keys)
+            _assert_json_stable_equal(actual[key], expected_value)
         return
 
     if isinstance(expected, list):
         assert isinstance(actual, list)
         assert len(actual) == len(expected)
         for actual_value, expected_value in zip(actual, expected):
-            _assert_json_stable_equal(actual_value, expected_value, ignored_keys)
+            _assert_json_stable_equal(actual_value, expected_value)
         return
 
     if isinstance(expected, float):
@@ -152,12 +176,7 @@ def test_stage3_golden_replay_stable_fields(tmp_path, monkeypatch):
     )
     expected = _load_json(FIXTURE_DIR / "pring_result.json")
 
-    assert actual["final_stage"] == expected["final_stage"]
-    assert actual["confidence"] == pytest.approx(expected["confidence"])
-    assert actual["recommendation"] == expected["recommendation"]
-    for key in (
-        "layer_1_inventory_cycle",
-        "layer_2_monetary_cycle",
-        "layer_3_pring_final",
-    ):
-        _assert_json_stable_equal(actual[key], expected[key], ignored_keys={"update_time"})
+    _assert_json_stable_equal(
+        _strip_dynamic_fields(actual),
+        _strip_dynamic_fields(expected),
+    )
