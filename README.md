@@ -72,7 +72,7 @@ PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
   --gap-monitor data/runs/${DATE_NH}/gap_monitor.json \
   --websearch-results data/runs/${DATE_NH}/websearch_results_auto.json
 ```
-- 精度模式：改用 `--extraction-backend deepseek --deepseek-model deepseek-chat`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
+- 精度模式：改用 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
 - Tavily extract 422/配额：可保留 `--disable-extract` 或调低 `--extract-topk 1`，先 search-only 再 regex 兜底。
 
 ## 测试

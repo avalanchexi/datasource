@@ -52,9 +52,9 @@ Deferred execution scope:
 - `run_clean.sh`: single clean runtime launcher; detects Linux venv, Windows venv, or explicit system Python fallback.
 - `.env.example`: documents `DEEPSEEK_MODEL=deepseek-v4-pro` and optional `EXA_API_KEY`.
 - `src/datasource/engines/deepseek_reasoner.py`: default DeepSeek extraction model.
-- `scripts/stage2_unified_enhancer.py`: Stage2 CLI defaults, Tavily/Exa fallback, manual-required records, retrieval diagnostics, profile alias handling.
-- `src/datasource/adapters/exa_client.py`: Exa SDK compatibility, structured error metadata, Tavily-compatible result mapping.
-- `scripts/stage2_health_check.py`: static Exa readiness and explicit optional Exa live probe.
+- `scripts/stage2_unified_enhancer.py`: Stage2 CLI defaults, manual-required records, retrieval diagnostics, profile alias handling; Exa fallback routing remains Deferred Task 4 and is not in the current Tavily-first execution scope.
+- `src/datasource/adapters/exa_client.py`: Exa SDK compatibility, structured error metadata, Tavily-compatible result mapping; Deferred Task 3/4 only, with Exa default-off and explicit opt-in before use.
+- `scripts/stage2_health_check.py`: static Exa readiness and explicit optional Exa live probe; Deferred Task 3 only, not a current final-gate requirement.
 - `src/datasource/config/search_profiles.py`: query families and strict matching rules for high-failure indicators.
 - `scripts/stage2_5_injector.py`: manual official data normalization, estimated gate behavior, gap monitor refresh.
 - `src/datasource/generators/simple_report.py`: Stage4 asset summary DeepSeek default and MLF display helpers.
@@ -1368,7 +1368,7 @@ Use `superpowers:requesting-code-review` after all tasks are complete. The revie
 ```text
 - run_clean fallback behavior is explicit and does not silently choose system Python.
 - Stage2 does not add Tavily quota probes.
-- Exa fallback diagnostics are structured and do not replace good Tavily snippets on failure.
+- Exa fallback diagnostics are Deferred Task 3/4, default off, and explicitly outside this Tavily-first final gate.
 - DeepSeek defaults are `deepseek-v4-pro`.
 - Stage2.5 official manual values are not estimated, while ETF estimates remain constrained.
 - MLF report display is not misleading.
@@ -1381,7 +1381,7 @@ Spec coverage:
 
 - `run_clean.sh` fallback: Task 1.
 - DeepSeek `deepseek-v4-pro`: Task 2.
-- Exa fallback exploration and diagnostics: Tasks 3 and 4.
+- Exa fallback exploration and diagnostics: Deferred Tasks 3 and 4, outside the current Tavily-first execution scope.
 - Stage2 fast switch and diagnostics: Task 5.
 - Stage2 hit-rate profile tuning: Task 6.
 - Manual official vs estimated values: Task 7.
@@ -1390,7 +1390,7 @@ Spec coverage:
 
 Type consistency:
 
-- Exa structured fields use the same names across tasks: `exa_error_type`, `exa_http_status`, `exa_error_tag`, `exa_error_message`, `exa_reason`, `exa_query`, `exa_domains`, `exa_result_count`, `exa_usable_count`.
+- Exa structured fields, when Deferred Tasks 3/4 are executed later, use the same names across tasks: `exa_error_type`, `exa_http_status`, `exa_error_tag`, `exa_error_message`, `exa_reason`, `exa_query`, `exa_domains`, `exa_result_count`, `exa_usable_count`.
 - Retrieval diagnostics use the same names across tests and summary: `retrieval_diagnostics`, `retrieval_hit_rate`, `writeback_success_rate`, `manual_reason_breakdown`.
 - Manual official detection uses `category`, `key`, `payload`, and mutates the merged `entry`.
 

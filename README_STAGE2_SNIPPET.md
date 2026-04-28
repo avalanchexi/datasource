@@ -26,13 +26,13 @@ python3 scripts/stage2_unified_enhancer.py \
   --task-log logs/runs/20251203/stage_task_log.jsonl
 ```
   - 速度优先：保持 `--extraction-backend regex --disable-extract`，约 30–60 秒。
-  - 精度优先：改为 `--extraction-backend deepseek --deepseek-model deepseek-chat --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`（预计 3–5 分钟）。
+  - 精度优先：改为 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1`（预计 3–5 分钟）。
   - Tavily extract 422/配额压力：保留 `--disable-extract` 或收紧 `--extract-topk 1`，先 search-only 再 regex 兜底。
   - LangChain 默认禁用，如需实验需显式加 `--allow-langchain`。
 
 ## 关键默认值
 - `--fund-flow-backend` 默认 `tavily`
-- `--deepseek-model` 默认 `deepseek-chat`
+- `--deepseek-model` 默认 `deepseek-v4-pro`
 - `--deepseek-timeout` 默认 `8s`
 - `--llm-hard-timeout` 默认 `10s`
 - Tavily extract 默认启用，可用 `--disable-extract` 或遇 422 自动回退 search-only（有计数）
