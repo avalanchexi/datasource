@@ -1420,6 +1420,30 @@ def test_manual_official_helper_malformed_http_token_blocks_issuer_fallback():
     ) is False
 
 
+def test_manual_official_helper_trusted_explicit_source_url_is_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "https://www.pbc.gov.cn/official",
+            "source": "PBOC official",
+        },
+    ) is True
+
+
+def test_manual_official_helper_conflicting_explicit_source_urls_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "https://www.pbc.gov.cn/official,https://evil.com/conflict",
+            "source": "PBOC official",
+        },
+    ) is False
+
+
 def test_manual_official_helper_name_url_evidence_blocks_issuer_fallback():
     assert injector._is_manual_official_value(
         "monetary_policy",

@@ -312,9 +312,23 @@ def _extract_embedded_http_url(value: Any) -> Optional[str]:
     return None
 
 
+def _iter_http_like_evidence(value: Any, *, fallback_raw: bool = False) -> List[str]:
+    if not isinstance(value, str):
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    matches = [match.strip() for match in HTTP_LIKE_EVIDENCE_RE.findall(text) if match.strip()]
+    if matches:
+        return matches
+    if fallback_raw:
+        return [text]
+    return []
+
+
 def _extract_source_url(payload: Dict[str, Any]) -> Optional[str]:
     for key in ("source_url", "sourceUrl", "url"):
-        url = _normalize_parseable_http_url(payload.get(key))
+        url = _extract_embedded_http_url(payload.get(key))
         if url:
             return url
     for key in ("source", "note"):
@@ -358,15 +372,9 @@ def _normalize_manual_official_key(category: str, key: str) -> str:
 def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
     evidence: List[str] = []
     for field in ("source_url", "sourceUrl", "url"):
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip():
-            evidence.append(value.strip())
+        evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
     for field in OFFICIAL_MANUAL_TEXT_FIELDS:
-        value = payload.get(field)
-        if not isinstance(value, str):
-            continue
-        for match in HTTP_LIKE_EVIDENCE_RE.findall(value):
-            evidence.append(match.strip())
+        evidence.extend(_iter_http_like_evidence(payload.get(field)))
     return evidence
 
 
