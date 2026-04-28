@@ -327,35 +327,32 @@ def _normalize_manual_official_key(category: str, key: str) -> str:
     return str(key).lower()
 
 
-def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
-    domains: List[str] = []
+def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
+    evidence: List[str] = []
     for field in ("source_url", "sourceUrl", "url"):
         value = payload.get(field)
         if isinstance(value, str) and value.strip():
-            domain = _extract_domain(value.strip())
-            if domain:
-                domains.append(domain)
+            evidence.append(value.strip())
     for field in ("source", "note"):
         value = payload.get(field)
         if not isinstance(value, str):
             continue
         for url in re.findall(r"https?://[^\s|,，;；)）]+", value):
-            domain = _extract_domain(url)
-            if domain:
-                domains.append(domain)
+            evidence.append(url)
+    return evidence
+
+
+def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
+    domains: List[str] = []
+    for value in _iter_url_like_evidence(payload):
+        domain = _extract_domain(value)
+        if domain:
+            domains.append(domain)
     return domains
 
 
 def _payload_has_url_like_evidence(payload: Dict[str, Any]) -> bool:
-    for field in ("source_url", "sourceUrl", "url"):
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip():
-            return True
-    for field in ("source", "note"):
-        value = payload.get(field)
-        if isinstance(value, str) and re.search(r"https?://", value):
-            return True
-    return False
+    return bool(_iter_url_like_evidence(payload))
 
 
 def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
@@ -365,7 +362,7 @@ def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
 
 
 def _manual_official_issuer_text(payload: Dict[str, Any]) -> str:
-    fields = ("source", "note")
+    fields = ("source", "note", "name", "policy_name", "indicator_name")
     parts = [str(payload.get(field) or "") for field in fields]
     return " ".join(parts).lower()
 
@@ -379,14 +376,20 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         return False
 
     trusted_domains = tuple(str(item).lower() for item in rule.get("trusted_domains", ()) if str(item).strip())
-    payload_domains = _extract_domains_from_payload(payload)
-    has_trusted_domain = trusted_domains and any(
-        _official_domain_matches(domain, trusted_domain)
-        for domain in payload_domains
-        for trusted_domain in trusted_domains
-    )
     if _payload_has_url_like_evidence(payload):
-        return bool(has_trusted_domain)
+        url_like_evidence = _iter_url_like_evidence(payload)
+        if not trusted_domains:
+            return False
+        payload_domains: List[str] = []
+        for value in url_like_evidence:
+            domain = _extract_domain(value)
+            if not domain:
+                return False
+            payload_domains.append(domain)
+        return all(
+            any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains)
+            for domain in payload_domains
+        )
 
     issuer_text = _manual_official_issuer_text(payload)
     issuer_names = tuple(str(item).lower() for item in rule.get("issuer_names", ()) if str(item).strip())
