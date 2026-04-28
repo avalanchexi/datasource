@@ -409,3 +409,72 @@ async def test_tavily_quota_fast_switches_remaining_tasks_to_manual_required(tmp
     assert len(task_log_records) == 2
     assert all(record["manual_required"] is True for record in task_log_records)
     assert all(record["manual_reason"] == "quota_or_rate_limit" for record in task_log_records)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_fast_switch_preserves_manual_reason_for_force_refresh(tmp_path):
+    client = QuotaTavilyClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "quota-force-refresh-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "force_refresh": True,
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "quota-stale-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "trigger_reason": "stale_data",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        None,
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert client.calls == 1
+    assert len(failures) == 2
+    assert len(websearch_results) == 2
+    assert all(record["force_refresh"] is True for record in failures)
+    assert all(record["manual_reason"] == "quota_or_rate_limit" for record in failures)
+    assert all(item["force_refresh"] is True for item in websearch_results)
+    assert all(item["manual_reason"] == "quota_or_rate_limit" for item in websearch_results)
+    assert all(
+        item["extraction"]["manual_reason"] == "quota_or_rate_limit"
+        for item in websearch_results
+    )

@@ -1675,6 +1675,7 @@ async def _execute_tasks(
             "manual_reason": "quota_or_rate_limit",
             "source": source,
             "note": note,
+            "tavily_fast_switch": True,
         }
         extraction = {
             "value": None,
@@ -1686,6 +1687,7 @@ async def _execute_tasks(
             "llm_latency_ms": 0,
             "manual_required": True,
             "manual_reason": "quota_or_rate_limit",
+            "tavily_fast_switch": True,
         }
         task_record = {
             "task_id": task["task_id"],
@@ -1710,6 +1712,7 @@ async def _execute_tasks(
             "manual_reason": "quota_or_rate_limit",
             "note": note,
             "raw_results": [],
+            "tavily_fast_switch": True,
             "result_type": "manual_required",
         }
         websearch_item = {
@@ -1727,9 +1730,25 @@ async def _execute_tasks(
             "manual_reason": "quota_or_rate_limit",
             "source": source,
             "note": note,
+            "tavily_fast_switch": True,
             "result_type": "manual_required",
         }
         return task_record, websearch_item
+
+    def _is_tavily_fast_switch_record(record: Dict[str, Any]) -> bool:
+        return bool(record.get("tavily_fast_switch")) or (
+            record.get("manual_reason") == "quota_or_rate_limit"
+            and "tavily_fast_switch" in str(record.get("note") or "")
+        )
+
+    def _is_tavily_fast_switch_websearch(item: Dict[str, Any]) -> bool:
+        extraction = item.get("extraction") or {}
+        task = item.get("task") or {}
+        return (
+            _is_tavily_fast_switch_record(item)
+            or _is_tavily_fast_switch_record(extraction)
+            or _is_tavily_fast_switch_record(task)
+        )
 
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
@@ -2856,7 +2875,11 @@ async def _execute_tasks(
     for record in failures:
         task_id = str(record.get("task_id") or "")
         record["force_refresh"] = force_refresh_by_task.get(task_id, False)
-        if record.get("manual_required") and record.get("force_refresh"):
+        if (
+            record.get("manual_required")
+            and record.get("force_refresh")
+            and not _is_tavily_fast_switch_record(record)
+        ):
             record["note"] = _append_note(record.get("note"), "stale_refresh_failed")
             record["manual_reason"] = _append_note(record.get("manual_reason"), "stale_refresh_failed")
         record.setdefault("result_type", _finalize_task_result_type(record))
@@ -2865,7 +2888,11 @@ async def _execute_tasks(
         force_refresh = force_refresh_by_task.get(str(task.get("task_id") or ""), False)
         item["force_refresh"] = force_refresh
         extraction = item.get("extraction") or {}
-        if item.get("manual_required") and force_refresh:
+        if (
+            item.get("manual_required")
+            and force_refresh
+            and not _is_tavily_fast_switch_websearch(item)
+        ):
             _mark_stale_refresh_failure(extraction, task)
             item["manual_reason"] = extraction.get("manual_reason")
         item.setdefault("result_type", _finalize_websearch_result_type(item))
