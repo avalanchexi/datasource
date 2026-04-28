@@ -13,6 +13,7 @@ import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
+from urllib.parse import urlparse
 
 from datasource.models.market_data_contract import FundFlowData
 from datasource.utils.trend_history_store import write_from_market_data, DEFAULT_BASE_DIR, SERIES_WINDOWS
@@ -142,9 +143,14 @@ def _is_estimated_allowlisted_entry(category: str, key: str, entry: Optional[Dic
 def _extract_domain(value: Optional[str]) -> str:
     if not value:
         return ""
-    text = str(value).strip().lower()
-    text = text.replace("https://", "").replace("http://", "")
-    return text.split("/")[0]
+    text = str(value).strip().strip("<>()[]{}\"'")
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if not parsed.hostname and "://" not in text and not text.startswith("//"):
+        parsed = urlparse(f"//{text}")
+    hostname = parsed.hostname or ""
+    return hostname.lower().strip()
 
 
 def _append_non_blocking_warning(market_data: Dict[str, Any], warning: Dict[str, Any]) -> None:
