@@ -106,6 +106,9 @@ URL_EVIDENCE_TERMINATORS = set(" \t\r\n,;|)]}<>\x22'") | set("，；）】》、
 HTTP_LIKE_START_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:https?://|https?(?![A-Za-z0-9]))"
 )
+BARE_DOMAIN_START_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9./:-])(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?=[:/]|$|[\s,;|)\]}<>\"'，；）】》、」』”’｝］〉])"
+)
 OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
         "mlf": {
@@ -325,6 +328,13 @@ def _collect_http_like_evidence(value: Any) -> List[str]:
         token = text[match.start() : end].strip()
         if token:
             evidence.append(token)
+    for match in BARE_DOMAIN_START_RE.finditer(text):
+        end = match.end()
+        while end < len(text) and not _is_url_evidence_terminator(text[end]):
+            end += 1
+        token = text[match.start() : end].strip()
+        if token:
+            evidence.append(token)
     return evidence
 
 
@@ -414,6 +424,13 @@ def _has_invalid_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
         value = payload.get(field)
         if value is not None and not isinstance(value, str):
             return True
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                continue
+            tokens = _iter_http_like_evidence(text)
+            if len(tokens) != 1 or tokens[0] != text:
+                return True
     return False
 
 

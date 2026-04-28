@@ -1433,6 +1433,30 @@ def test_manual_official_helper_trusted_explicit_source_url_is_official():
     ) is True
 
 
+def test_manual_official_helper_explicit_source_url_with_prefix_text_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "official https://www.pbc.gov.cn/official",
+            "source": "PBOC official",
+        },
+    ) is False
+
+
+def test_manual_official_helper_explicit_source_url_with_suffix_text_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "https://www.pbc.gov.cn/official official",
+            "source": "PBOC official",
+        },
+    ) is False
+
+
 def test_manual_official_helper_http_trusted_explicit_source_url_blocks_official():
     assert injector._is_manual_official_value(
         "monetary_policy",
@@ -1453,6 +1477,17 @@ def test_manual_official_helper_container_explicit_source_url_blocks_text_fallba
             "policy_name": "MLF rate",
             "source_url": ["https://www.pbc.gov.cn/a", "https://www.pbc.gov.cn/b"],
             "source": "https://www.pbc.gov.cn/a",
+        },
+    ) is False
+
+
+def test_manual_official_helper_bare_domain_text_blocks_issuer_fallback():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "PBOC MLF",
+            "source": "www.pbc.gov.cn/path",
         },
     ) is False
 
