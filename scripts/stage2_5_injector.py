@@ -102,20 +102,20 @@ OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
 OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
         "mlf": {
-            "domains": ("pbc.gov.cn", "chinamoney.com.cn"),
-            "tokens": ("中国人民银行", "pboc", "people's bank of china", "中国货币网", "chinamoney"),
+            "trusted_domains": ("pbc.gov.cn", "chinamoney.com.cn"),
+            "issuer_names": ("中国人民银行", "pboc", "people's bank of china", "中国货币网", "chinamoney"),
         },
     },
     "forex": {
         "usdcny": {
-            "domains": ("chinamoney.com.cn", "pbc.gov.cn"),
-            "tokens": ("cfets", "中国外汇交易中心", "中国货币网", "中国人民银行", "pboc", "chinamoney"),
+            "trusted_domains": ("chinamoney.com.cn", "cfets.com.cn", "pbc.gov.cn"),
+            "issuer_names": ("cfets", "中国外汇交易中心", "中国货币网", "中国人民银行", "pboc", "chinamoney"),
         },
     },
     "commodities": {
         "bcom": {
-            "domains": ("bloomberg.com", "bloombergindices.com"),
-            "tokens": ("bloomberg", "bloomberg commodity index"),
+            "trusted_domains": ("bloomberg.com", "bloombergindices.com"),
+            "issuer_names": ("bloomberg",),
         },
     },
     "bonds": {},
@@ -346,8 +346,8 @@ def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
     return domain == trusted_domain or domain.endswith(f".{trusted_domain}")
 
 
-def _manual_official_evidence_text(payload: Dict[str, Any]) -> str:
-    fields = ("source", "source_url", "sourceUrl", "url", "note", "name", "policy_name", "indicator_name")
+def _manual_official_issuer_text(payload: Dict[str, Any]) -> str:
+    fields = ("source", "note")
     parts = [str(payload.get(field) or "") for field in fields]
     return " ".join(parts).lower()
 
@@ -360,18 +360,19 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
     if not rule:
         return False
 
-    trusted_domains = tuple(str(item).lower() for item in rule.get("domains", ()) if str(item).strip())
+    trusted_domains = tuple(str(item).lower() for item in rule.get("trusted_domains", ()) if str(item).strip())
     payload_domains = _extract_domains_from_payload(payload)
-    if trusted_domains and any(
+    has_trusted_domain = trusted_domains and any(
         _official_domain_matches(domain, trusted_domain)
         for domain in payload_domains
         for trusted_domain in trusted_domains
-    ):
-        return True
+    )
+    if payload_domains:
+        return bool(has_trusted_domain)
 
-    evidence_text = _manual_official_evidence_text(payload)
-    tokens = tuple(str(item).lower() for item in rule.get("tokens", ()) if str(item).strip())
-    return any(token in evidence_text for token in tokens)
+    issuer_text = _manual_official_issuer_text(payload)
+    issuer_names = tuple(str(item).lower() for item in rule.get("issuer_names", ()) if str(item).strip())
+    return any(issuer_name in issuer_text for issuer_name in issuer_names)
 
 
 def _apply_manual_official_estimation_rule(
