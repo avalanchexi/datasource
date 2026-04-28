@@ -59,6 +59,74 @@ def test_retrieval_diagnostics_separates_search_extract_and_writeback():
     assert diagnostics["manual_reason_breakdown"]["strict_keyword_miss"] == 1
 
 
+def test_summary_diagnostics_include_failures_without_duplicate_websearch_rows():
+    completed = [
+        {
+            "task_id": "success-task",
+            "indicator_key": "etf",
+            "usable_count_before_extract": 2,
+            "manual_required": False,
+            "result_type": "search_success",
+        }
+    ]
+    failures = [
+        {
+            "task_id": "duplicate-manual-task",
+            "indicator_key": "GC=F",
+            "usable_count_before_extract": 1,
+            "manual_required": True,
+            "manual_reason": "no_value",
+            "result_type": "manual_required",
+        },
+        {
+            "task_id": "failure-only-task",
+            "indicator_key": "CL=F",
+            "manual_required": True,
+            "manual_reason": "network_error",
+            "result_type": "manual_required",
+        },
+    ]
+    websearch_results = [
+        {
+            "task": {
+                "task_id": "duplicate-manual-task",
+                "indicator_key": "GC=F",
+                "usable_count_before_extract": 1,
+            },
+            "extraction": {
+                "manual_required": True,
+                "manual_reason": "no_value",
+            },
+            "manual_required": True,
+            "manual_reason": "no_value",
+            "result_type": "manual_required",
+        }
+    ]
+
+    summary_fields = stage2._build_stage2_summary_diagnostics(
+        completed,
+        failures,
+        websearch_results,
+        exec_stats={},
+    )
+
+    diagnostics = summary_fields["retrieval_diagnostics"]
+    assert diagnostics["retrieval_task_count"] == 3
+    assert diagnostics["manual_reason_breakdown"]["no_value"] == 1
+    assert diagnostics["manual_reason_breakdown"]["network_error"] == 1
+
+
+def test_summary_diagnostics_persist_tavily_unavailable_reason():
+    summary_fields = stage2._build_stage2_summary_diagnostics(
+        completed_tasks=[],
+        failures=[],
+        websearch_results=[],
+        exec_stats={"tavily_unavailable_reason": "quota_or_rate_limit"},
+    )
+
+    assert summary_fields["tavily_unavailable_reason"] == "quota_or_rate_limit"
+
+
 def test_task_planner_uses_rrr_profile_for_reserve_ratio_alias(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-04-28"},

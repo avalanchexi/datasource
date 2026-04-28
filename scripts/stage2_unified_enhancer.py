@@ -1343,6 +1343,74 @@ def _build_retrieval_diagnostics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _has_diagnostic_value(value: Any) -> bool:
+    return value is not None and value != "" and value != [] and value != {}
+
+
+def _merge_nested_diagnostic_dict(existing: Any, incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing) if isinstance(existing, dict) else {}
+    for key, value in incoming.items():
+        if _has_diagnostic_value(value) or key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _merge_diagnostic_row(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if key in {"task", "extraction"} and isinstance(value, dict):
+            merged[key] = _merge_nested_diagnostic_dict(merged.get(key), value)
+            continue
+        if _has_diagnostic_value(value) or key not in merged:
+            merged[key] = value
+    return merged
+
+
+def _diagnostic_rows_for_summary(
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+    websearch_results: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    index_by_task_id: Dict[str, int] = {}
+
+    for source_rows in (completed_tasks, failures, websearch_results):
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+            task_id = _nested_row_value(row, "task_id")
+            if not task_id:
+                rows.append(row)
+                continue
+            task_key = str(task_id)
+            existing_index = index_by_task_id.get(task_key)
+            if existing_index is None:
+                index_by_task_id[task_key] = len(rows)
+                rows.append(dict(row))
+            else:
+                rows[existing_index] = _merge_diagnostic_row(rows[existing_index], row)
+    return rows
+
+
+def _build_stage2_summary_diagnostics(
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+    websearch_results: List[Dict[str, Any]],
+    exec_stats: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    retrieval_diagnostics = _build_retrieval_diagnostics(
+        _diagnostic_rows_for_summary(completed_tasks, failures, websearch_results)
+    )
+    payload = {
+        "retrieval_diagnostics": retrieval_diagnostics,
+        "manual_reason_breakdown": retrieval_diagnostics.get("manual_reason_breakdown", {}),
+    }
+    unavailable_reason = (exec_stats or {}).get("tavily_unavailable_reason")
+    if unavailable_reason:
+        payload["tavily_unavailable_reason"] = unavailable_reason
+    return payload
+
+
 def _mark_stale_refresh_failure(extraction: Dict[str, Any], task: Dict[str, Any]) -> None:
     if not _is_force_refresh_task(task):
         return
@@ -3759,8 +3827,11 @@ async def main() -> int:
     search_success_rate_incremental = (
         search_success_count / incremental_denominator if incremental_denominator else 0.0
     )
-    retrieval_diagnostics = _build_retrieval_diagnostics(
-        websearch_results if websearch_results else completed_tasks + failures
+    summary_diagnostics = _build_stage2_summary_diagnostics(
+        completed_tasks,
+        failures,
+        websearch_results,
+        exec_stats,
     )
 
     summary = {
@@ -3774,8 +3845,8 @@ async def main() -> int:
         "task_stale_refresh_success": stale_refresh_success,
         "task_stale_refresh_failed": stale_refresh_failed,
         "search_success_rate_incremental": search_success_rate_incremental,
-        "retrieval_diagnostics": retrieval_diagnostics,
-        "manual_reason_breakdown": retrieval_diagnostics.get("manual_reason_breakdown", {}),
+        "retrieval_diagnostics": summary_diagnostics["retrieval_diagnostics"],
+        "manual_reason_breakdown": summary_diagnostics["manual_reason_breakdown"],
         "manual_required": pending_manual,
         "output": str(output_path),
         "task_file": str(task_file),
@@ -3823,6 +3894,8 @@ async def main() -> int:
         "search_success_by_category": incremental_success_by_cat,
         "total_by_category": total_by_cat,
     }
+    if "tavily_unavailable_reason" in summary_diagnostics:
+        summary["tavily_unavailable_reason"] = summary_diagnostics["tavily_unavailable_reason"]
     _dump_json(summary, log_output)
 
     try:
