@@ -1444,6 +1444,18 @@ def test_manual_official_helper_conflicting_explicit_source_urls_blocks_official
     ) is False
 
 
+def test_manual_official_helper_multi_trusted_explicit_source_urls_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "https://www.pbc.gov.cn/a,https://www.pbc.gov.cn/b",
+            "source": "PBOC official",
+        },
+    ) is False
+
+
 def test_manual_official_helper_name_url_evidence_blocks_issuer_fallback():
     assert injector._is_manual_official_value(
         "monetary_policy",

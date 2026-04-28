@@ -101,6 +101,7 @@ INDICATOR_CATEGORY = {
 DEFAULT_SOURCE_LABEL = "websearch_manual"
 OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
 OFFICIAL_MANUAL_TEXT_FIELDS = ("source", "note", "name", "policy_name", "indicator_name")
+EXPLICIT_URL_FIELDS = ("source_url", "sourceUrl", "url")
 HTTP_URL_CANDIDATE_RE = re.compile(r"https?://[^\s|,;)\]}<>\"']+", re.IGNORECASE)
 HTTP_LIKE_EVIDENCE_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:https?://[^\s|,;)\]}<>\"']*|https?(?![A-Za-z0-9]))"
@@ -327,7 +328,7 @@ def _iter_http_like_evidence(value: Any, *, fallback_raw: bool = False) -> List[
 
 
 def _extract_source_url(payload: Dict[str, Any]) -> Optional[str]:
-    for key in ("source_url", "sourceUrl", "url"):
+    for key in EXPLICIT_URL_FIELDS:
         url = _extract_embedded_http_url(payload.get(key))
         if url:
             return url
@@ -371,11 +372,18 @@ def _normalize_manual_official_key(category: str, key: str) -> str:
 
 def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
     evidence: List[str] = []
-    for field in ("source_url", "sourceUrl", "url"):
+    for field in EXPLICIT_URL_FIELDS:
         evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
     for field in OFFICIAL_MANUAL_TEXT_FIELDS:
         evidence.extend(_iter_http_like_evidence(payload.get(field)))
     return evidence
+
+
+def _has_multi_value_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
+    for field in EXPLICIT_URL_FIELDS:
+        if len(_iter_http_like_evidence(payload.get(field), fallback_raw=True)) > 1:
+            return True
+    return False
 
 
 def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
@@ -411,6 +419,8 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         return False
 
     trusted_domains = tuple(str(item).lower() for item in rule.get("trusted_domains", ()) if str(item).strip())
+    if _has_multi_value_explicit_url_evidence(payload):
+        return False
     if _payload_has_url_like_evidence(payload):
         url_like_evidence = _iter_url_like_evidence(payload)
         if not trusted_domains:
