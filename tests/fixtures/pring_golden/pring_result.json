@@ -131,15 +131,7 @@
     "data_completeness": 1.0,
     "ai_websearch_enhanced": true,
     "gap_monitor_cleared": true,
-    "min_completeness": 0.8,
-    "non_blocking_warnings": [
-      {
-        "level": "warning",
-        "code": "estimated_allowlisted_pass",
-        "key": "CN10Y_CDB",
-        "message": "估算值白名单放行: bonds.CN10Y_CDB"
-      }
-    ]
+    "min_completeness": 0.8
   },
   "fallback_used": false,
   "pending_websearch": [],

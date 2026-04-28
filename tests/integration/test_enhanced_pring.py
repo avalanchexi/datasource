@@ -5,7 +5,9 @@
 import sys
 import os
 import asyncio
+import json
 from datetime import datetime
+from pathlib import Path
 
 # 添加项目根路径
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -13,12 +15,21 @@ sys.path.insert(0, os.path.join(project_root, 'src'))
 
 try:
     from datasource.calculators.pring_analyzer import PringAnalyzer, AssetSignal, InventoryCycleStage
+    from datasource.models.market_data_contract import MarketDataContract
     from datasource import get_manager, initialize_default_manager
     print("✅ 成功导入增强的PringAnalyzer")
 except ImportError as e:
     print(f"❌ 导入失败: {e}")
     print("请确保已安装所需依赖和路径正确")
     sys.exit(1)
+
+
+FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "pring_golden"
+
+
+def load_golden_market_data():
+    with (FIXTURE_DIR / "market_data_complete.json").open("r", encoding="utf-8") as fp:
+        return MarketDataContract(**json.load(fp))
 
 class MockDataManager:
     """模拟数据管理器（用于测试）"""
@@ -60,9 +71,10 @@ async def test_enhanced_pring_analyzer():
     
     # 创建模拟数据管理器
     mock_manager = MockDataManager()
+    market_data = load_golden_market_data()
     
     # 创建增强的Pring分析器
-    analyzer = PringAnalyzer(mock_manager)
+    analyzer = PringAnalyzer(mock_manager, market_data=market_data, allow_estimated=True)
     
     print("\n📋 步骤1: 测试宏观数据获取")
     macro_data = await analyzer.get_macro_economic_data()
