@@ -808,6 +808,7 @@ def _has_quality_blocker(output, category, key, reason="estimated_not_allowed"):
     [
         ("www.pbc.gov.cn/path", "www.pbc.gov.cn"),
         ("https://www.pbc.gov.cn:443/path", "www.pbc.gov.cn"),
+        ("https://www.pbc.gov.cn:bad/path", ""),
         ("https://chinamoney.com.cn/chinese/bkccpr/", "chinamoney.com.cn"),
         ("https://evil.com?target=www.pbc.gov.cn", "evil.com"),
         ("https://evil.com/path/www.pbc.gov.cn", "evil.com"),
@@ -1430,6 +1431,30 @@ def test_manual_official_helper_trusted_explicit_source_url_is_official():
             "source": "PBOC official",
         },
     ) is True
+
+
+def test_manual_official_helper_trusted_explicit_source_url_with_port_is_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "https://www.pbc.gov.cn:443/path",
+            "source": "PBOC official",
+        },
+    ) is True
+
+
+def test_manual_official_helper_invalid_port_source_url_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF rate",
+            "source_url": "https://www.pbc.gov.cn:bad/path",
+            "source": "PBOC official",
+        },
+    ) is False
 
 
 def test_manual_official_helper_conflicting_explicit_source_urls_blocks_official():

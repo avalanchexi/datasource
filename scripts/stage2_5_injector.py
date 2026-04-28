@@ -155,6 +155,10 @@ def _extract_domain(value: Optional[str]) -> str:
     parsed = urlparse(text)
     if not parsed.hostname and "://" not in text and not text.startswith("//"):
         parsed = urlparse(f"//{text}")
+    try:
+        parsed.port
+    except ValueError:
+        return ""
     hostname = parsed.hostname or ""
     return hostname.lower().strip()
 
