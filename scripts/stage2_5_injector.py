@@ -493,9 +493,7 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
             for domain in payload_domains
         )
 
-    issuer_text = _manual_official_issuer_text(payload)
-    issuer_names = tuple(str(item).lower() for item in rule.get("issuer_names", ()) if str(item).strip())
-    return any(issuer_name in issuer_text for issuer_name in issuer_names)
+    return False
 
 
 def _apply_manual_official_estimation_rule(

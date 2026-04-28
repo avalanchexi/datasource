@@ -1398,7 +1398,7 @@ def test_manual_mlf_malformed_source_token_blocks_official_fallback(tmp_path: Pa
         injector.inject_websearch_results(market_path, manual_path, output_path)
 
 
-def test_manual_official_helper_no_url_uses_name_fields_for_issuer_fallback():
+def test_manual_official_helper_no_url_issuer_text_blocks_official():
     assert injector._is_manual_official_value(
         "monetary_policy",
         "mlf",
@@ -1407,7 +1407,7 @@ def test_manual_official_helper_no_url_uses_name_fields_for_issuer_fallback():
             "source": "",
             "note": "",
         },
-    ) is True
+    ) is False
 
 
 def test_manual_official_helper_malformed_http_token_blocks_issuer_fallback():
