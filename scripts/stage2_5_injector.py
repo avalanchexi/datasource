@@ -98,6 +98,28 @@ INDICATOR_CATEGORY = {
 
 
 DEFAULT_SOURCE_LABEL = "websearch_manual"
+OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
+OFFICIAL_MANUAL_SOURCES = {
+    "monetary_policy": {
+        "mlf": {
+            "domains": ("pbc.gov.cn", "chinamoney.com.cn"),
+            "tokens": ("中国人民银行", "pboc", "people's bank of china", "中国货币网", "chinamoney"),
+        },
+    },
+    "forex": {
+        "usdcny": {
+            "domains": ("chinamoney.com.cn", "pbc.gov.cn"),
+            "tokens": ("cfets", "中国外汇交易中心", "中国货币网", "中国人民银行", "pboc", "chinamoney"),
+        },
+    },
+    "commodities": {
+        "bcom": {
+            "domains": ("bloomberg.com", "bloombergindices.com"),
+            "tokens": ("bloomberg", "bloomberg commodity index"),
+        },
+    },
+    "bonds": {},
+}
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
 
 _POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
@@ -291,6 +313,78 @@ def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
     url = _extract_source_url(payload)
     if url:
         target["source_url"] = url
+
+
+def _normalize_manual_official_key(category: str, key: str) -> str:
+    if category == "monetary_policy":
+        return canonical_monetary_key(str(key)).lower()
+    return str(key).lower()
+
+
+def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
+    domains: List[str] = []
+    for field in ("source_url", "sourceUrl", "url"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            domain = _extract_domain(value.strip())
+            if domain:
+                domains.append(domain)
+    for field in ("source", "note"):
+        value = payload.get(field)
+        if not isinstance(value, str):
+            continue
+        for url in re.findall(r"https?://[^\s|,，;；)）]+", value):
+            domain = _extract_domain(url)
+            if domain:
+                domains.append(domain)
+    return domains
+
+
+def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
+    domain = domain.lower().strip()
+    trusted_domain = trusted_domain.lower().strip()
+    return domain == trusted_domain or domain.endswith(f".{trusted_domain}")
+
+
+def _manual_official_evidence_text(payload: Dict[str, Any]) -> str:
+    fields = ("source", "source_url", "sourceUrl", "url", "note", "name", "policy_name", "indicator_name")
+    parts = [str(payload.get(field) or "") for field in fields]
+    return " ".join(parts).lower()
+
+
+def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    category_rules = OFFICIAL_MANUAL_SOURCES.get(category) or {}
+    rule = category_rules.get(_normalize_manual_official_key(category, key))
+    if not rule:
+        return False
+
+    trusted_domains = tuple(str(item).lower() for item in rule.get("domains", ()) if str(item).strip())
+    payload_domains = _extract_domains_from_payload(payload)
+    if trusted_domains and any(
+        _official_domain_matches(domain, trusted_domain)
+        for domain in payload_domains
+        for trusted_domain in trusted_domains
+    ):
+        return True
+
+    evidence_text = _manual_official_evidence_text(payload)
+    tokens = tuple(str(item).lower() for item in rule.get("tokens", ()) if str(item).strip())
+    return any(token in evidence_text for token in tokens)
+
+
+def _apply_manual_official_estimation_rule(
+    category: str,
+    key: str,
+    payload: Dict[str, Any],
+    entry: Dict[str, Any],
+) -> None:
+    if not _is_manual_official_value(category, key, payload):
+        return
+    entry["is_estimated"] = False
+    if OFFICIAL_MANUAL_NOTE not in str(entry.get("note") or ""):
+        _append_note(entry, OFFICIAL_MANUAL_NOTE)
 
 
 def _collect_missing_source_urls(websearch_data: Dict[str, Any]) -> List[str]:
@@ -1218,7 +1312,7 @@ def inject_websearch_data(
                 updated = True
                 break
         if not updated:
-            market_forex.append(_build_forex_entry(fx, trend_history_base_dir=trend_base_dir))
+            market_forex.append(_build_forex_entry(fx, is_manual=is_manual, trend_history_base_dir=trend_base_dir))
         inject_count += 1
         print(f"  [OK] {fx.get('name', pair)}: {fx.get('current_rate')} (source={fx.get('source')})")
         _remove_missing_item(metadata, 'forex', pair)
@@ -1491,6 +1585,10 @@ def inject_websearch_data(
     )
 
     return output_path
+
+
+def inject_websearch_results(*args, **kwargs):
+    return inject_websearch_data(*args, **kwargs)
 
 
 def _post_injection_validation(market_data: Dict[str, Any]) -> None:
@@ -1887,6 +1985,8 @@ def _apply_monetary_entry(
             entry['is_estimated'] = True
         else:
             entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
+    if is_manual:
+        _apply_manual_official_estimation_rule("monetary_policy", indicator_key, payload, entry)
 
     fallback_reason = None
     if (
@@ -3130,6 +3230,8 @@ def _merge_bond_entry(
         if is_manual and _has_valid_value(merged.get('current_yield')):
             merged['is_estimated'] = False
     merged['note'] = payload.get('note', existing.get('note'))
+    if is_manual:
+        _apply_manual_official_estimation_rule("bonds", str(merged.get("symbol") or ""), payload, merged)
     return merged
 
 
@@ -3217,6 +3319,8 @@ def _merge_commodity_entry(
     if is_manual and 'is_estimated' not in payload and _has_valid_value(merged.get('current_price')):
         if 'is_estimated' in merged:
             merged['is_estimated'] = False
+    if is_manual:
+        _apply_manual_official_estimation_rule("commodities", str(merged.get("symbol") or ""), payload, merged)
     return merged
 
 
@@ -3296,13 +3400,21 @@ def _merge_forex_entry(
     raw_trend = payload.get('trend', orig.get('trend'))
     merged['trend'] = _infer_asset_trend(raw_trend, merged.get('daily_change'), merged.get('change_120d'), "forex")
     merged['source'] = _format_source_label(payload.get('source'))
+    merged['note'] = payload.get('note', orig.get('note'))
     if is_manual and 'is_estimated' not in payload and _has_valid_value(merged.get('current_rate')):
         if 'is_estimated' in merged:
             merged['is_estimated'] = False
+    if is_manual:
+        _apply_manual_official_estimation_rule("forex", str(merged.get("pair") or ""), payload, merged)
     return merged
 
 
-def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR) -> Dict[str, Any]:
+def _build_forex_entry(
+    payload: Dict[str, Any],
+    *,
+    is_manual: bool = False,
+    trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
+) -> Dict[str, Any]:
     pair = payload.get('pair') or payload.get('symbol') or 'UNKNOWN'
     current_rate = _coerce_float(payload.get('current_rate'))
 
@@ -3335,6 +3447,7 @@ def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optio
         "change_120d": change_120d,
         "trend": _infer_asset_trend(payload.get('trend'), daily_change, change_120d, "forex"),
         "source": _format_source_label(payload.get('source')),
+        "note": payload.get("note"),
     }
     _copy_source_url(entry, payload)
     _copy_payload_metadata_fields(
@@ -3342,6 +3455,8 @@ def _build_forex_entry(payload: Dict[str, Any], *, trend_history_base_dir: Optio
         payload,
         ("is_estimated", "estimation_method", "metric_basis", "confidence"),
     )
+    if is_manual:
+        _apply_manual_official_estimation_rule("forex", pair, payload, entry)
     return entry
 
 def _default_cli_paths() -> Tuple[Path, Path, Path]:

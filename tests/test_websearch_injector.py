@@ -785,6 +785,211 @@ def test_sync_backfill_issues_to_logs_rewrites_gap_monitor_even_without_issues(t
     assert payload.get("pending_tasks", []) == []
 
 
+def _stub_trend_writes(monkeypatch):
+    monkeypatch.setattr(injector, "write_from_market_data", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(injector, "_backfill_trend_changes", lambda *args, **kwargs: {})
+    monkeypatch.setattr(injector, "_run_post_write_trend_backfill", lambda *args, **kwargs: {})
+
+
+def _write_json(path: Path, payload):
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_manual_official_mlf_payload_is_not_estimated(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {"monetary_policy": [{"key": "mlf"}]}},
+            "missing_items": ["mlf"],
+            "macro_indicators": {},
+            "monetary_policy": {
+                "mlf": {
+                    "policy_name": "MLF利率",
+                    "current_value": None,
+                    "change_from_120d": None,
+                    "unit": "%",
+                    "date": "",
+                    "source": "placeholder",
+                    "note": "",
+                    "is_estimated": True,
+                }
+            },
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {},
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "monetary_policy": {
+                "mlf": {
+                    "policy_name": "MLF利率",
+                    "current_value": 2.0,
+                    "change_from_120d": 0.0,
+                    "unit": "%",
+                    "date": "2026-04-25",
+                    "source": "中国人民银行",
+                    "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/index.html",
+                    "note": "中国人民银行官方发布",
+                    "is_estimated": True,
+                }
+            }
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    entry = output["monetary_policy"]["mlf"]
+    assert entry["is_estimated"] is False
+    assert "manual_official_not_estimated" in entry["note"]
+    assert "mlf" not in output.get("missing_items", [])
+    assert not any(
+        item.get("category") == "monetary_policy" and item.get("key") == "mlf"
+        for item in output["metadata"].get("quality_blockers", [])
+    )
+
+
+def test_manual_official_usdcny_payload_is_not_estimated(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {"forex": [{"key": "USDCNY"}]}},
+            "missing_items": ["USDCNY"],
+            "macro_indicators": {},
+            "monetary_policy": {},
+            "bonds": [],
+            "forex": [
+                {
+                    "pair": "USDCNY",
+                    "name": "USD/CNY在岸",
+                    "current_rate": None,
+                    "daily_change": None,
+                    "change_120d": None,
+                    "trend": "待WebSearch补充",
+                    "source": "placeholder",
+                    "is_estimated": True,
+                }
+            ],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {},
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "forex": [
+                {
+                    "pair": "USDCNY",
+                    "name": "USD/CNY在岸",
+                    "current_rate": 7.2472,
+                    "daily_change": 0.01,
+                    "change_120d": 1.2,
+                    "source": "中国外汇交易中心 CFETS",
+                    "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                    "note": "中国货币网官方发布",
+                    "is_estimated": True,
+                }
+            ]
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    entry = output["forex"][0]
+    assert entry["pair"] == "USDCNY"
+    assert entry["is_estimated"] is False
+    assert "manual_official_not_estimated" in entry["note"]
+    assert "USDCNY" not in output.get("missing_items", [])
+    assert not any(
+        item.get("category") == "forex" and item.get("key") == "USDCNY"
+        for item in output["metadata"].get("quality_blockers", [])
+    )
+
+
+def test_manual_etf_eastmoney_estimate_stays_estimated_and_blocked(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {"fund_flow": [{"key": "etf"}]}},
+            "missing_items": ["etf"],
+            "macro_indicators": {},
+            "monetary_policy": {},
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {
+                "etf": {
+                    "type": "etf",
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "待WebSearch补充",
+                    "source": "placeholder",
+                    "is_estimated": True,
+                }
+            },
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "fund_flow": {
+                "etf": {
+                    "recent_5d": 86.5,
+                    "total_120d": 1250.0,
+                    "trend": "流入",
+                    "source": "东方财富",
+                    "source_url": "https://data.eastmoney.com/etf/",
+                    "note": "Eastmoney manual estimate",
+                    "is_estimated": True,
+                }
+            }
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    entry = output["fund_flow"]["etf"]
+    assert entry["is_estimated"] is True
+    assert "manual_official_not_estimated" not in str(entry.get("note") or "")
+    assert {
+        "category": "fund_flow",
+        "key": "etf",
+        "reason": "estimated_not_allowed",
+    } in output["metadata"].get("quality_blockers", [])
+
+
 def test_stage25_writes_unified_quality_state_files(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     run_dir = tmp_path / "data" / "runs" / "20260427"
