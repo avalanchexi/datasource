@@ -1128,34 +1128,32 @@ python -m pytest tests/test_websearch_injector.py::test_manual_official_mlf_payl
 
 Expected: failures show explicit `is_estimated=True` remains true.
 
-- [ ] **Step 3: Implement official source detection**
+- [ ] **Step 3: Implement allowlisted official source detection**
 
 Add to `scripts/stage2_5_injector.py`:
 
 ```python
-OFFICIAL_MANUAL_SOURCES = {
-    "monetary_policy": {
-        "mlf": ["pbc.gov.cn", "chinamoney.com.cn", "中国人民银行", "人民银行"],
-        "reverse_repo": ["pbc.gov.cn", "chinamoney.com.cn", "中国人民银行", "人民银行"],
-        "rrr": ["pbc.gov.cn", "中国人民银行", "人民银行"],
-        "reserve_ratio": ["pbc.gov.cn", "中国人民银行", "人民银行"],
-    },
-    "forex": {
-        "USDCNY": ["chinamoney.com.cn", "cfets.com.cn", "中国外汇交易中心", "中国货币网", "中国人民银行"],
-    },
-    "commodities": {
-        "BCOM": ["bloomberg.com", "Bloomberg"],
-    },
+OFFICIAL_MANUAL_SOURCE_DOMAINS = {
+    ("monetary_policy", "mlf"): {"pbc.gov.cn", "chinamoney.com.cn"},
+    ("forex", "USDCNY"): {"chinamoney.com.cn", "cfets.com.cn", "pbc.gov.cn"},
+    ("commodities", "BCOM"): {"bloomberg.com"},
 }
 
 
 def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) -> bool:
-    haystack = " ".join(
-        str(payload.get(field) or "")
-        for field in ("source", "source_url", "note", "name")
-    ).lower()
-    tokens = OFFICIAL_MANUAL_SOURCES.get(category, {}).get(key) or []
-    return any(token.lower() in haystack for token in tokens)
+    trusted_domains = OFFICIAL_MANUAL_SOURCE_DOMAINS.get((category, key))
+    if not trusted_domains:
+        return False
+
+    source_url = payload.get("source_url")
+    if not isinstance(source_url, str):
+        return False
+
+    evidence_urls = _collect_url_like_evidence(payload)
+    if len(evidence_urls) != 1 or evidence_urls[0] != source_url:
+        return False
+
+    return _is_trusted_https_url(source_url, trusted_domains)
 
 
 def _apply_manual_official_estimation_rule(category: str, key: str, payload: Dict[str, Any], entry: Dict[str, Any]) -> None:
@@ -1164,7 +1162,15 @@ def _apply_manual_official_estimation_rule(category: str, key: str, payload: Dic
         _append_note(entry, "manual_official_not_estimated")
 ```
 
-Call this helper after each manual payload merge for monetary, forex, commodities, and bonds.
+Official override is intentionally narrow:
+
+- It only applies to `monetary_policy.mlf`, `forex.USDCNY`, and `commodities.BCOM`.
+- It requires trusted official HTTPS URL evidence, and every URL-like evidence string in the payload must pass the trusted-domain check.
+- Explicit URL fields must contain one string URL only. Mixed prose, multiple URLs, non-HTTPS URLs, invalid ports, untrusted/spoof/conflicting URLs, and bare-domain evidence do not trigger official override.
+- Issuer/name text without a URL does not trigger official override.
+- ETF/fund flow is not allowlisted. Ordinary manual sources should not be automatically marked estimated or blocked just because the domain is not official.
+
+Call this helper after each manual payload merge for monetary, forex, and commodities. Keep bonds and ETF/fund flow outside this official override unless a future rule explicitly allowlists them.
 
 - [ ] **Step 4: Ensure true estimates remain estimated**
 
@@ -1288,8 +1294,8 @@ Add or adjust these durable rules:
 ```markdown
 - `run_clean.sh` 激活顺序为 `.venv/bin/activate` -> `.venv/Scripts/activate` -> 显式 `ALLOW_SYSTEM_PYTHON=1` 系统 Python fallback；fallback 仍会 source `.env`、清理代理并设置 `PYTHONPATH=./src`。
 - Stage2 Tavily quota/rate limit 后同轮快切为 manual_required skeleton，不新增 quota probe，不重复消耗当日 Tavily。
-- Stage2 summary 以 `retrieval_diagnostics`、`manual_reason_breakdown`、Exa breakdown 判断检索/抽取/写回问题，不只看 `task_search_success`。
-- Exa 是 Tavily 后备：未配置 key、未安装依赖、账户/额度问题、请求参数错误、空结果、成功命中必须可区分；默认不处理资金流。
+- Stage2 summary 以 `retrieval_diagnostics`、`manual_reason_breakdown` 判断检索/抽取/写回问题，不只看 `task_search_success`。
+- Exa 默认关闭；只有配置 `EXA_API_KEY` 且显式传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时才作为 Tavily 后备。当前日常路径先提升 Tavily 命中率，不启用 Exa。
 - DeepSeek 默认模型为 `deepseek-v4-pro`，`DEEPSEEK_MODEL` 或命令行参数可覆盖。
 - MLF 多重价位或参考口径在报告中显示为参考值，120日变化显示 `口径不适用`。
 ```
@@ -1300,7 +1306,7 @@ Add short reminders:
 
 ```markdown
 - DeepSeek 默认模型：`deepseek-v4-pro`。
-- Exa fallback 仅在 `EXA_API_KEY` 配置后作为 Tavily 后备；看 `exa_error_breakdown` 判断失败原因。
+- Exa fallback 默认关闭；只有配置 `EXA_API_KEY` 且显式传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 才作为 Tavily 后备。当前日常路径先提升 Tavily 命中率，不启用 Exa。
 - `.venv` 缺失时可显式使用：`ALLOW_SYSTEM_PYTHON=1 bash run_clean.sh ...`。
 ```
 
