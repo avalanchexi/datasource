@@ -142,10 +142,10 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 ### Operational Pitfalls（操作陷阱）
 
-**missing_items 双层结构**（两处独立，必须分别处理）:
+**missing_items 双层结构**（两处仍需排查，但不要直接改顶层 list）:
 - `metadata.missing_items` (dict，按 category 分组) → inject 脚本读取、生成待补全骨架
 - 顶层 `missing_items` list → Stage3 policy gate 的 `redlist` 来源（`critical_missing_keys: [dxy, bdi, rrr, mlf]`）
-- inject 脚本注入成功后仅更新 `metadata.missing_items`；若需清除 Stage3 gate 阻断，须同时手动删除顶层 list 中对应条目
+- Stage2.5 会根据 pipeline quality state 同步/清理 `metadata.missing_items` 与顶层 `missing_items`，并刷新 `gap_monitor` 等质量产物；正确做法是修正 Stage2.5 manual/source 数据后重跑 Stage2.5，再重跑 Stage3，让质量状态自动刷新
 
 **inject 脚本跳过已有值**:
 - 若指标已有 `current_value` 且不是 `PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}` 且 `is_stale≠True`，inject 脚本会跳过该条目
@@ -153,7 +153,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - 解法：官方口径用带可信单个 HTTPS `source_url` 的 Stage2.5 manual 重新注入；只有 official allowlist 指标（代码为准，当前 `monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`）可触发 `manual_official_not_estimated` 并把显式 `is_estimated=True` 正规化为 `False`。显式 URL 字段必须是单个字符串 URL，混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 均不触发；ETF/fund_flow 不在 allowlist，普通 manual 来源不会因为不是官方域名而默认改成 estimated/blocked。
 
 **Stage3 Gate 三路阻断**（需逐一排查，彼此独立）:
-1. **policy gate** (`block_stage3=True`)：`redlist` 有 `critical_missing_keys` 中的项 → 修顶层 `missing_items` + 重新运行 `evaluate_policy()`
+1. **policy gate** (`block_stage3=True`)：`redlist` 有 `critical_missing_keys` 中的项 → 修正 Stage2.5 manual/source 数据，重跑 Stage2.5/Stage3
 2. **stale_redlist**：`is_stale=True` 的 PMI/TSF/CPI 等关键指标 → 手工注入最新值（含 `date` 字段），Stage2.5 会清除 `is_stale`
 3. **compare_gaps** (缺 `previous_value`)：`change_rate` 计算需要 `previous_value`，缺失时 Stage3 阻断 → 补齐 `previous_value`（无论 `--allow-estimated` 是否开启，此检查均不绕过）
 
@@ -161,15 +161,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 **Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
-**gap_monitor 手动清除**（Stage3 还读此文件）:
-```bash
-python3 -c “
-import json
-gm=json.load(open('data/runs/${DATE_NH}/gap_monitor.json'))
-gm['manual_required']=[]
-json.dump(gm,open('data/runs/${DATE_NH}/gap_monitor.json','w'),ensure_ascii=False,indent=2)
-“
-```
+**gap_monitor 只读诊断**: 不直接手改 `gap_monitor`，也不把手工清空作为正常流程；只为诊断读取该文件，实际修复应补齐/修正源数据后重跑 Stage2.5/Stage3。
 
 **TuShare 股指日内时间差**: Stage1 在 15:00 CST 前运行时，当日收盘价尚未生成，Stage1 返回前一交易日数据 — 属预期行为，下午收盘后无需重跑 Stage1
 
@@ -297,7 +289,7 @@ EXA_API_KEY=xxx        # Optional, default off; requires --enable-exa-fallback /
 | Tavily extract 422 | 自动回退 DeepSeek；仍不稳用 `--disable-extract` |
 | Tavily 当日重复 422 | **不要重试 Stage2**；改用 Stage2.5 手工注入 |
 | 日志出现 `deepseek_no_value/no_deepseek_key` | 视为 `manual_required`，优先使用 `metadata.manual_required` 骨架补数 |
-| Stage3 `block_stage3=True` 但数据已注入 | 检查顶层 `missing_items` list（inject 只更新 `metadata.missing_items`）；手动删除顶层对应条目后重跑 `evaluate_policy()` |
+| Stage3 `block_stage3=True` 但数据已注入 | 检查 `missing_items`、`policy_evaluation.json`、`gap_monitor.json`，补齐/修正 manual JSON 后重跑 Stage2.5/Stage3 |
 | Stage3 `compare_gaps` 阻断 | 补齐 `macro_indicators.*.previous_value`（`--allow-estimated` 不绕过此检查） |
 | inject 跳过 `is_estimated` 项 | 官方口径用带可信单个 HTTPS `source_url` 的 Stage2.5 manual 重新注入；非官方/ETF/fund_flow 等估算不要手工清掉 gate |
 | 股指数据不是今日 | Stage1 在 15:00 CST 前运行时正常，使用前一日收盘；无需处理 |
