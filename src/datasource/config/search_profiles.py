@@ -43,10 +43,20 @@ KEY_ALIASES: Dict[str, str] = {
     **MONETARY_KEY_ALIASES,
 }
 
+PROFILE_KEY_ALIASES: Dict[str, str] = {
+    "reserve_ratio": "rrr",
+}
+
 
 def get_canonical_key(key: str) -> str:
     """获取规范化的键名，用于跨模块一致性"""
     return KEY_ALIASES.get(key, key)
+
+
+def get_profile_key(key: str) -> str:
+    """Return the search profile key without changing downstream data keys."""
+    text = str(key or "").strip()
+    return PROFILE_KEY_ALIASES.get(text, text)
 
 
 def _profile(
@@ -418,6 +428,8 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         unit="CNY",
         issuer="中国外汇交易中心",
         issuer_aliases=[
+            "中国人民银行",
+            "PBOC",
             "CFETS",
             "外汇交易中心",
             "中国货币网",
@@ -431,28 +443,39 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         ],
         query_families=[
             {
-                "name": "official_cfets",
+                "name": "pboc_midpoint",
+                "queries": [
+                    "中国人民银行 人民币汇率中间价 USD CNY 最新",
+                    "人民币汇率中间价 美元 人民币 {ref_year}年{ref_month}月",
+                    "PBOC USD CNY central parity latest",
+                ],
+                "preferred_domains": ["pbc.gov.cn", "chinamoney.com.cn", "cfets.com.cn"],
+                "required_keywords": ["中间价", "美元", "人民币", "usd", "cny"],
+                "exclude_keywords": ["外汇牌价", "现汇卖出"],
+            },
+            {
+                "name": "cfets_spot",
                 "queries": [
                     "CFETS USD/CNY 在岸即期汇率 最新报价",
                     "中国货币网 USD/CNY 在岸即期汇率 最新",
                     "{ref_year}年{ref_month}月 USD/CNY 在岸即期汇率 CFETS",
                 ],
                 "preferred_domains": ["cfets.com.cn", "chinamoney.com.cn"],
-                "required_keywords": ["usd/cny", "usdcny", "在岸"],
+                "required_keywords": ["usd/cny", "usdcny", "在岸", "即期"],
                 "exclude_keywords": ["外汇牌价", "现汇卖出"],
             },
             {
-                "name": "market_quote",
+                "name": "onshore_spot",
                 "queries": [
                     "USD/CNY onshore exchange rate latest",
                     "USD/CNY quote investing tradingeconomics",
                 ],
                 "preferred_domains": ["investing.com", "tradingeconomics.com", "eastmoney.com"],
-                "required_keywords": ["usd/cny", "在岸"],
+                "required_keywords": ["usd/cny", "onshore", "在岸"],
                 "exclude_keywords": ["外汇牌价", "现汇卖出"],
             },
         ],
-        required_keywords=["usd/cny", "在岸", "即期"],
+        required_keywords=["usd/cny", "usdcny", "美元", "人民币", "在岸", "即期", "中间价"],
         exclude_keywords=["外汇牌价", "现汇卖出"],
         strict_required_keywords=True,
         strict_issuer_match=True,
@@ -563,7 +586,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         ],
         unit="%",
         issuer="国家开发银行",
-        issuer_aliases=["中债", "CCDC", "CDB", "国开行"],
+        issuer_aliases=["中债", "中债估值", "政策性金融债", "CCDC", "CDB", "国开行", "国开债", "ChinaBond"],
         query_families=[
             {
                 "name": "official_cdb",
@@ -573,13 +596,14 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
                     "政策性金融债 国开债 10年期 收益率",
                 ],
                 "preferred_domains": ["chinabond.com.cn", "chinamoney.com.cn", "cfets.com.cn", "eastmoney.com"],
-                "required_keywords": ["国开债", "国家开发银行", "cdb"],
+                "required_keywords": ["国开", "开发债", "政策性金融债", "10年", "10Y", "CDB"],
                 "exclude_keywords": ["国债", "treasury"],
             },
         ],
-        required_keywords=["国开债", "国家开发银行", "cdb"],
+        required_keywords=["国开", "开发债", "政策性金融债", "10年", "10Y", "CDB"],
         exclude_keywords=["国债", "treasury"],
         strict_required_keywords=True,
+        strict_issuer_match=False,
         extract_policy={"use_tavily_extract": True, "extract_topk": 2},
         max_age_days=2,
         **_REALTIME_DEFAULTS,
@@ -832,10 +856,10 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         auto_parameters=True,
     ),
     "bdi": _profile(
-        query="波罗的海干散货指数 BDI 最新点位 历史数据 Baltic Exchange",
+        query="BDI Baltic Dry Index latest value Trading Economics Investing",
         queries=[
-            "Baltic Dry Index historical data",
-            "BDI Baltic Exchange index value",
+            "BDI Baltic Dry Index latest value Trading Economics",
+            "Baltic Dry Index latest historical data Investing",
             "波罗的海干散货指数 BDI 最新 点位 历史数据",
         ],
         domains=[
@@ -847,7 +871,28 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         exclude_domains=["reuters.com", "bloomberg.com", "jin10.com"],
         unit="点",
         issuer="波罗的海交易所",
-        issuer_aliases=["Baltic Exchange", "BDI", "波罗的海干散货指数"],
+        issuer_aliases=["Baltic Exchange", "Trading Economics", "Investing.com", "BDI", "波罗的海干散货指数"],
+        query_families=[
+            {
+                "name": "latest_market_data",
+                "queries": [
+                    "BDI Baltic Dry Index latest value Trading Economics",
+                    "Baltic Dry Index latest historical data Investing",
+                    "波罗的海干散货指数 BDI 最新 点位 历史数据",
+                ],
+                "preferred_domains": ["tradingeconomics.com", "investing.com", "eastmoney.com"],
+                "required_keywords": ["bdi", "baltic", "波罗的海", "dry index"],
+            },
+            {
+                "name": "official_context",
+                "queries": [
+                    "BDI Baltic Exchange index value",
+                    "Baltic Exchange Baltic Dry Index latest",
+                ],
+                "preferred_domains": ["balticexchange.com"],
+                "required_keywords": ["bdi", "baltic", "dry index"],
+            },
+        ],
         max_age_days=2,
         time_range="day",
         max_results=6,
@@ -1075,4 +1120,4 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
 }
 
 
-__all__ = ["SEARCH_PROFILES"]
+__all__ = ["SEARCH_PROFILES", "get_canonical_key", "get_profile_key"]

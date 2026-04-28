@@ -39,7 +39,7 @@
    ```
    Windows activate: `.venv\Scripts\activate`。
 
-2. Required keys in `.env`: `TUSHARE_TOKEN`, `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`。Optional: `EXA_API_KEY`（Tavily 失败时兜底，需已安装 `exa-py`）。
+2. Required keys in `.env`: `TUSHARE_TOKEN`, `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`。Optional: `EXA_API_KEY`（Tavily 失败时的显式兜底，需已安装 `exa-py`，且 Stage2 需传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`）。
 
 3. Sanity:
    ```bash
@@ -208,6 +208,7 @@ if comp < 0.8:
 - 多 query 选优按后过滤质量，而不是原始 `score_max`：先做域名、时效、关键词、发布机构、期次过滤，再选 `usable_count` 更高的 query，并统计 `post_filter_query_switch_count`。
 - 全部结果 `score_max < low_score_threshold`（默认 0.2）则跳过抽取，标记 `manual_required`，统计 `low_score_drop`。
 - Tavily extract 422 默认回退 DeepSeek 从 snippets 抽取；同指标连续 422 可按指标冷却（`extract_cooldown_count`），不会全局停用其他指标 extract。仍不稳时用 `--disable-extract` 或 `--extract-topk 1`。
+- Exa fallback 当前默认关闭，保证 Tavily-first 命中率调优不被备用搜索源污染；需要启用时必须显式传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`。
 - 资金流缺 `recent_5d/total_120d` 时，优先按 `field_queries` 仅补缺字段，并统计 `field_retry_count`。
 - DeepSeek 强 schema：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund flow 额外返回 `recent_5d/total_120d/trend`。`source_url` 必须来自 snippets，否则强制 `manual_required`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时追加一次“单位+发布机构+月份”定向检索。

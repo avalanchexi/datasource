@@ -4,8 +4,10 @@ from pathlib import Path
 
 import pytest
 
+from datasource.config.search_profiles import SEARCH_PROFILES
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
 import asyncio
+import scripts.stage2_unified_enhancer as stage2
 
 from scripts.stage2_unified_enhancer import (
     _apply_extraction,
@@ -18,6 +20,110 @@ from scripts.stage2_unified_enhancer import (
     _validate_fund_flow_extraction,
     _execute_tasks,
 )
+
+
+def test_retrieval_diagnostics_separates_search_extract_and_writeback():
+    rows = [
+        {
+            "indicator_key": "GC=F",
+            "usable_count_before_extract": 3,
+            "manual_required": True,
+            "manual_reason": "no_deepseek_key",
+        },
+        {
+            "indicator_key": "CN10Y_CDB",
+            "usable_count_before_extract": 0,
+            "manual_required": True,
+            "manual_reason": "strict_keyword_miss",
+        },
+        {
+            "indicator_key": "northbound",
+            "manual_required": False,
+            "result_type": "skipped_existing",
+        },
+        {
+            "indicator_key": "etf",
+            "usable_count_before_extract": 4,
+            "manual_required": False,
+            "write_back_success": True,
+        },
+    ]
+
+    diagnostics = stage2._build_retrieval_diagnostics(rows)
+
+    assert diagnostics["retrieval_task_count"] == 3
+    assert diagnostics["retrieval_hit_count"] == 2
+    assert diagnostics["retrieval_hit_extract_failed"] == 1
+    assert diagnostics["writeback_success_count"] == 1
+    assert diagnostics["manual_reason_breakdown"]["no_deepseek_key"] == 1
+    assert diagnostics["manual_reason_breakdown"]["strict_keyword_miss"] == 1
+
+
+def test_task_planner_uses_rrr_profile_for_reserve_ratio_alias(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "monetary_policy": {
+            "reserve_ratio": {"current_value": None},
+        },
+        "missing_items": [],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+    task = next(t for t in tasks if t["indicator_key"] == "reserve_ratio")
+
+    assert task["query_template_id"] == "rrr"
+    assert "存款准备金率" in task["required_keywords"]
+    assert any("reserve requirement" in q.lower() or "存款准备金率" in q for q in task["query_candidates_expanded"])
+
+
+def test_cn10y_cdb_profile_accepts_chinabond_policy_bank_language():
+    profile = SEARCH_PROFILES["CN10Y_CDB"]
+    aliases = " ".join(profile["issuer_aliases"])
+    required = " ".join(profile["required_keywords"])
+
+    assert "中债估值" in aliases
+    assert "政策性金融债" in aliases
+    assert "国开" in required
+    assert "10年" in required
+    assert profile["strict_issuer_match"] is False
+
+
+def test_usdcny_profile_has_separate_midpoint_and_spot_families():
+    family_names = {family["name"] for family in SEARCH_PROFILES["USDCNY"]["query_families"]}
+
+    assert {"pboc_midpoint", "cfets_spot", "onshore_spot"}.issubset(family_names)
+
+
+def test_bdi_profile_prioritizes_latest_market_data_family():
+    profile = SEARCH_PROFILES["bdi"]
+    first_family = profile["query_families"][0]
+
+    assert first_family["name"] == "latest_market_data"
+    assert "tradingeconomics.com" in first_family["preferred_domains"]
+    assert "investing.com" in first_family["preferred_domains"]
+
+
+def test_stage2_exa_fallback_is_opt_in_by_default(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["stage2_unified_enhancer.py", "--market-data", "market.json"])
+    monkeypatch.delenv("STAGE2_ENABLE_EXA_FALLBACK", raising=False)
+
+    args = stage2._parse_args()
+
+    assert args.enable_exa_fallback is False
+    assert stage2._should_enable_exa_fallback(args) is False
+
+
+def test_stage2_exa_fallback_can_be_enabled_explicitly(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        ["stage2_unified_enhancer.py", "--market-data", "market.json", "--enable-exa-fallback"],
+    )
+
+    args = stage2._parse_args()
+
+    assert args.enable_exa_fallback is True
+    assert stage2._should_enable_exa_fallback(args) is True
 
 def test_task_planner_detects_missing_and_placeholders(tmp_path: Path):
     payload = {

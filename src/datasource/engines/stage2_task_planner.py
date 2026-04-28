@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
-from datasource.config.search_profiles import SEARCH_PROFILES
+from datasource.config.search_profiles import SEARCH_PROFILES, get_profile_key
 from datasource.utils.coercion import is_stage2_task_placeholder
 from datasource.utils.run_paths import build_run_paths_from_reference
 
@@ -253,7 +253,8 @@ class Stage2TaskPlanner:
         trigger_reason: str = "missing",
         expected_period: Optional[str] = None,
     ) -> Dict[str, Any]:
-        profile = SEARCH_PROFILES.get(indicator_key, {})
+        profile_key = get_profile_key(indicator_key)
+        profile = SEARCH_PROFILES.get(profile_key, {})
         task_context = self._context_for_expected_period(expected_period)
         query = self._apply_query_templates(profile.get("query"), task_context)
         queries = [self._apply_query_templates(q, task_context) for q in (profile.get("queries") or [])]
@@ -273,7 +274,7 @@ class Stage2TaskPlanner:
             "indicator_key": indicator_key,
             "search_backend": self.search_backend,
             "fund_flow_backend": backend,
-            "query_template_id": indicator_key,
+            "query_template_id": profile_key,
             "preferred_domains": profile.get("preferred_domains", []),
             "exclude_domains": profile.get("exclude_domains", []),
             "time_range": profile.get("time_range"),

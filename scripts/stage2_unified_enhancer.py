@@ -638,10 +638,10 @@ def _strict_indicator_tokens(indicator_key: Optional[str]) -> List[str]:
         "hg=f": ["hg=f", "copper", "铜", "comex"],
         "bcom": ["bcom", "彭博商品指数"],
         "gsg": ["gsg"],
-        "usdcny": ["usdcny", "usd/cny", "在岸"],
+        "usdcny": ["usdcny", "usd/cny", "在岸", "中间价", "美元", "人民币"],
         "usdcnh": ["usdcnh", "usd/cnh", "离岸"],
         "dxy": ["dxy", "美元指数"],
-        "cn10y_cdb": ["国开债", "cdb", "国家开发银行"],
+        "cn10y_cdb": ["国开债", "国开", "开发债", "政策性金融债", "中债估值", "cdb", "国家开发银行"],
         "rrr": ["rrr", "存款准备金率"],
         "reverse_repo": ["逆回购", "reverse repo"],
         "mlf": ["mlf", "中期借贷便利"],
@@ -1287,6 +1287,60 @@ def _finalize_websearch_result_type(item: Dict[str, Any]) -> str:
     if item.get("manual_required"):
         return "manual_required"
     return "search_success"
+
+
+def _nested_row_value(row: Dict[str, Any], key: str) -> Any:
+    if key in row:
+        return row.get(key)
+    task = row.get("task")
+    if isinstance(task, dict) and key in task:
+        return task.get(key)
+    extraction = row.get("extraction")
+    if isinstance(extraction, dict) and key in extraction:
+        return extraction.get(key)
+    return None
+
+
+def _build_retrieval_diagnostics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Summarize search hit, extraction failure, and writeback outcomes."""
+    total = 0
+    retrieval_hit = 0
+    extract_failed = 0
+    writeback_success = 0
+    reason_counts: Dict[str, int] = {}
+    for row in rows:
+        if _nested_row_value(row, "result_type") == "skipped_existing":
+            continue
+        total += 1
+        usable_count = int(_nested_row_value(row, "usable_count_before_extract") or 0)
+        manual_required = bool(_nested_row_value(row, "manual_required"))
+        if usable_count > 0:
+            retrieval_hit += 1
+            if manual_required:
+                extract_failed += 1
+        if bool(_nested_row_value(row, "write_back_success")) or (
+            not manual_required and _nested_row_value(row, "result_type") == "search_success"
+        ):
+            writeback_success += 1
+        if manual_required:
+            reason = (
+                _nested_row_value(row, "manual_reason")
+                or _nested_row_value(row, "extraction_skipped_reason")
+                or _nested_row_value(row, "extract_skipped_reason")
+                or "manual_required"
+            )
+            reason_key = str(reason)
+            reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+    return {
+        "retrieval_task_count": total,
+        "retrieval_hit_count": retrieval_hit,
+        "retrieval_hit_rate": retrieval_hit / total if total else 0.0,
+        "retrieval_hit_extract_failed": extract_failed,
+        "extract_success_rate": (retrieval_hit - extract_failed) / retrieval_hit if retrieval_hit else 0.0,
+        "writeback_success_count": writeback_success,
+        "writeback_success_rate": writeback_success / total if total else 0.0,
+        "manual_reason_breakdown": reason_counts,
+    }
 
 
 def _mark_stale_refresh_failure(extraction: Dict[str, Any], task: Dict[str, Any]) -> None:
@@ -2975,6 +3029,7 @@ def _validate_general_extraction(
                 "美元",
                 "人民币",
                 "在岸",
+                "中间价",
             ],
             "USDCNH": [
                 "usdcnh",
@@ -2994,7 +3049,7 @@ def _validate_general_extraction(
             "reverse_repo": ["逆回购", "repo", "reverse repo", "7-day"],
             "US10Y": ["10年", "10-year", "us10y", "treasury"],
             "CN10Y": ["10年", "10-year", "10 year", "10y", "国债", "government bond", "china 10y"],
-            "CN10Y_CDB": ["国开", "开发债", "cdb"],
+            "CN10Y_CDB": ["国开", "开发债", "政策性金融债", "中债估值", "cdb"],
         }
         keywords = keyword_rules.get(indicator_key)
         if keywords and not any(k.lower() in snippets_text for k in keywords):
@@ -3080,6 +3135,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--tasks", help="仅执行指定任务（task_id 或 indicator_key，逗号分隔）")
     parser.add_argument("--dry-run", action="store_true", help="仅生成任务文件，不执行搜索")
     parser.add_argument("--execute-search", action="store_true", help="立即执行 Tavily+DeepSeek 任务")
+    parser.add_argument(
+        "--enable-exa-fallback",
+        action="store_true",
+        help="显式启用 Exa 作为 Tavily 后备；默认关闭以保持 Tavily-first 执行边界",
+    )
     parser.add_argument("--log-output", default=None, help="Stage2 运行日志路径（默认: logs/runs/YYYYMMDD/stage2_unified_log.json）")
     parser.add_argument("--gap-monitor", default=None, help="gap_monitor 输出路径（默认: data/runs/YYYYMMDD/gap_monitor.json）")
     parser.add_argument("--use-queue", action="store_true", help="开启 extraction 阶段 asyncio.Queue 消费模式")
@@ -3124,6 +3184,11 @@ def _parse_args() -> argparse.Namespace:
         help="极速模式：regex 抽取、并发放大、短超时、队列不重试，并禁用 extract 以加速",
     )
     return parser.parse_args()
+
+
+def _should_enable_exa_fallback(args: argparse.Namespace) -> bool:
+    env_value = str(os.getenv("STAGE2_ENABLE_EXA_FALLBACK") or "").strip().lower()
+    return bool(getattr(args, "enable_exa_fallback", False)) or env_value in {"1", "true", "yes", "on"}
 
 
 def _load_tasks_from_file(path: Path) -> List[Dict[str, Any]]:
@@ -3304,14 +3369,17 @@ async def main() -> int:
         proxies=proxies or None,
     )
     exa_client = None
-    if AsyncExaClient and os.getenv("EXA_API_KEY"):
+    exa_enabled = _should_enable_exa_fallback(args)
+    if exa_enabled and AsyncExaClient and os.getenv("EXA_API_KEY"):
         exa_client = AsyncExaClient(
             api_key=os.getenv("EXA_API_KEY"),
             cache=cache,
             max_concurrency=2,
         )
-    elif os.getenv("EXA_API_KEY"):
+    elif exa_enabled and os.getenv("EXA_API_KEY"):
         logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Exa 兜底将被跳过。")
+    elif os.getenv("EXA_API_KEY"):
+        logger.info("[Stage2] EXA_API_KEY 已设置，但 Exa fallback 默认关闭；如需启用请传 --enable-exa-fallback。")
     extractor = DeepSeekExtractionAgent(
         model=args.deepseek_model,
         base_url=args.deepseek_base_url,
@@ -3511,6 +3579,9 @@ async def main() -> int:
     search_success_rate_incremental = (
         search_success_count / incremental_denominator if incremental_denominator else 0.0
     )
+    retrieval_diagnostics = _build_retrieval_diagnostics(
+        websearch_results if websearch_results else completed_tasks + failures
+    )
 
     summary = {
         "task_total": len(tasks),
@@ -3523,6 +3594,8 @@ async def main() -> int:
         "task_stale_refresh_success": stale_refresh_success,
         "task_stale_refresh_failed": stale_refresh_failed,
         "search_success_rate_incremental": search_success_rate_incremental,
+        "retrieval_diagnostics": retrieval_diagnostics,
+        "manual_reason_breakdown": retrieval_diagnostics.get("manual_reason_breakdown", {}),
         "manual_required": pending_manual,
         "output": str(output_path),
         "task_file": str(task_file),

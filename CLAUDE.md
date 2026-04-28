@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-统一金融数据集成框架，支持 TuShare、AKShare、InternationalFinance 数据源自动故障转移。集成 Tavily+DeepSeek 网络搜索增强（Exa 作为 Tavily 422/失败兜底）、Pring 六阶段经济周期分析 (V4.0 三层框架)，以及 120 日背景扫描报告自动生成。
+统一金融数据集成框架，支持 TuShare、AKShare、InternationalFinance 数据源自动故障转移。集成 Tavily+DeepSeek 网络搜索增强（Exa 作为显式 opt-in 的 Tavily 422/失败兜底）、Pring 六阶段经济周期分析 (V4.0 三层框架)，以及 120 日背景扫描报告自动生成。
 
 **核心数据流**: Stage1 (API采集) → Stage2 (Tavily+DeepSeek增强) → Stage2.5 (手工注入补缺) → Stage3 (Pring分析) → Stage4 (报告生成)
 
@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **数据来源约束**: 严禁从历史 `reports/*.md` 中抓取或复用数据；所有数据必须来自 API 实时获取或 stage 计算产出
 - **完整度要求**: Stage3 需要 `data_completeness ≥ 80%`，否则报告会有缺失
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
-- **Exa 自动兜底**: 当 `EXA_API_KEY` 已配置时，Tavily 422/5xx/空结果会自动触发 Exa fallback
+- **Exa 默认关闭**: 当前先走 Tavily-first；只有传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时才使用 Exa fallback
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
 - **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily) -> Stage2.5`，当前流程不使用旧版外部补数链路
 
@@ -123,7 +123,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 | **Fast (仅补缺)** | `--extraction-backend regex --disable-extract` |
 | **重试指定缺口** | `--tasks USDCNY,northbound,etf` |
 | **资金流后端** | 固定 `--fund-flow-backend tavily`（当前唯一支持） |
-| **Exa fallback** | 自动（需 `EXA_API_KEY`），Tavily 422/5xx 时触发 |
+| **Exa fallback** | 默认关闭；需 `EXA_API_KEY` 且显式传 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1` |
 
 > 详细参数说明见 AGENTS.md "Stage2 Performance / Timeout Tips"
 
@@ -288,7 +288,7 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 TUSHARE_TOKEN=xxx      # Required: Stage1
 TAVILY_API_KEY=xxx     # Required: Stage2
 DEEPSEEK_API_KEY=xxx   # Required: LLM extraction
-EXA_API_KEY=xxx        # Optional: Tavily fallback
+EXA_API_KEY=xxx        # Optional: Tavily fallback, requires --enable-exa-fallback
 ```
 
 ## Troubleshooting
