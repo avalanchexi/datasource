@@ -1335,11 +1335,23 @@ def test_manual_official_helper_no_url_uses_name_fields_for_issuer_fallback():
         "monetary_policy",
         "mlf",
         {
-            "policy_name": "PBoC MLF official rate",
+            "policy_name": "中国人民银行 MLF",
             "source": "",
             "note": "",
         },
     ) is True
+
+
+def test_manual_official_helper_name_url_evidence_blocks_issuer_fallback():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "中国人民银行 MLF https://evil.com/x",
+            "source": "",
+            "note": "",
+        },
+    ) is False
 
 
 def test_manual_third_party_usdcny_url_path_with_chinamoney_stays_estimated(tmp_path: Path, monkeypatch):

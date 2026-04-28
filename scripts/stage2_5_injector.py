@@ -100,6 +100,7 @@ INDICATOR_CATEGORY = {
 
 DEFAULT_SOURCE_LABEL = "websearch_manual"
 OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
+OFFICIAL_MANUAL_TEXT_FIELDS = ("source", "note", "name", "policy_name", "indicator_name")
 OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
         "mlf": {
@@ -333,7 +334,7 @@ def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
         value = payload.get(field)
         if isinstance(value, str) and value.strip():
             evidence.append(value.strip())
-    for field in ("source", "note"):
+    for field in OFFICIAL_MANUAL_TEXT_FIELDS:
         value = payload.get(field)
         if not isinstance(value, str):
             continue
@@ -362,8 +363,7 @@ def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
 
 
 def _manual_official_issuer_text(payload: Dict[str, Any]) -> str:
-    fields = ("source", "note", "name", "policy_name", "indicator_name")
-    parts = [str(payload.get(field) or "") for field in fields]
+    parts = [str(payload.get(field) or "") for field in OFFICIAL_MANUAL_TEXT_FIELDS]
     return " ".join(parts).lower()
 
 
