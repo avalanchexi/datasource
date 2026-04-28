@@ -291,6 +291,11 @@ class Stage2TaskPlanner:
             "exclude_keywords": profile.get("exclude_keywords", []),
             "strict_required_keywords": profile.get("strict_required_keywords", False),
             "strict_issuer_match": profile.get("strict_issuer_match", False),
+            "required_output_fields": profile.get("required_output_fields", []),
+            "evidence_keywords": profile.get("evidence_keywords", []),
+            "good_url_patterns": profile.get("good_url_patterns", []),
+            "bad_url_patterns": profile.get("bad_url_patterns", []),
+            "report_usage": profile.get("report_usage"),
             "language": profile.get("language"),
             "topic": profile.get("topic"),
             "max_results": profile.get("max_results"),
@@ -323,17 +328,21 @@ class Stage2TaskPlanner:
         priority = {"stale_data": 3, "placeholder": 2, "missing": 1}
         unique_tasks: List[Dict[str, Any]] = []
         for task in tasks:
-            key = task["indicator_key"]
+            key = task.get("query_template_id") or task["indicator_key"]
             reason = str(task.get("trigger_reason") or "missing")
             score = priority.get(reason, 0)
             if key not in seen:
                 seen[key] = score
                 unique_tasks.append(task)
                 continue
-            if score > seen[key]:
+            should_replace = score > seen[key] or (
+                score == seen[key] and task.get("indicator_key") == task.get("query_template_id")
+            )
+            if should_replace:
                 seen[key] = score
                 for idx, old_task in enumerate(unique_tasks):
-                    if old_task.get("indicator_key") == key:
+                    old_key = old_task.get("query_template_id") or old_task.get("indicator_key")
+                    if old_key == key:
                         unique_tasks[idx] = task
                         break
         if self.stage_phase != "all":

@@ -172,6 +172,64 @@ def test_bdi_profile_prioritizes_latest_market_data_family():
     assert "investing.com" in first_family["preferred_domains"]
 
 
+def test_profiles_expose_report_usage_contract_for_high_risk_tasks():
+    etf = SEARCH_PROFILES["etf"]
+    assert etf["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
+    assert "全市场" in etf["evidence_keywords"]
+    assert "data.eastmoney.com" in etf["good_url_patterns"]
+    assert "caifuhao.eastmoney.com" in etf["bad_url_patterns"]
+
+    bdi = SEARCH_PROFILES["bdi"]
+    assert bdi["required_output_fields"] == ["current_value", "previous_value", "change_rate"]
+    assert "Baltic Dry Index" in bdi["evidence_keywords"]
+    assert "/Circulars/" in bdi["bad_url_patterns"]
+
+    industrial = SEARCH_PROFILES["industrial"]
+    assert "全国" in industrial["evidence_keywords"]
+    assert "stats.gov.cn" in industrial["good_url_patterns"]
+
+
+def test_fund_flow_profiles_have_field_queries_for_all_report_windows():
+    for key in ("northbound", "southbound", "etf"):
+        profile = SEARCH_PROFILES[key]
+        assert "recent_5d" in profile["field_queries"]
+        assert "total_120d" in profile["field_queries"]
+        joined = " ".join(profile["field_queries"]["recent_5d"] + profile["field_queries"]["total_120d"])
+        assert "近5日" in joined
+        assert "120" in joined
+
+
+def test_etf_primary_query_family_is_all_market_window_search():
+    profile = SEARCH_PROFILES["etf"]
+    first_family = profile["query_families"][0]
+    joined = " ".join(first_family["queries"])
+
+    assert first_family["name"] == "all_market_windows"
+    assert "全市场" in joined
+    assert "近5日" in joined
+    assert "120" in joined
+
+
+def test_policy_profiles_distinguish_current_level_and_operation_notice():
+    rrr_families = {family["name"] for family in SEARCH_PROFILES["rrr"]["query_families"]}
+    mlf_families = {family["name"] for family in SEARCH_PROFILES["mlf"]["query_families"]}
+    reverse_repo_families = {family["name"] for family in SEARCH_PROFILES["reverse_repo"]["query_families"]}
+
+    assert {"current_level", "official_adjustment_notice"}.issubset(rrr_families)
+    assert "official_operation_notice" in reverse_repo_families
+    assert "multi_price_notice" in mlf_families
+
+
+def test_macro_profiles_prioritize_national_official_releases():
+    industrial = SEARCH_PROFILES["industrial"]["query_families"][0]
+    industrial_sales = SEARCH_PROFILES["industrial_sales"]["query_families"][0]
+
+    assert industrial["name"] == "official_nbs_release"
+    assert industrial_sales["name"] == "official_nbs_release"
+    assert "stats.gov.cn" in industrial["preferred_domains"]
+    assert "stats.gov.cn" in industrial_sales["preferred_domains"]
+
+
 def test_stage2_exa_fallback_is_opt_in_by_default(monkeypatch):
     monkeypatch.setattr("sys.argv", ["stage2_unified_enhancer.py", "--market-data", "market.json"])
     monkeypatch.delenv("STAGE2_ENABLE_EXA_FALLBACK", raising=False)
@@ -244,6 +302,41 @@ def test_task_planner_keeps_etf_field_queries(tmp_path: Path):
     task = next(t for t in tasks if t["indicator_key"] == "etf")
     assert "recent_5d" in task["field_queries"]
     assert "total_120d" in task["field_queries"]
+
+
+def test_task_planner_passes_report_usage_contract_to_task(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "fund_flow": {"etf": {"recent_5d": None, "total_120d": None}},
+        "missing_items": [],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "etf")
+
+    assert task["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
+    assert "全市场" in task["evidence_keywords"]
+    assert "data.eastmoney.com" in task["good_url_patterns"]
+    assert "caifuhao.eastmoney.com" in task["bad_url_patterns"]
+
+
+def test_task_planner_dedupes_rrr_and_reserve_ratio_aliases(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "monetary_policy": {
+            "rrr": {"current_value": None},
+            "reserve_ratio": {"current_value": None},
+        },
+        "missing_items": [
+            {"key": "rrr", "reason": "missing"},
+            {"key": "reserve_ratio", "reason": "missing"},
+        ],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+    rrr_tasks = [task for task in tasks if task["query_template_id"] == "rrr"]
+
+    assert len(rrr_tasks) == 1
+    assert rrr_tasks[0]["indicator_key"] == "rrr"
 
 
 def test_task_planner_dedupe_prefers_stale_reason(tmp_path: Path):
@@ -371,6 +464,121 @@ def test_candidate_query_quality_strict_keywords_rejects_unrelated_snippets():
     assert quality["snippets"] == []
     assert quality["usable_count"] == 0
     assert quality["unusable_reason"] == "strict_keyword_miss"
+
+
+def test_candidate_query_quality_penalizes_bad_url_patterns_and_prefers_usage_evidence():
+    task = {
+        "indicator_key": "etf",
+        "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com", "eastmoney.com"],
+        "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+        "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率"],
+        "evidence_keywords": ["全市场", "A股ETF", "近5日", "近120日", "净流入", "累计", "合计"],
+    }
+    candidate = {"query": "A股ETF 全市场 近5日 近120日 净流入 合计", "preferred_domains": task["preferred_domains"]}
+    good_snippets = [
+        {
+            "url": "https://data.eastmoney.com/fund/etf.html",
+            "title": "A股ETF资金流向",
+            "content": "全市场A股ETF近5日净流入85亿元，近120日累计净流入1200亿元，资金流向合计为流入。",
+            "score": 0.72,
+        }
+    ]
+    noisy_snippets = [
+        {
+            "url": "https://caifuhao.eastmoney.com/news/202604280001",
+            "title": "单只ETF规模创新高",
+            "content": "某单只ETF费率优惠，规模创新高，未披露全市场近5日或近120日合计净流入。",
+            "score": 0.96,
+        }
+    ]
+
+    good = _candidate_query_quality(task, candidate, good_snippets)
+    noisy = _candidate_query_quality(task, candidate, noisy_snippets)
+
+    assert good["quality_score"] > noisy["quality_score"]
+    assert good["usage_evidence_score"] > noisy["usage_evidence_score"]
+    assert noisy["bad_url_hit_count"] >= 1
+
+
+def test_candidate_query_quality_penalizes_all_bad_trusted_results_below_clean_data_page():
+    task = {
+        "indicator_key": "etf",
+        "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com", "eastmoney.com"],
+        "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+        "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率"],
+        "evidence_keywords": ["全市场", "A股ETF", "近5日", "近120日", "净流入", "累计", "合计"],
+    }
+    candidate = {"query": "A股ETF 全市场 近5日 近120日 净流入 合计", "preferred_domains": task["preferred_domains"]}
+    clean = _candidate_query_quality(
+        task,
+        candidate,
+        [
+            {
+                "url": "https://data.eastmoney.com/fund/etf.html",
+                "content": "全市场A股ETF近5日净流入85亿元，近120日累计净流入1200亿元。",
+                "score": 0.64,
+            }
+        ],
+    )
+    all_bad = _candidate_query_quality(
+        task,
+        candidate,
+        [
+            {
+                "url": "https://caifuhao.eastmoney.com/news/202604280001",
+                "content": "单只ETF费率优惠，规模创新高。",
+                "score": 0.99,
+            },
+            {
+                "url": "https://caifuhao.eastmoney.com/news/202604280002",
+                "content": "单只ETF营销文章，未披露全市场合计窗口。",
+                "score": 0.98,
+            },
+            {
+                "url": "https://caifuhao.eastmoney.com/news/202604280003",
+                "content": "单只ETF申购热度上升，未披露全市场窗口。",
+                "score": 0.97,
+            },
+            {
+                "url": "https://caifuhao.eastmoney.com/news/202604280004",
+                "content": "单只ETF规模创新高，未披露近5日和120日合计。",
+                "score": 0.96,
+            },
+        ],
+    )
+
+    assert all_bad["trusted_count"] == 4
+    assert all_bad["bad_url_hit_count"] == 4
+    assert clean["quality_score"] > all_bad["quality_score"]
+
+
+def test_candidate_query_quality_filters_bdi_old_circular_when_data_page_exists():
+    task = {
+        "indicator_key": "bdi",
+        "preferred_domains": ["tradingeconomics.com", "balticexchange.com"],
+        "good_url_patterns": ["tradingeconomics.com"],
+        "bad_url_patterns": ["/Circulars/", "2018"],
+        "evidence_keywords": ["BDI", "Baltic Dry Index", "latest", "points"],
+    }
+    candidate = {"query": "BDI Baltic Dry Index latest value", "preferred_domains": task["preferred_domains"]}
+    snippets = [
+        {
+            "url": "https://www.balticexchange.com/en/data-services/market-information0/dry-services/Circulars/2018.html",
+            "content": "Baltic Exchange circular archive 2018 for dry services.",
+            "score": 0.93,
+        },
+        {
+            "url": "https://tradingeconomics.com/commodity/baltic",
+            "content": "Baltic Dry Index latest value is 1350 points with daily change.",
+            "score": 0.71,
+        },
+    ]
+
+    quality = _candidate_query_quality(task, candidate, snippets)
+
+    assert quality["usable_count"] == 1
+    assert quality["snippets"][0]["url"] == "https://tradingeconomics.com/commodity/baltic"
+    assert quality["bad_url_hit_count"] == 1
 
 
 def test_validate_fund_flow_direction_outflow():

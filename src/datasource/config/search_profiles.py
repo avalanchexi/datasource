@@ -84,6 +84,11 @@ def _profile(
     strict_required_keywords: bool = False,
     strict_issuer_match: bool = False,
     field_queries: Dict[str, List[str]] | None = None,
+    required_output_fields: List[str] | None = None,
+    evidence_keywords: List[str] | None = None,
+    good_url_patterns: List[str] | None = None,
+    bad_url_patterns: List[str] | None = None,
+    report_usage: str | None = None,
     extract_policy: Dict[str, Any] | None = None,
 ) -> SearchProfile:
     combined_queries = _dedupe_preserve(([query] if query else []) + list(queries or []))
@@ -139,6 +144,11 @@ def _profile(
         "strict_required_keywords": strict_required_keywords,
         "strict_issuer_match": strict_issuer_match,
         "field_queries": normalized_field_queries,
+        "required_output_fields": _dedupe_preserve(required_output_fields or []),
+        "evidence_keywords": _dedupe_preserve(evidence_keywords or []),
+        "good_url_patterns": _dedupe_preserve(good_url_patterns or []),
+        "bad_url_patterns": _dedupe_preserve(bad_url_patterns or []),
+        "report_usage": report_usage,
         "extract_policy": extract_policy or {},
     }
 
@@ -1118,6 +1128,255 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         **_MACRO_DEFAULTS,
     ),
 }
+
+
+def _prepend_profile_family(profile_key: str, family: Dict[str, Any]) -> None:
+    existing = list(SEARCH_PROFILES[profile_key].get("query_families") or [])
+    SEARCH_PROFILES[profile_key]["query_families"] = [
+        family,
+        *[item for item in existing if item.get("name") != family.get("name")],
+    ]
+
+
+def _apply_report_usage_profiles() -> None:
+    """Attach downstream report-usage metadata used by Stage2 post-filtering."""
+    current_value_keys = [
+        "USDCNY",
+        "USDCNH",
+        "DXY",
+        "US10Y",
+        "CN10Y",
+        "CN10Y_CDB",
+        "rrr",
+        "reverse_repo",
+        "mlf",
+    ]
+    for key in current_value_keys:
+        if key in SEARCH_PROFILES:
+            SEARCH_PROFILES[key]["required_output_fields"] = ["current_value"]
+
+    SEARCH_PROFILES["northbound"].update(
+        {
+            "field_queries": {
+                "recent_5d": [
+                    "北向资金 近5日 净流入 合计 亿元 东方财富",
+                    "{ref_year}年{ref_month}月 北向资金 近5日 沪深港通 净买入 合计 亿元",
+                ],
+                "total_120d": [
+                    "北向资金 近120日 累计净流入 合计 亿元 东方财富",
+                    "{ref_year}年 北向资金 120日 累计净买入 沪深港通 亿元",
+                ],
+            },
+            "required_output_fields": ["recent_5d", "total_120d", "trend"],
+            "evidence_keywords": ["北向资金", "沪深港通", "近5日", "近120日", "累计", "合计", "净流入", "净买入"],
+            "good_url_patterns": ["data.eastmoney.com", "hkex.com.hk"],
+            "bad_url_patterns": ["个股", "十大活跃股", "龙虎榜"],
+            "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
+        }
+    )
+    SEARCH_PROFILES["southbound"].update(
+        {
+            "field_queries": {
+                "recent_5d": [
+                    "南向资金 近5日 净流入 合计 亿港元 东方财富",
+                    "{ref_year}年{ref_month}月 南向资金 近5日 港股通 净买入 合计 亿港元",
+                ],
+                "total_120d": [
+                    "南向资金 近120日 累计净流入 合计 亿港元 东方财富",
+                    "{ref_year}年 南向资金 120日 累计净买入 港股通 亿港元",
+                ],
+            },
+            "required_output_fields": ["recent_5d", "total_120d", "trend"],
+            "evidence_keywords": ["南向资金", "港股通", "近5日", "近120日", "累计", "合计", "净流入", "净买入"],
+            "good_url_patterns": ["data.eastmoney.com", "hkex.com.hk"],
+            "bad_url_patterns": ["个股", "十大成交股", "龙虎榜"],
+            "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
+        }
+    )
+    SEARCH_PROFILES["etf"].update(
+        {
+            "query": "A股ETF 全市场 近5日 近120日 资金净流入 合计 亿元 东方财富",
+            "required_keywords": ["etf", "全市场", "合计"],
+            "query_families": [
+                {
+                    "name": "all_market_windows",
+                    "queries": [
+                        "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+                        "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+                        "A股ETF 全市场 近5日 近120日 资金流向 合计",
+                    ],
+                    "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com"],
+                    "required_keywords": ["etf", "全市场", "合计"],
+                }
+            ],
+            "field_queries": {
+                "recent_5d": [
+                    "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+                    "{ref_year}年{ref_month}月 A股ETF 全市场 近5日 资金流向 净流入 合计",
+                ],
+                "total_120d": [
+                    "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+                    "{ref_year}年 A股ETF 全市场 120日 累计资金净流入 合计",
+                ],
+            },
+            "required_output_fields": ["recent_5d", "total_120d", "trend"],
+            "evidence_keywords": [
+                "全市场",
+                "A股ETF",
+                "近5日",
+                "近120日",
+                "净流入",
+                "净流出",
+                "累计",
+                "合计",
+                "资金流向",
+            ],
+            "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+            "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率", "规模创新高"],
+            "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
+        }
+    )
+
+    for key, usage in {
+        "industrial": "Stage4 macro table requires national NBS period value, not local industrial news",
+        "industrial_sales": "Stage4 macro table requires national industrial-enterprise sales/revenue period value",
+    }.items():
+        SEARCH_PROFILES[key].update(
+            {
+                "required_output_fields": ["current_value", "previous_value", "change_rate"],
+                "good_url_patterns": ["stats.gov.cn", "data.stats.gov.cn"],
+                "bad_url_patterns": ["省", "市", "地区", "园区"],
+                "report_usage": usage,
+            }
+        )
+    SEARCH_PROFILES["industrial"]["evidence_keywords"] = ["全国", "国家统计局", "规模以上工业", "增加值", "同比"]
+    SEARCH_PROFILES["industrial_sales"]["evidence_keywords"] = [
+        "全国",
+        "国家统计局",
+        "规模以上工业企业",
+        "营业收入",
+        "利润总额",
+        "同比",
+    ]
+    _prepend_profile_family(
+        "industrial",
+        {
+            "name": "official_nbs_release",
+            "queries": [
+                "国家统计局 {expected_year}年{expected_month}月 规模以上工业增加值 同比 全国",
+                "stats.gov.cn {expected_year}年{expected_month}月 规模以上工业增加值 同比",
+            ],
+            "preferred_domains": ["stats.gov.cn", "data.stats.gov.cn"],
+            "required_keywords": ["规模以上工业", "增加值", "同比"],
+        },
+    )
+    _prepend_profile_family(
+        "industrial_sales",
+        {
+            "name": "official_nbs_release",
+            "queries": [
+                "国家统计局 {expected_year}年1-{expected_month}月 规模以上工业企业 营业收入 同比",
+                "stats.gov.cn {expected_year}年1-{expected_month}月 规模以上工业企业 利润 营业收入",
+            ],
+            "preferred_domains": ["stats.gov.cn", "data.stats.gov.cn"],
+            "required_keywords": ["规模以上工业企业", "营业收入", "同比"],
+        },
+    )
+
+    SEARCH_PROFILES["bdi"].update(
+        {
+            "required_output_fields": ["current_value", "previous_value", "change_rate"],
+            "evidence_keywords": ["BDI", "Baltic Dry Index", "latest", "Index", "points", "波罗的海干散货指数"],
+            "good_url_patterns": ["tradingeconomics.com", "investing.com/indices", "data.eastmoney.com/cjsj"],
+            "bad_url_patterns": ["/Circulars/", "/faqs", "market-announcements", "2018"],
+            "report_usage": "Stage4 macro table and Pring macro score require current_value plus comparable previous/change",
+        }
+    )
+
+    SEARCH_PROFILES["rrr"]["query_families"] = [
+        {
+            "name": "current_level",
+            "queries": [
+                "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
+                "China reserve requirement ratio current level PBOC latest",
+            ],
+            "preferred_domains": ["pbc.gov.cn", "tradingeconomics.com", "ceicdata.com"],
+            "required_keywords": ["存款准备金率", "reserve requirement ratio", "rrr"],
+        },
+        {
+            "name": "official_adjustment_notice",
+            "queries": [
+                "中国人民银行 决定 下调 金融机构 存款准备金率 公告",
+                "人民银行 降准 存款准备金率 最新 公告",
+            ],
+            "preferred_domains": ["pbc.gov.cn", "xinhuanet.com"],
+            "required_keywords": ["存款准备金率", "人民银行"],
+        },
+        *[
+            item
+            for item in SEARCH_PROFILES["rrr"].get("query_families", [])
+            if item.get("name") not in {"official_pbc", "current_level", "official_adjustment_notice"}
+        ],
+    ]
+    SEARCH_PROFILES["rrr"].update(
+        {
+            "evidence_keywords": ["存款准备金率", "金融机构", "加权平均", "当前水平", "人民银行"],
+            "good_url_patterns": ["pbc.gov.cn", "tradingeconomics.com", "ceicdata.com"],
+            "bad_url_patterns": ["农业", "设施农业", "种植", "lpr"],
+            "report_usage": "Stage4 monetary table requires current reserve requirement ratio level",
+        }
+    )
+    SEARCH_PROFILES["reverse_repo"]["query_families"] = [
+        {
+            "name": "official_operation_notice",
+            "queries": [
+                "人民银行 公开市场 7天期逆回购 操作 中标利率 最新",
+                "中国人民银行 7天期逆回购 中标利率 公告",
+            ],
+            "preferred_domains": ["pbc.gov.cn", "chinamoney.com.cn", "cls.cn"],
+            "required_keywords": ["逆回购", "中标利率", "公开市场"],
+        },
+        *[
+            item
+            for item in SEARCH_PROFILES["reverse_repo"].get("query_families", [])
+            if item.get("name") not in {"official_notice", "official_operation_notice"}
+        ],
+    ]
+    SEARCH_PROFILES["reverse_repo"].update(
+        {
+            "evidence_keywords": ["逆回购", "7天期", "中标利率", "公开市场", "人民银行"],
+            "good_url_patterns": ["pbc.gov.cn", "chinamoney.com.cn"],
+            "bad_url_patterns": ["lpr", "loan prime rate"],
+            "report_usage": "Stage4 monetary table requires latest 7-day reverse repo operation rate",
+        }
+    )
+    SEARCH_PROFILES["mlf"]["query_families"] = [
+        {
+            "name": "multi_price_notice",
+            "queries": [
+                "人民银行 中期借贷便利 操作公告 多重价位 中标利率区间 最新",
+                "人民银行 MLF 多重价位 中标利率 加权平均利率",
+            ],
+            "preferred_domains": ["pbc.gov.cn", "chinamoney.com.cn", "cls.cn"],
+            "required_keywords": ["mlf", "中期借贷便利", "利率"],
+        },
+        *[
+            item
+            for item in SEARCH_PROFILES["mlf"].get("query_families", [])
+            if item.get("name") not in {"official_notice", "multi_price_notice"}
+        ],
+    ]
+    SEARCH_PROFILES["mlf"].update(
+        {
+            "evidence_keywords": ["MLF", "中期借贷便利", "多重价位", "中标利率", "加权平均利率"],
+            "good_url_patterns": ["pbc.gov.cn", "chinamoney.com.cn"],
+            "bad_url_patterns": ["lpr", "loan prime rate"],
+            "report_usage": "Stage4 monetary table requires latest MLF rate or multi-price reference context",
+        }
+    )
+
+
+_apply_report_usage_profiles()
 
 
 __all__ = ["SEARCH_PROFILES", "get_canonical_key", "get_profile_key"]
