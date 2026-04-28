@@ -140,7 +140,7 @@ def test_report_monetary_no_previous_value_hides_zero_change(tmp_path: Path):
     _write_json(p, pring)
     generate_report(m, p, out)
     text = out.read_text(encoding="utf-8")
-    assert "| 中国MLF利率 | 2.0% | N/A（待 WebSearch） | % | 2026-01 |" in text
+    assert "| 中国MLF利率 | 2.00% | N/A（待 WebSearch） | % | 2026-01 |" in text
 
 
 def test_bond_date_uses_latest_available_note_date(tmp_path: Path):
