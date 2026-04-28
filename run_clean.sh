@@ -10,10 +10,16 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
+BASH_PLATFORM="$(uname -s 2>/dev/null || echo unknown)"
+IS_WINDOWS_NATIVE_BASH=0
+case "$BASH_PLATFORM" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS_NATIVE_BASH=1 ;;
+esac
+
 VENV_ACTIVATE=""
 if [ -f ".venv/bin/activate" ]; then
   VENV_ACTIVATE=".venv/bin/activate"
-elif [ -f ".venv/Scripts/activate" ]; then
+elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; then
   VENV_ACTIVATE=".venv/Scripts/activate"
 fi
 
