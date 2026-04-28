@@ -2504,6 +2504,21 @@ async def _execute_tasks(
                                                     }
                                                 )
                     except Exception as exc:  # pragma: no cover
+                        if _is_tavily_quota_error(exc):
+                            _mark_tavily_quota_unavailable()
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            task_record, websearch_item = _build_tavily_fast_switch_records(
+                                task_for_log,
+                                attempt_index=attempt,
+                                elapsed_ms=elapsed_ms,
+                                error=exc,
+                                query_attempts=query_attempts,
+                            )
+                            _append_task_log(task_log_path, task_record)
+                            failures.append(task_record)
+                            manual_required_keys.append(task_record["indicator_key"])
+                            websearch_results.append(websearch_item)
+                            break
                         logger.debug(f"Tavily extract skipped/failed: {exc}")
                     if (
                         search_backend == "tavily"
