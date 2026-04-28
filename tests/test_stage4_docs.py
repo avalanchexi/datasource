@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 import scripts.stage4_report_generator as stage4
+from datasource.generators.simple_report import _format_monetary_value_for_report
 
 
 def test_claude_stage4_command_uses_named_args():
@@ -13,6 +14,30 @@ def test_claude_stage4_command_uses_named_args():
     assert "--pring-result" in text
     assert "--output" in text
     assert "兼容入口：tests/scripts/generate_simple_report_test.py" in text
+
+
+def test_stage4_mlf_non_unified_rate_display():
+    entry = {
+        "current_value": 2.0,
+        "change_120d_bp": 0.0,
+        "note": "MLF 多重价位中标利率参考值，口径不适用",
+        "as_of_date": "2026-04-25",
+    }
+    current, change = _format_monetary_value_for_report("mlf", entry)
+    assert current == "2.00%（参考）"
+    assert change == "口径不适用"
+
+
+def test_stage4_regular_monetary_policy_display_is_not_reference():
+    entry = {
+        "current_value": 1.8,
+        "change_from_120d": 0.1,
+        "note": "公开市场操作利率",
+        "as_of_date": "2026-04-25",
+    }
+    current, change = _format_monetary_value_for_report("dr007", entry)
+    assert current == "1.80%"
+    assert change == "+0.1pp"
 
 
 def test_stage4_prefers_dated_gap_monitor(tmp_path, monkeypatch):

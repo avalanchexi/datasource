@@ -144,8 +144,49 @@ def _is_mlf_non_unified_rate(policy: dict) -> bool:
         str(policy.get(k) or "")
         for k in ("policy_name", "note", "source")
     )
-    markers = ("多重价位", "无统一利率", "美式招标", "利率区间")
+    markers = (
+        "多重价位",
+        "中标利率",
+        "参考值",
+        "口径不适用",
+        "无统一利率",
+        "美式招标",
+        "利率区间",
+    )
     return any(marker in text for marker in markers)
+
+
+def _format_monetary_value_for_report(key: str, entry: dict) -> tuple[str, str]:
+    current_value = _to_float(entry.get("current_value"))
+    is_placeholder = entry.get("is_estimated") or "待MCP" in str(entry.get("source", ""))
+    is_non_unified_mlf = key == "mlf" and _is_mlf_non_unified_rate(entry)
+
+    if current_value is None:
+        current = NA_TEXT
+    elif is_non_unified_mlf:
+        current = f"{current_value:.2f}%（参考）"
+    else:
+        current = f"{current_value:.2f}%" + ("(估)" if is_placeholder else "")
+
+    if is_non_unified_mlf:
+        return current, "口径不适用"
+
+    change_value = entry.get("change_from_120d")
+    change_suffix = "pp"
+    if change_value is None:
+        change_value = entry.get("change_120d_bp")
+        change_suffix = "bp"
+
+    reason = _extract_reason(entry.get("note"))
+    change_num = _to_float(change_value)
+    if reason == "no_previous_value" and (change_num is None or abs(change_num) < 1e-9):
+        change = NA_TEXT
+    elif change_num is None:
+        change = NA_TEXT
+    else:
+        change = f"{change_num:+.1f}{change_suffix}" + ("(估)" if is_placeholder else "")
+
+    return current, change
 
 
 def _fmt_change_cell(value: Any, *, digits: int, suffix: str, low_confidence: bool = False) -> str:
@@ -917,8 +958,6 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 """
 
     for key, policy in market_data['monetary_policy'].items():
-        curr = policy.get('current_value', 'N/A')
-        change = policy.get('change_from_120d', 'N/A')
         unit = policy.get('unit', '')
         is_non_daily = key not in DAILY_POLICY_KEYS
         is_mlf_non_unified = key == "mlf" and _is_mlf_non_unified_rate(policy)
@@ -935,25 +974,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             label = "加权平均" if rrr_type == "weighted" else "法定平均" if rrr_type == "statutory" else rrr_type
             name = f"{name}({label})"
 
-        is_placeholder = policy.get('is_estimated') or '待MCP' in policy.get('source', '')
-        def _fmt_val(val, suffix="", allow_est=False):
-            if val in (None, 'N/A'):
-                return NA_TEXT
-            if is_placeholder and not allow_est:
-                return NA_TEXT
-            return f"{val}{suffix}" + ("(估)" if is_placeholder else "")
-
-        curr_str = _fmt_val(curr, unit, allow_est=True)
-        reason = _extract_reason(policy.get('note'))
-        change_num = _to_float(change)
-        if is_mlf_non_unified:
-            change_str = "口径不适用"
-        elif reason == "no_previous_value" and (change_num is None or abs(change_num) < 1e-9):
-            change_str = NA_TEXT
-        elif change not in ('N/A', None):
-            change_str = _fmt_val(f"{float(change):+.1f}", "pp", allow_est=True)
-        else:
-            change_str = NA_TEXT
+        curr_str, change_str = _format_monetary_value_for_report(key, policy)
 
         report += f"| {name} | {curr_str} | {change_str} | {unit} | {date} |\n"
 
