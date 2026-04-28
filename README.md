@@ -533,7 +533,7 @@ python3 scripts/stage2_unified_enhancer.py \
 
 ## 关键默认值
 - fund_flow_backend: `tavily`
-- deepseek_model: `deepseek-reasoner`
+- deepseek_model: `deepseek-v4-pro`
 - deepseek_timeout: 12s；超时/网络错误自动重试 1 次
 - 实时类搜索参数：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
 - 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
