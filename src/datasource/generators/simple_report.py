@@ -142,7 +142,7 @@ def _is_low_trend_confidence(entry: dict) -> bool:
 def _is_mlf_non_unified_rate(policy: dict) -> bool:
     text = " ".join(
         str(policy.get(k) or "")
-        for k in ("policy_name", "note", "source")
+        for k in ("policy_name", "note", "source", "manual_reason")
     )
     markers = (
         "多重价位",

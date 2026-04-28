@@ -28,6 +28,17 @@ def test_stage4_mlf_non_unified_rate_display():
     assert change == "口径不适用"
 
 
+def test_stage4_mlf_non_unified_rate_display_from_manual_reason():
+    entry = {
+        "current_value": 2.0,
+        "change_from_120d": 0.0,
+        "manual_reason": "\u591a\u91cd\u4ef7\u4f4d\u4e2d\u6807\u5229\u7387\u53c2\u8003\u503c\uff0c\u53e3\u5f84\u4e0d\u9002\u7528",
+    }
+    current, change = _format_monetary_value_for_report("mlf", entry)
+    assert current == "2.00%\uff08\u53c2\u8003\uff09"
+    assert change == "\u53e3\u5f84\u4e0d\u9002\u7528"
+
+
 def test_stage4_regular_monetary_policy_display_is_not_reference():
     entry = {
         "current_value": 1.8,
