@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 import pytest
 
@@ -304,3 +305,107 @@ async def test_extract_422_uses_exa_fallback_for_non_fund_flow(tmp_path):
     assert stats.get("exa_fallback_after_extract_422", 0) >= 1
     assert websearch_results[0]["search_backend"] == "exa"
     assert websearch_results[0]["result_type"] == "search_success"
+
+
+class QuotaTavilyClient:
+    def __init__(self):
+        self.calls = 0
+
+    async def search(self, **kwargs):
+        self.calls += 1
+        exc = RuntimeError("429 quota exceeded")
+        exc.response = type("Response", (), {"status_code": 429})()
+        raise exc
+
+    async def extract(self, **kwargs):  # pragma: no cover - should not be called
+        raise AssertionError("extract should not run after Tavily quota failure")
+
+
+class NoopExtractor:
+    async def extract(self, *args, **kwargs):  # pragma: no cover - should not be called
+        raise AssertionError("DeepSeek should not run after Tavily quota failure")
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_fast_switches_remaining_tasks_to_manual_required(tmp_path):
+    client = QuotaTavilyClient()
+    stats = {}
+    task_log_path = tmp_path / "task_log.jsonl"
+    tasks = [
+        {
+            "task_id": "quota-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "quota-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        None,
+        NoopExtractor(),
+        task_log_path=task_log_path,
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert client.calls == 1
+    assert stats["tavily_unavailable_reason"] == "quota_or_rate_limit"
+    assert len(failures) == 2
+    assert len(websearch_results) == 2
+    assert all(record["manual_required"] is True for record in failures)
+    assert all(record["manual_reason"] == "quota_or_rate_limit" for record in failures)
+    assert all("tavily_fast_switch" in record["note"] for record in failures)
+    assert [record["indicator_key"] for record in failures] == ["GC=F", "CL=F"]
+
+    for item in websearch_results:
+        assert item["manual_required"] is True
+        assert item["manual_reason"] == "quota_or_rate_limit"
+        assert item["source"] == "Stage2 manual_required"
+        assert item["raw_results"] == []
+        assert item["task"]["manual_required"] is True
+        assert item["task"]["manual_reason"] == "quota_or_rate_limit"
+        assert item["extraction"]["manual_required"] is True
+        assert item["extraction"]["manual_reason"] == "quota_or_rate_limit"
+        assert item["result_type"] == "manual_required"
+
+    task_log_records = [
+        json.loads(line)
+        for line in task_log_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(task_log_records) == 2
+    assert all(record["manual_required"] is True for record in task_log_records)
+    assert all(record["manual_reason"] == "quota_or_rate_limit" for record in task_log_records)

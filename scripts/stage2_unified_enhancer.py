@@ -1635,12 +1635,101 @@ async def _execute_tasks(
     stats.setdefault("write_back_by_category", {})
     stats.setdefault("write_back_fallback_count", 0)
     stats.setdefault("write_back_miss_count", 0)
+    tavily_unavailable_reason: Optional[str] = (
+        "quota_or_rate_limit"
+        if stats.get("tavily_unavailable_reason") == "quota_or_rate_limit"
+        else None
+    )
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
     extract_globally_disabled = disable_extract
     extract_disabled_until: Dict[str, float] = {}
     extract_422_tracker: Dict[str, Dict[str, Any]] = {}
+
+    def _mark_tavily_quota_unavailable() -> None:
+        nonlocal tavily_unavailable_reason
+        tavily_unavailable_reason = "quota_or_rate_limit"
+        stats["tavily_unavailable_reason"] = "quota_or_rate_limit"
+
+    def _build_tavily_fast_switch_records(
+        task: Dict[str, Any],
+        *,
+        attempt_index: int,
+        elapsed_ms: int,
+        error: Optional[Exception] = None,
+        query_attempts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        now_ts = int(datetime.now().timestamp())
+        query = task.get("query_used") or task.get("query") or task.get("indicator_key")
+        note = "tavily_fast_switch:quota_or_rate_limit"
+        source = "Stage2 manual_required"
+        category = task.get("category") or task.get("stage_phase")
+        task_payload = {
+            **task,
+            "category": category,
+            "query": query,
+            "query_used": task.get("query_used") or query,
+            "query_attempts": query_attempts or task.get("query_attempts") or [],
+            "manual_required": True,
+            "manual_reason": "quota_or_rate_limit",
+            "source": source,
+            "note": note,
+        }
+        extraction = {
+            "value": None,
+            "unit": task.get("unit"),
+            "source_url": None,
+            "confidence": 0.0,
+            "note": note,
+            "llm_error": None,
+            "llm_latency_ms": 0,
+            "manual_required": True,
+            "manual_reason": "quota_or_rate_limit",
+        }
+        task_record = {
+            "task_id": task["task_id"],
+            "indicator_key": task["indicator_key"],
+            "category": category,
+            "stage_phase": task["stage_phase"],
+            "query": query,
+            "search_backend": task.get("search_backend", "tavily"),
+            "fund_flow_backend": task.get("fund_flow_backend"),
+            "extraction_backend": extraction_backend,
+            "source": source,
+            "source_url": None,
+            "confidence": 0.0,
+            "error": str(error) if error else None,
+            "llm_error": str(error) if error else None,
+            "llm_latency_ms": None,
+            "attempt_index": attempt_index,
+            "elapsed_ms": elapsed_ms,
+            "created_at": task.get("created_at", now_ts),
+            "finished_at": now_ts,
+            "manual_required": True,
+            "manual_reason": "quota_or_rate_limit",
+            "note": note,
+            "raw_results": [],
+            "result_type": "manual_required",
+        }
+        websearch_item = {
+            "task_id": task["task_id"],
+            "indicator_key": task["indicator_key"],
+            "category": category,
+            "stage_phase": task["stage_phase"],
+            "query": query,
+            "task": task_payload,
+            "extraction": extraction,
+            "extraction_backend": extraction_backend,
+            "raw_results": [],
+            "search_backend": task.get("search_backend", "tavily"),
+            "manual_required": True,
+            "manual_reason": "quota_or_rate_limit",
+            "source": source,
+            "note": note,
+            "result_type": "manual_required",
+        }
+        return task_record, websearch_item
 
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
@@ -1863,14 +1952,21 @@ async def _execute_tasks(
                     best_payload = payload
             except Exception as exc:
                 last_exc = exc
+                is_quota_error = _is_tavily_quota_error(exc)
+                if is_quota_error:
+                    _mark_tavily_quota_unavailable()
                 attempts.append(
                     {
                         "query": query,
                         "family": candidate.get("family"),
                         "field_scope": candidate.get("field_scope"),
                         "error": str(exc),
+                        "manual_required": True if is_quota_error else None,
+                        "manual_reason": "quota_or_rate_limit" if is_quota_error else None,
                     }
                 )
+                if is_quota_error:
+                    raise exc
         if best_payload and best_payload.get("candidate_index", 0) > 0:
             stats["post_filter_query_switch_count"] += 1
         return best_payload, attempts, last_exc
@@ -2151,6 +2247,17 @@ async def _execute_tasks(
                     }
                 )
                 continue
+            if tavily_unavailable_reason == "quota_or_rate_limit":
+                task_record, websearch_item = _build_tavily_fast_switch_records(
+                    task,
+                    attempt_index=0,
+                    elapsed_ms=0,
+                )
+                failures.append(task_record)
+                manual_required_keys.append(task_record["indicator_key"])
+                _append_task_log(task_log_path, task_record)
+                websearch_results.append(websearch_item)
+                continue
             directed_retry_done = False
             directed_query_override: Optional[str] = None
             for attempt in count(start=1):
@@ -2195,9 +2302,14 @@ async def _execute_tasks(
                             if last_exc:
                                 raise last_exc
                     except Exception as exc:
-                        exa_result, exa_note = await _try_exa_fallback(
-                            task, f"tavily_error:{exc}", query_override=task.get("query")
-                        )
+                        is_quota_error = _is_tavily_quota_error(exc)
+                        if is_quota_error:
+                            _mark_tavily_quota_unavailable()
+                            exa_result, exa_note = None, None
+                        else:
+                            exa_result, exa_note = await _try_exa_fallback(
+                                task, f"tavily_error:{exc}", query_override=task.get("query")
+                            )
                         if exa_result:
                             result = exa_result
                             snippets = result.get("results") or []
@@ -2209,7 +2321,20 @@ async def _execute_tasks(
                             logger.warning(
                                 f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}"
                             )
-                            if attempt >= max_retries + 1 or _is_tavily_quota_error(exc):
+                            if is_quota_error:
+                                task_record, websearch_item = _build_tavily_fast_switch_records(
+                                    task,
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    error=exc,
+                                    query_attempts=query_attempts,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
+                            if attempt >= max_retries + 1:
                                 note = str(exc)
                                 if exa_note:
                                     note = f"{note} {exa_note}"
@@ -2679,6 +2804,19 @@ async def _execute_tasks(
                 except Exception as exc:  # pragma: no cover - 网络错误兜底
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     logger.warning(f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}")
+                    if _is_tavily_quota_error(exc):
+                        _mark_tavily_quota_unavailable()
+                        task_record, websearch_item = _build_tavily_fast_switch_records(
+                            task,
+                            attempt_index=attempt,
+                            elapsed_ms=elapsed_ms,
+                            error=exc,
+                        )
+                        _append_task_log(task_log_path, task_record)
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        websearch_results.append(websearch_item)
+                        break
                     if attempt >= max_retries + 1:
                         task_record = {
                             "task_id": task["task_id"],
