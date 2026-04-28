@@ -304,6 +304,10 @@ def _normalize_parseable_http_url(value: Any) -> Optional[str]:
     parsed = urlparse(text)
     if parsed.scheme.lower() not in {"http", "https"}:
         return None
+    try:
+        parsed.port
+    except ValueError:
+        return None
     hostname = (parsed.hostname or "").strip()
     if not hostname or any(char.isspace() for char in hostname):
         return None

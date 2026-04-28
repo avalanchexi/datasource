@@ -832,6 +832,7 @@ def test_official_domain_match_rejects_suffix_spoof():
         ({"source": "manual https://example.com/gold"}, "https://example.com/gold"),
         ({"note": "source https://example.com/path"}, "https://example.com/path"),
         ({"source_url": "https://"}, None),
+        ({"source_url": "https://www.pbc.gov.cn:bad/path"}, None),
         ({"source": "http PBOC official"}, None),
         ({"source": "https:// PBOC official"}, None),
     ],
