@@ -39,7 +39,7 @@
    ```
    Windows activate: `.venv\Scripts\activate`。
 
-2. Required keys in `.env`: `TUSHARE_TOKEN`, `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`。Optional: `EXA_API_KEY`（Tavily 失败时的显式兜底，需已安装 `exa-py`，且 Stage2 需传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`）。
+2. Required keys in `.env`: `TUSHARE_TOKEN`, `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`。DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `.env` 的 `DEEPSEEK_MODEL` 或命令行参数覆盖。Optional: `EXA_API_KEY`（默认关闭、显式 opt-in，当前不进入日常路径；若后续启用，需已安装 `exa-py`，且 Stage2 需传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`）。
 
 3. Sanity:
    ```bash
@@ -58,7 +58,7 @@
    bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
    bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
    ```
-   `run_clean.sh` 会 activate venv、source `.env`、清理代理，并设置 `PYTHONPATH=./src`（已有外部 `PYTHONPATH` 时保留并补齐 `./src`）。
+   `run_clean.sh` 会优先激活 `.venv/bin/activate`，Windows/Git-Bash 环境再尝试 `.venv/Scripts/activate`；没有 venv 时必须显式设置 `ALLOW_SYSTEM_PYTHON=1` 才能使用系统 Python，不会静默 fallback。fallback 仍会 source `.env`、清理代理，并设置 `PYTHONPATH=./src`（已有外部 `PYTHONPATH` 时保留并补齐 `./src`）。
 
 6. Optional checks:
    ```bash
@@ -161,6 +161,9 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 - 输入也可用 Stage2 自动结果 `websearch_results_auto.json`；脚本会自动转换 `results` 结构，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 骨架。
 - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`。
+- official manual override 仅适用于代码 allowlist 中的指标：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。这些指标在 `_manual.json` 显式 `is_estimated=True` 时，只有提供可信官方 HTTPS `source_url` 证据才会正规化为 `is_estimated=False`，并追加 `manual_official_not_estimated`。
+- official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在 allowlist，估算仍受 gate 约束。
+- 普通 manual 来源不要因为不是官方域名就默认改成 estimated 或 blocked；是否 official override 只影响显式估算值能否被正规化。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
 - 若终端显示“注入数据项: 0”，说明结果无可解析数值或文件为空，应改用手工 schema 版 `_manual.json`。
 
@@ -277,6 +280,7 @@ if comp < 0.8:
 - `CN10Y_CDB`: 当前无稳定 TuShare 直采口径，仍需 WebSearch/手工注入；若为利差估算需保留 `is_estimated=True`。
 - 债券日期列展示“最近可用日期”，优先 `as_of_date/date/report_period`，不强制等于报告日。Stage1/Stage2 写入债券收益率时不得清空已存在日期字段。
 - 宏观 `change_rate` 统一为百分比：`(current-previous)/abs(previous)*100`；分母为 0 时标记 `reason=change_rate_pct_div_by_zero` 并进入质量阻断。
+- Stage4 MLF 展示：当 `policy_name`、`note`、`source` 或 `manual_reason` 中出现 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示为类似 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值保持两位百分比，变化保持 `pp`。
 
 ## 11. 运行产物
 | Stage | Output | Purpose |

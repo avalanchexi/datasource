@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-统一金融数据集成框架，支持 TuShare、AKShare、InternationalFinance 数据源自动故障转移。集成 Tavily+DeepSeek 网络搜索增强（Exa 作为显式 opt-in 的 Tavily 422/失败兜底）、Pring 六阶段经济周期分析 (V4.0 三层框架)，以及 120 日背景扫描报告自动生成。
+统一金融数据集成框架，支持 TuShare、AKShare、InternationalFinance 数据源自动故障转移。集成 Tavily+DeepSeek 网络搜索增强（Exa 默认关闭、仅显式 opt-in，当前不进入日常路径）、Pring 六阶段经济周期分析 (V4.0 三层框架)，以及 120 日背景扫描报告自动生成。
 
 **核心数据流**: Stage1 (API采集) → Stage2 (Tavily+DeepSeek增强) → Stage2.5 (手工注入补缺) → Stage3 (Pring分析) → Stage4 (报告生成)
 
@@ -18,7 +18,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **数据来源约束**: 严禁从历史 `reports/*.md` 中抓取或复用数据；所有数据必须来自 API 实时获取或 stage 计算产出
 - **完整度要求**: Stage3 需要 `data_completeness ≥ 80%`，否则报告会有缺失
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
-- **Exa 默认关闭**: 当前先走 Tavily-first；只有传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时才使用 Exa fallback
+- **Exa 默认关闭**: 当前先走 Tavily-first 提升命中率，Exa 不进入日常路径；只有传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时才使用
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
 - **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily) -> Stage2.5`，当前流程不使用旧版外部补数链路
 
@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 环境设置
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt && pip install -e . && pip install -e ".[dev]"
-cp .env.example .env  # 编辑填入 TUSHARE_TOKEN, TAVILY_API_KEY, DEEPSEEK_API_KEY
+cp .env.example .env  # 编辑填入 TUSHARE_TOKEN, TAVILY_API_KEY, DEEPSEEK_API_KEY；默认 DEEPSEEK_MODEL=deepseek-v4-pro，可覆盖
 
 # 验证安装
 python -c "from datasource import get_manager; print('OK')"
@@ -40,7 +40,7 @@ bash run_preflight.sh
 
 ### 推荐运行方式
 
-**所有脚本统一通过 `run_clean.sh` 执行**（自动 activate venv、source .env、unset 代理、PYTHONPATH=./src）：
+**所有脚本统一通过 `run_clean.sh` 执行**（优先 `.venv/bin/activate`，Windows/Git-Bash 再尝试 `.venv/Scripts/activate`；没有 venv 时必须显式 `ALLOW_SYSTEM_PYTHON=1` 才使用系统 Python。仍会 source .env、unset 代理、PYTHONPATH=./src）：
 ```bash
 bash run_clean.sh python scripts/stage1_data_collector.py --date 2025-06-01
 bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
@@ -130,6 +130,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 ### Stage2/Stage2.5 搜索优化要点
 
 - DeepSeek 抽取采用”强 schema + 证据约束”，最少输出：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund_flow 还需 `recent_5d/total_120d/trend`。
+- DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖。
 - `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
 - Tavily quota/rate limit 后同轮 fast-switch 到 `manual_required` skeleton；不要新增 quota probe 或重跑 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构、月份）。
@@ -145,18 +146,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 **inject 脚本跳过已有值**:
 - 若指标已有 `current_value` 且不是 `PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}` 且 `is_stale≠True`，inject 脚本会跳过该条目
-- 典型场景：Stage2 DeepSeek 填了 BDI 值但 `is_estimated=True` → inject 跳过 → Stage3 仍被 policy 阻断
-- 解法：直接 Python 编辑 complete.json：
-  ```bash
-  python3 -c “
-  import json; p='data/runs/${DATE_NH}/market_data_complete.json'
-  d=json.load(open(p))
-  d['macro_indicators']['bdi']['is_estimated']=False
-  # 同时从顶层 missing_items 移除 bdi
-  mi=d.get('missing_items',[]); d['missing_items']=[x for x in mi if x.get('key')!='bdi']
-  json.dump(d,open(p,'w'),ensure_ascii=False,indent=2)
-  “
-  ```
+- 典型场景：Stage2 DeepSeek 填了值但 `is_estimated=True` → inject 跳过 → Stage3 仍被 gate 约束
+- 解法：官方口径用带可信单个 HTTPS `source_url` 的 Stage2.5 manual 重新注入；只有 official allowlist 指标（代码为准，当前 `monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`）可触发 `manual_official_not_estimated` 并把显式 `is_estimated=True` 正规化为 `False`。非官方来源、ETF/fund_flow 等估算不要手工清掉 gate。
 
 **Stage3 Gate 三路阻断**（需逐一排查，彼此独立）:
 1. **policy gate** (`block_stage3=True`)：`redlist` 有 `critical_missing_keys` 中的项 → 修顶层 `missing_items` + 重新运行 `evaluate_policy()`
@@ -164,6 +155,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 3. **compare_gaps** (缺 `previous_value`)：`change_rate` 计算需要 `previous_value`，缺失时 Stage3 阻断 → 补齐 `previous_value`（无论 `--allow-estimated` 是否开启，此检查均不绕过）
 
 **`--allow-estimated` 作用范围**: 仅绕过 `estimated_items`（`is_estimated=True` 的数据进入评分），**不绕过** `compare_gaps`、`stale_redlist` 和 `policy gate`
+
+**Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
 **gap_monitor 手动清除**（Stage3 还读此文件）:
 ```bash
@@ -289,7 +282,8 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 TUSHARE_TOKEN=xxx      # Required: Stage1
 TAVILY_API_KEY=xxx     # Required: Stage2
 DEEPSEEK_API_KEY=xxx   # Required: LLM extraction
-EXA_API_KEY=xxx        # Optional: Tavily fallback, requires --enable-exa-fallback
+DEEPSEEK_MODEL=deepseek-v4-pro  # Default; DEEPSEEK_MODEL or CLI args can override
+EXA_API_KEY=xxx        # Optional, default off; requires --enable-exa-fallback / STAGE2_ENABLE_EXA_FALLBACK=1
 ```
 
 ## Troubleshooting
@@ -302,7 +296,7 @@ EXA_API_KEY=xxx        # Optional: Tavily fallback, requires --enable-exa-fallba
 | 日志出现 `deepseek_no_value/no_deepseek_key` | 视为 `manual_required`，优先使用 `metadata.manual_required` 骨架补数 |
 | Stage3 `block_stage3=True` 但数据已注入 | 检查顶层 `missing_items` list（inject 只更新 `metadata.missing_items`）；手动删除顶层对应条目后重跑 `evaluate_policy()` |
 | Stage3 `compare_gaps` 阻断 | 补齐 `macro_indicators.*.previous_value`（`--allow-estimated` 不绕过此检查） |
-| inject 跳过 `is_estimated` 项 | 直接 `python3 -c` 编辑 complete.json 清除 `is_estimated` 并更新顶层 `missing_items` |
+| inject 跳过 `is_estimated` 项 | 官方口径用带可信单个 HTTPS `source_url` 的 Stage2.5 manual 重新注入；非官方/ETF/fund_flow 等估算不要手工清掉 gate |
 | 股指数据不是今日 | Stage1 在 15:00 CST 前运行时正常，使用前一日收盘；无需处理 |
 | 代理/TLS 问题 | `env -u http_proxy -u https_proxy` 前缀 |
 | 完整度 <80% | 检查 macro/monetary null 字段，手动补数后重注入 |
