@@ -1,0 +1,112 @@
+import os
+import shlex
+import subprocess
+from pathlib import Path
+from typing import Optional
+
+
+def _copy_runner(tmp_path: Path) -> Path:
+    root = tmp_path / "repo"
+    root.mkdir()
+    runner = Path("run_clean.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+    (root / "run_clean.sh").write_bytes(runner.encode("utf-8"))
+    (root / ".env").write_bytes(
+        b"TUSHARE_TOKEN=x\nTAVILY_API_KEY=y\nDEEPSEEK_API_KEY=z\n"
+    )
+    return root
+
+
+def _run(
+    root: Path,
+    *args: str,
+    env: Optional[dict] = None,
+) -> subprocess.CompletedProcess:
+    merged = os.environ.copy()
+    merged.pop("ALLOW_SYSTEM_PYTHON", None)
+    merged.update(env or {})
+    env_args = ["-u", "ALLOW_SYSTEM_PYTHON"]
+    env_args.extend(f"{key}={shlex.quote(value)}" for key, value in (env or {}).items())
+    command = " ".join(
+        [
+            "exec",
+            "env",
+            *env_args,
+            "bash",
+            "run_clean.sh",
+            *[shlex.quote(arg) for arg in args],
+        ]
+    )
+    return subprocess.run(
+        ["bash", "-c", command],
+        cwd=root,
+        env=merged,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
+def _last_output_line(result: subprocess.CompletedProcess) -> str:
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def test_uses_windows_venv_activate_when_linux_activate_missing(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+    scripts_dir = root / ".venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "activate").write_bytes(b"export RUN_CLEAN_ACTIVATE=windows\n")
+
+    result = _run(
+        root,
+        "printenv",
+        "RUN_CLEAN_ACTIVATE",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert _last_output_line(result) == "windows"
+
+
+def test_missing_venv_without_system_fallback_fails(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+
+    result = _run(root, "printf", "should not run\n")
+
+    assert result.returncode == 1
+    assert "Missing virtual environment" in result.stdout
+    assert "ALLOW_SYSTEM_PYTHON=1" in result.stdout
+    assert "should not run" not in result.stdout
+
+
+def test_explicit_system_fallback_succeeds_and_sets_pythonpath(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+
+    result = _run(
+        root,
+        "printenv",
+        "PYTHONPATH",
+        env={"ALLOW_SYSTEM_PYTHON": "1", "PYTHONPATH": ""},
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "WARNING" in result.stdout
+    assert _last_output_line(result) == "./src"
+
+
+def test_missing_env_fails_even_with_system_fallback(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+    (root / ".env").unlink()
+
+    result = _run(
+        root,
+        "printf",
+        "should not run\n",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+    )
+
+    assert result.returncode == 1
+    assert "Missing .env" in result.stdout
+    assert "should not run" not in result.stdout

@@ -10,8 +10,16 @@ if [ $# -eq 0 ]; then
   exit 1
 fi
 
-if [ ! -f ".venv/bin/activate" ]; then
-  echo "[ERROR] Missing .venv. Run: python -m venv .venv"
+VENV_ACTIVATE=""
+if [ -f ".venv/bin/activate" ]; then
+  VENV_ACTIVATE=".venv/bin/activate"
+elif [ -f ".venv/Scripts/activate" ]; then
+  VENV_ACTIVATE=".venv/Scripts/activate"
+fi
+
+if [ -z "$VENV_ACTIVATE" ] && [ "${ALLOW_SYSTEM_PYTHON:-}" != "1" ]; then
+  echo "[ERROR] Missing virtual environment. Run: python -m venv .venv"
+  echo "[ERROR] To use current system Python explicitly, set ALLOW_SYSTEM_PYTHON=1"
   exit 1
 fi
 
@@ -20,7 +28,12 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-source .venv/bin/activate
+if [ -n "$VENV_ACTIVATE" ]; then
+  source "$VENV_ACTIVATE"
+else
+  echo "[WARNING] Missing virtual environment; using current system Python because ALLOW_SYSTEM_PYTHON=1"
+fi
+
 set -a
 source .env
 set +a
