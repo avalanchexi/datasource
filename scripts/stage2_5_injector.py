@@ -409,6 +409,18 @@ def _has_multi_value_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
     return False
 
 
+def _has_invalid_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
+    for field in EXPLICIT_URL_FIELDS:
+        value = payload.get(field)
+        if value is not None and not isinstance(value, str):
+            return True
+    return False
+
+
+def _is_https_url_evidence(value: str) -> bool:
+    return urlparse(value).scheme.lower() == "https"
+
+
 def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
     domains: List[str] = []
     for value in _iter_url_like_evidence(payload):
@@ -442,11 +454,15 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         return False
 
     trusted_domains = tuple(str(item).lower() for item in rule.get("trusted_domains", ()) if str(item).strip())
+    if _has_invalid_explicit_url_evidence(payload):
+        return False
     if _has_multi_value_explicit_url_evidence(payload):
         return False
     if _payload_has_url_like_evidence(payload):
         url_like_evidence = _iter_url_like_evidence(payload)
         if not trusted_domains:
+            return False
+        if not all(_is_https_url_evidence(value) for value in url_like_evidence):
             return False
         payload_domains = _extract_domains_from_payload(payload)
         if len(payload_domains) != len(url_like_evidence):
