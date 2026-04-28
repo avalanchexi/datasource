@@ -102,9 +102,9 @@ DEFAULT_SOURCE_LABEL = "websearch_manual"
 OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
 OFFICIAL_MANUAL_TEXT_FIELDS = ("source", "note", "name", "policy_name", "indicator_name")
 EXPLICIT_URL_FIELDS = ("source_url", "sourceUrl", "url")
-HTTP_URL_CANDIDATE_RE = re.compile(r"https?://[^\s|,;)\]}<>\"']+", re.IGNORECASE)
-HTTP_LIKE_EVIDENCE_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9])(?:https?://[^\s|,;)\]}<>\"']*|https?(?![A-Za-z0-9]))"
+URL_EVIDENCE_TERMINATORS = set(" \t\r\n,;|)]}<>\x22'") | set("，；）】》、」』”’｝］〉")
+HTTP_LIKE_START_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:https?://|https?(?![A-Za-z0-9]))"
 )
 OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
@@ -303,11 +303,30 @@ def _normalize_parseable_http_url(value: Any) -> Optional[str]:
     return text
 
 
-def _extract_embedded_http_url(value: Any) -> Optional[str]:
+def _is_url_evidence_terminator(char: str) -> bool:
+    return char in URL_EVIDENCE_TERMINATORS
+
+
+def _collect_http_like_evidence(value: Any) -> List[str]:
     if not isinstance(value, str):
-        return None
-    for match in HTTP_URL_CANDIDATE_RE.findall(value):
-        url = _normalize_parseable_http_url(match)
+        return []
+    text = value.strip()
+    if not text:
+        return []
+    evidence: List[str] = []
+    for match in HTTP_LIKE_START_RE.finditer(text):
+        end = match.end()
+        while end < len(text) and not _is_url_evidence_terminator(text[end]):
+            end += 1
+        token = text[match.start() : end].strip()
+        if token:
+            evidence.append(token)
+    return evidence
+
+
+def _extract_embedded_http_url(value: Any) -> Optional[str]:
+    for token in _collect_http_like_evidence(value):
+        url = _normalize_parseable_http_url(token)
         if url:
             return url
     return None
@@ -319,7 +338,7 @@ def _iter_http_like_evidence(value: Any, *, fallback_raw: bool = False) -> List[
     text = value.strip()
     if not text:
         return []
-    matches = [match.strip() for match in HTTP_LIKE_EVIDENCE_RE.findall(text) if match.strip()]
+    matches = _collect_http_like_evidence(text)
     if matches:
         return matches
     if fallback_raw:
