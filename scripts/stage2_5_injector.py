@@ -101,6 +101,10 @@ INDICATOR_CATEGORY = {
 DEFAULT_SOURCE_LABEL = "websearch_manual"
 OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
 OFFICIAL_MANUAL_TEXT_FIELDS = ("source", "note", "name", "policy_name", "indicator_name")
+HTTP_URL_CANDIDATE_RE = re.compile(r"https?://[^\s|,;)\]}<>\"']+", re.IGNORECASE)
+HTTP_LIKE_EVIDENCE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:https?://[^\s|,;)\]}<>\"']*|https?(?![A-Za-z0-9]))"
+)
 OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
         "mlf": {
@@ -283,23 +287,46 @@ def _normalize_monetary_payload(payload: Any) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_parseable_http_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip().strip("<>()[]{}\"'")
+    if not text or any(char.isspace() for char in text):
+        return None
+    parsed = urlparse(text)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        return None
+    hostname = (parsed.hostname or "").strip()
+    if not hostname or any(char.isspace() for char in hostname):
+        return None
+    return text
+
+
+def _extract_embedded_http_url(value: Any) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    for match in HTTP_URL_CANDIDATE_RE.findall(value):
+        url = _normalize_parseable_http_url(match)
+        if url:
+            return url
+    return None
+
+
 def _extract_source_url(payload: Dict[str, Any]) -> Optional[str]:
     for key in ("source_url", "sourceUrl", "url"):
-        url = payload.get(key)
-        if isinstance(url, str) and url.strip().startswith("http"):
-            return url.strip()
-    source = payload.get("source")
-    if isinstance(source, str) and "http" in source:
-        return source
-    note = payload.get("note")
-    if isinstance(note, str) and "http" in note:
-        return note
+        url = _normalize_parseable_http_url(payload.get(key))
+        if url:
+            return url
+    for key in ("source", "note"):
+        url = _extract_embedded_http_url(payload.get(key))
+        if url:
+            return url
     return None
 
 
 def _attach_source_url(payload: Dict[str, Any]) -> None:
-    url = payload.get("source_url")
-    if not isinstance(url, str) or not url.strip().startswith("http"):
+    url = _normalize_parseable_http_url(payload.get("source_url"))
+    if not url:
         return
     if _extract_source_url(payload):
         return
@@ -338,8 +365,8 @@ def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
         value = payload.get(field)
         if not isinstance(value, str):
             continue
-        for url in re.findall(r"https?://[^\s|,，;；)）]+", value):
-            evidence.append(url)
+        for match in HTTP_LIKE_EVIDENCE_RE.findall(value):
+            evidence.append(match.strip())
     return evidence
 
 
@@ -380,12 +407,9 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         url_like_evidence = _iter_url_like_evidence(payload)
         if not trusted_domains:
             return False
-        payload_domains: List[str] = []
-        for value in url_like_evidence:
-            domain = _extract_domain(value)
-            if not domain:
-                return False
-            payload_domains.append(domain)
+        payload_domains = _extract_domains_from_payload(payload)
+        if len(payload_domains) != len(url_like_evidence):
+            return False
         return all(
             any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains)
             for domain in payload_domains
