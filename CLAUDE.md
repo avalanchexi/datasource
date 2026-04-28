@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Critical Constraints
 
-- **Tavily 每日限制**: Stage2 Tavily search/extract **每日只能运行一次**。遇到 422 会自动回退 DeepSeek 从原始 snippets 抽取，但仍不要重试 Stage2；缺口改用 Stage2.5 手工注入补数
+- **Tavily 每日限制**: Stage2 Tavily search/extract **每日只能运行一次**。遇到 422 会自动回退 DeepSeek 从原始 snippets 抽取；遇到 quota/rate limit 会同轮 fast-switch 为 `manual_required` skeleton。不要重跑 Tavily，查看 `tavily_unavailable_reason`、`retrieval_diagnostics`、`manual_reason_breakdown` 后转 Stage2.5 补数
 - **数据来源约束**: 严禁从历史 `reports/*.md` 中抓取或复用数据；所有数据必须来自 API 实时获取或 stage 计算产出
 - **完整度要求**: Stage3 需要 `data_completeness ≥ 80%`，否则报告会有缺失
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
@@ -131,6 +131,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 - DeepSeek 抽取采用”强 schema + 证据约束”，最少输出：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund_flow 还需 `recent_5d/total_120d/trend`。
 - `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
+- Tavily quota/rate limit 后同轮 fast-switch 到 `manual_required` skeleton；不要新增 quota probe 或重跑 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构、月份）。
 - Stage2.5 在接收 Stage2 `results` 结构时，会保留 `manual_required/manual_reason` 并生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`，按 `category:indicator_key` 去重）。
 - Stage2.5 中 `macro_indicators.change_rate` 统一为百分比口径（`(current-previous)/abs(previous)*100`），分母为 0 时保留缺口并标记质量阻断。

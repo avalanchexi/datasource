@@ -208,6 +208,7 @@ if comp < 0.8:
 - 多 query 选优按后过滤质量，而不是原始 `score_max`：先做域名、时效、关键词、发布机构、期次过滤，再选 `usable_count` 更高的 query，并统计 `post_filter_query_switch_count`。
 - 全部结果 `score_max < low_score_threshold`（默认 0.2）则跳过抽取，标记 `manual_required`，统计 `low_score_drop`。
 - Tavily extract 422 默认回退 DeepSeek 从 snippets 抽取；同指标连续 422 可按指标冷却（`extract_cooldown_count`），不会全局停用其他指标 extract。仍不稳时用 `--disable-extract` 或 `--extract-topk 1`。
+- Tavily search/extract 遇到 quota/rate limit 后，本轮立即 fast-switch 为 `manual_required` skeleton；不新增 quota probe，不重跑当日 Tavily。排查看 summary 的 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - Exa fallback 当前默认关闭，保证 Tavily-first 命中率调优不被备用搜索源污染；需要启用时必须显式传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`。
 - 资金流缺 `recent_5d/total_120d` 时，优先按 `field_queries` 仅补缺字段，并统计 `field_retry_count`。
 - DeepSeek 强 schema：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund flow 额外返回 `recent_5d/total_120d/trend`。`source_url` 必须来自 snippets，否则强制 `manual_required`。
@@ -293,13 +294,14 @@ if comp < 0.8:
 | Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
 | Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 
-Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。
+Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，并结合 `retrieval_diagnostics`、`manual_reason_breakdown` 判断失败来源；已有值跳过看 `task_skipped_existing`，quota/rate limit 看 `tavily_unavailable_reason=quota_or_rate_limit`。
 
 ## 12. Troubleshooting
 | 问题 | 原因 | 解决方案 |
 |------|------|----------|
 | Stage2 DeepSeek 持续超时 | API 响应慢或网络问题 | `--extraction-backend regex --disable-extract`，降低 `--deepseek-timeout`，或串行关键指标 |
 | Tavily extract 422 | API 参数/限制 | 默认回退 DeepSeek；仍不稳用 `--disable-extract` 或 `--extract-topk 1` |
+| Tavily quota/rate limit | Tavily 额度或频率限制 | 同轮 fast-switch 为 `manual_required` skeleton；不要新增 quota probe 或重跑当日 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown` 后转 Stage2.5 补数 |
 | 当日 Stage2 已失败 | Tavily 不应重复消耗 | 转 Stage2.5 manual JSON 补数并注入 |
 | 搜索相关性低 | `score_max < low_score_threshold` | 调整 `search_profiles.queries/exclude_domains`，必要时转人工补数 |
 | 宏观/货币显示旧月份 | TuShare 月度表滞后，`is_stale=true` | 跑 `check_monthly_freshness.py data/runs/${DATE_NH}/market_data.json`，再 Stage2/Stage2.5 覆盖 stale 字段 |
