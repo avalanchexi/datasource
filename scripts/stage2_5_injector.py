@@ -113,19 +113,16 @@ OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
         "mlf": {
             "trusted_domains": ("pbc.gov.cn", "chinamoney.com.cn"),
-            "issuer_names": ("中国人民银行", "pboc", "people's bank of china", "中国货币网", "chinamoney"),
         },
     },
     "forex": {
         "usdcny": {
             "trusted_domains": ("chinamoney.com.cn", "cfets.com.cn", "pbc.gov.cn"),
-            "issuer_names": ("cfets", "中国外汇交易中心", "中国货币网", "中国人民银行", "pboc", "chinamoney"),
         },
     },
     "commodities": {
         "bcom": {
             "trusted_domains": ("bloomberg.com", "bloombergindices.com"),
-            "issuer_names": ("bloomberg",),
         },
     },
     "bonds": {},
@@ -459,11 +456,6 @@ def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
     domain = domain.lower().strip()
     trusted_domain = trusted_domain.lower().strip()
     return domain == trusted_domain or domain.endswith(f".{trusted_domain}")
-
-
-def _manual_official_issuer_text(payload: Dict[str, Any]) -> str:
-    parts = [str(payload.get(field) or "") for field in OFFICIAL_MANUAL_TEXT_FIELDS]
-    return " ".join(parts).lower()
 
 
 def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) -> bool:
