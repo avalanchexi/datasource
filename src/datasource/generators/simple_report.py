@@ -312,7 +312,7 @@ def _generate_asset_conclusion(summary: str) -> tuple[str, str, float]:
     api_key = os.getenv("DEEPSEEK_API_KEY")
     if not api_key or OpenAI is None:
         return DEFAULT_ASSET_CONCLUSION, "no_deepseek_key", 0.0
-    model = os.getenv("DEEPSEEK_SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-chat"
+    model = os.getenv("DEEPSEEK_SUMMARY_MODEL") or os.getenv("DEEPSEEK_MODEL") or "deepseek-v4-pro"
     base_url = os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
     timeout = _to_float(os.getenv("DEEPSEEK_SUMMARY_TIMEOUT")) or 8.0
 

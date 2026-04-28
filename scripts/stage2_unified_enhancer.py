@@ -3351,7 +3351,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--deepseek-timeout", type=float, default=8.0, help="DeepSeek抽取超时时间(秒)")
     parser.add_argument("--deepseek-max-concurrency", type=int, default=1, help="DeepSeek并发上限")
-    parser.add_argument("--deepseek-model", default="deepseek-chat", help="DeepSeek模型名")
+    parser.add_argument("--deepseek-model", default="deepseek-v4-pro", help="DeepSeek模型名")
     parser.add_argument(
         "--deepseek-base-url",
         default=os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com",
