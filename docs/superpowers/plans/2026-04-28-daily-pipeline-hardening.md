@@ -30,6 +30,23 @@ Failure classes:
 
 Do not treat those existing failures as regressions for every task. Each task must run its focused tests. At the end, run `python -m pytest -q` and report whether the same baseline failures remain or whether new failures appeared.
 
+## Scope Update: Tavily-First Batch
+
+User direction on 2026-04-28: temporarily do not use Exa Search. Improve Tavily Search hit rate first.
+
+Immediate execution scope:
+
+- Execute Task 5: Stage2 retrieval diagnostics and Tavily fast-switch records.
+- Execute Task 6: search profile tuning for `reserve_ratio`/`rrr`, `CN10Y_CDB`, `USDCNY`, and `BDI`.
+- Update docs in Task 9 only for Tavily diagnostics/profile behavior if code behavior changes.
+
+Deferred execution scope:
+
+- Do not execute Task 3 in this batch.
+- Do not execute Task 4 in this batch.
+- Do not add Exa live probe usage or broaden Exa fallback routing in this batch.
+- If a touched command would otherwise call Exa because `EXA_API_KEY` exists, add an explicit CLI/env opt-in before any future Exa work rather than using Exa automatically.
+
 ## File Responsibility Map
 
 - `run_clean.sh`: single clean runtime launcher; detects Linux venv, Windows venv, or explicit system Python fallback.
@@ -323,7 +340,7 @@ git add src/datasource/engines/deepseek_reasoner.py scripts/stage2_unified_enhan
 git commit -m "fix: default deepseek calls to v4 pro"
 ```
 
-## Task 3: Add Exa SDK Compatibility and Health Checks
+## Deferred Task 3: Add Exa SDK Compatibility and Health Checks
 
 **Files:**
 - Modify: `src/datasource/adapters/exa_client.py`
@@ -559,7 +576,7 @@ git add src/datasource/adapters/exa_client.py scripts/stage2_health_check.py tes
 git commit -m "feat: add exa health diagnostics"
 ```
 
-## Task 4: Structure Exa Fallback Telemetry Without Replacing Tavily Snippets
+## Deferred Task 4: Structure Exa Fallback Telemetry Without Replacing Tavily Snippets
 
 **Files:**
 - Modify: `scripts/stage2_unified_enhancer.py`
