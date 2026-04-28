@@ -1081,6 +1081,129 @@ def test_manual_third_party_mlf_query_string_official_domain_stays_estimated(tmp
     assert _has_quality_blocker(output, "monetary_policy", "mlf")
 
 
+def test_manual_malformed_mlf_url_with_official_text_stays_estimated(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {"monetary_policy": [{"key": "mlf"}]}},
+            "missing_items": ["mlf"],
+            "macro_indicators": {},
+            "monetary_policy": {
+                "mlf": {
+                    "policy_name": "MLF rate",
+                    "current_value": None,
+                    "change_from_120d": None,
+                    "unit": "%",
+                    "date": "",
+                    "source": "placeholder",
+                    "note": "",
+                    "is_estimated": True,
+                }
+            },
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {},
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "monetary_policy": {
+                "mlf": {
+                    "policy_name": "MLF rate",
+                    "current_value": 2.0,
+                    "change_from_120d": 0.0,
+                    "unit": "%",
+                    "date": "2026-04-25",
+                    "source": "third-party estimate, reference 中国人民银行 policy",
+                    "source_url": "https://",
+                    "note": "malformed URL-like evidence should block issuer fallback",
+                    "is_estimated": True,
+                }
+            }
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    entry = output["monetary_policy"]["mlf"]
+    assert entry["is_estimated"] is True
+    assert "manual_official_not_estimated" not in str(entry.get("note") or "")
+    assert _has_quality_blocker(output, "monetary_policy", "mlf")
+
+
+def test_manual_mlf_source_embedded_third_party_url_stays_estimated(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {"monetary_policy": [{"key": "mlf"}]}},
+            "missing_items": ["mlf"],
+            "macro_indicators": {},
+            "monetary_policy": {
+                "mlf": {
+                    "policy_name": "MLF rate",
+                    "current_value": None,
+                    "change_from_120d": None,
+                    "unit": "%",
+                    "date": "",
+                    "source": "placeholder",
+                    "note": "",
+                    "is_estimated": True,
+                }
+            },
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {},
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "monetary_policy": {
+                "mlf": {
+                    "policy_name": "MLF rate",
+                    "current_value": 2.0,
+                    "change_from_120d": 0.0,
+                    "unit": "%",
+                    "date": "2026-04-25",
+                    "source": "third-party https://evil.com?target=www.pbc.gov.cn reference 中国人民银行",
+                    "note": "URL embedded in source is not an official host",
+                    "is_estimated": True,
+                }
+            }
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    entry = output["monetary_policy"]["mlf"]
+    assert entry["is_estimated"] is True
+    assert "manual_official_not_estimated" not in str(entry.get("note") or "")
+    assert _has_quality_blocker(output, "monetary_policy", "mlf")
+
+
 def test_manual_third_party_usdcny_url_path_with_chinamoney_stays_estimated(tmp_path: Path, monkeypatch):
     _stub_trend_writes(monkeypatch)
     monkeypatch.chdir(tmp_path)

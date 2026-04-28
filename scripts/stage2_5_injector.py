@@ -346,6 +346,18 @@ def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
     return domains
 
 
+def _payload_has_url_like_evidence(payload: Dict[str, Any]) -> bool:
+    for field in ("source_url", "sourceUrl", "url"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return True
+    for field in ("source", "note"):
+        value = payload.get(field)
+        if isinstance(value, str) and re.search(r"https?://", value):
+            return True
+    return False
+
+
 def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
     domain = domain.lower().strip()
     trusted_domain = trusted_domain.lower().strip()
@@ -373,7 +385,7 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         for domain in payload_domains
         for trusted_domain in trusted_domains
     )
-    if payload_domains:
+    if _payload_has_url_like_evidence(payload):
         return bool(has_trusted_domain)
 
     issuer_text = _manual_official_issuer_text(payload)
