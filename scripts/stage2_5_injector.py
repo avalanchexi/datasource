@@ -112,7 +112,7 @@ HTTP_LIKE_START_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])(?:https?://|https?(?![A-Za-z0-9]))"
 )
 BARE_DOMAIN_START_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9./:-])(?:www\.)?[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+(?=[:/]|$|[\s,;|)\]}<>\"'，；）】》、」』”’｝］〉])"
+    r"(?i)(?<![A-Za-z0-9./:-])(?:www\.)?(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*(?=[:/]|$|[\s,;|)\]}<>\"'，；）】》、」』”’｝］〉])"
 )
 OFFICIAL_MANUAL_SOURCES = {
     "monetary_policy": {
