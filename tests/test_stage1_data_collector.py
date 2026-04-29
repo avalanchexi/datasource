@@ -352,6 +352,31 @@ def test_fetch_etf_total_size_on_date_returns_none_when_one_exchange_missing(mon
     assert result is None
 
 
+def test_fetch_etf_total_size_on_date_returns_none_when_one_exchange_has_no_usable_rows(monkeypatch):
+    class _Pro:
+        def etf_share_size(self, **kwargs):
+            if kwargs.get("exchange") == "SSE":
+                return pd.DataFrame({"total_size": [10000.0]})
+            if kwargs.get("exchange") == "SZSE":
+                return pd.DataFrame({"total_size": [0.0]})
+            return pd.DataFrame()
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = collector._fetch_etf_total_size_on_date("20260427")
+
+    assert result is None
+
+
 def test_fetch_etf_flow_from_tushare_share_size_builds_trade_cal_windows(monkeypatch):
     trade_dates = [f"2026{i:04d}" for i in range(121)]
 

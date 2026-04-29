@@ -1989,9 +1989,10 @@ class MarketDataCollector:
                 if "total_size" not in frame.columns:
                     return None
                 values = pd.to_numeric(frame["total_size"], errors="coerce").dropna()
-                if values.empty:
+                usable_values = values[values > 0]
+                if usable_values.empty:
                     return None
-                total_wan += float(values.sum())
+                total_wan += float(usable_values.sum())
 
             if total_wan <= 0:
                 return None
