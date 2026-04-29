@@ -579,3 +579,15 @@ def scan_trend_history(
         results["events"]["missing"].append({"reason": "dir_missing"})
 
     return results
+
+
+def write_trend_history_gap_snapshot(
+    target_date: str,
+    output_path: Path,
+    *,
+    base_dir: Path = DEFAULT_BASE_DIR,
+) -> Dict[str, Any]:
+    """Write a run-scoped trend_history gap snapshot and return its payload."""
+    payload = scan_trend_history(target_date, base_dir=base_dir)
+    _safe_json_write(output_path, payload)
+    return payload
