@@ -114,3 +114,10 @@ def test_write_trend_history_gap_snapshot_writes_run_file(tmp_path: Path):
     assert isinstance(saved["events"]["missing"], list)
     assert isinstance(saved["events"]["insufficient"], list)
     assert any(item["category"] == "forex" and item["symbol"] == "USDCNY" for item in saved["series"]["quality"])
+    assert {
+        "category": "forex",
+        "symbol": "USDCNY",
+        "count": 1,
+        "required": 121,
+    } in saved["series"]["insufficient"]
+    assert {"reason": "dir_missing"} in saved["events"]["missing"]
