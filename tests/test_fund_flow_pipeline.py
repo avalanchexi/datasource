@@ -23,7 +23,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.stage1_data_collector import MarketDataCollector
-from src.datasource.models.market_data_contract import MarketDataContract
+from src.datasource.models.market_data_contract import FundFlowData, MarketDataContract
 
 
 class TestFundFlowPipeline(unittest.TestCase):
@@ -40,12 +40,47 @@ class TestFundFlowPipeline(unittest.TestCase):
         if os.path.exists(self.temp_dir):
             shutil.rmtree(self.temp_dir)
 
+    def _stub_collect_fund_flow_sources(self, collector, etf_entry=None):
+        async def _empty_hsgt():
+            return {
+                "north_recent_5d": None,
+                "north_total_120d": None,
+                "south_recent_5d": None,
+                "south_total_120d": None,
+                "as_of_trade_date": None,
+                "full_120_window": False,
+            }
+
+        async def _no_margin():
+            return None
+
+        async def _no_etf_proxy():
+            return None
+
+        collector._fetch_hsgt_from_tushare = _empty_hsgt
+        collector._fetch_margin_flow_from_tushare = _no_margin
+        collector._fetch_etf_flow_from_tushare_share_size = lambda: etf_entry
+        collector._fetch_etf_flow_proxy = _no_etf_proxy
+
     def test_stage1_creates_fund_flow_placeholders(self):
         """测试Stage 1创建4个资金流向占位符"""
 
         async def run_test():
             collector = MarketDataCollector(
                 end_date=self.test_date
+            )
+            self._stub_collect_fund_flow_sources(
+                collector,
+                FundFlowData(
+                    type="ETF资金流",
+                    recent_5d=5.0,
+                    total_120d=120.0,
+                    trend="流入",
+                    source="TuShare etf_share_size",
+                    metric_basis="etf_total_size_delta",
+                    is_estimated=False,
+                    note="test official ETF source",
+                ),
             )
 
             # 收集资金流向数据
@@ -60,16 +95,27 @@ class TestFundFlowPipeline(unittest.TestCase):
             for key in expected_keys:
                 self.assertIn(key, fund_flow)
 
+            expected_type_by_key = {
+                'northbound': 'northbound',
+                'southbound': 'southbound',
+                'etf': {'etf', 'ETF资金流'},
+                'margin': 'margin',
+            }
             placeholder_keys = []
             for key, flow_data in fund_flow.items():
-                self.assertEqual(flow_data.type, key)
                 if flow_data.source == '待WebSearch补充':
+                    self.assertEqual(flow_data.type, key)
                     placeholder_keys.append(key)
                     self.assertIsNone(flow_data.recent_5d)
                     self.assertIsNone(flow_data.total_120d)
                     self.assertEqual(flow_data.trend, '待获取')
                     self.assertIn('WebSearch/Tavily', flow_data.note)
                 else:
+                    expected_type = expected_type_by_key[key]
+                    if isinstance(expected_type, set):
+                        self.assertIn(flow_data.type, expected_type)
+                    else:
+                        self.assertEqual(flow_data.type, expected_type)
                     self.assertTrue(
                         flow_data.recent_5d is not None or flow_data.total_120d is not None
                     )
@@ -235,6 +281,7 @@ class TestFundFlowPipeline(unittest.TestCase):
             collector = MarketDataCollector(
                 end_date=self.test_date
             )
+            self._stub_collect_fund_flow_sources(collector)
             fund_flow = await collector.collect_fund_flow()
 
             # 验证创建了4个占位符
