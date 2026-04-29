@@ -804,22 +804,27 @@ class MarketDataCollector:
             etf_entry = await self._fetch_etf_flow_proxy()
             if etf_entry:
                 fund_flow_dict['etf'] = etf_entry
-                pending_missing = [item for item in pending_missing if item['key'] != 'etf']
-                print("  [WARN] ETF资金流以TuShare daily_info成交额估算（is_estimated=True）")
+                print("  [WARN] ETF资金流以TuShare daily_info成交额估算（is_estimated=True），仍保留缺口供Stage2/Stage2.5核验")
             else:
                 print("  [WARN] 无法从TuShare etf_share_size/daily_info获取ETF数据，ETF仍记为缺口")
 
         # 其余类型仍需 WebSearch
         for flow in pending_missing:
+            reason = 'TuShare/公共接口不可用，需Stage2(Tavily)/Stage2.5'
+            if flow['key'] == 'etf' and getattr(fund_flow_dict.get('etf'), 'is_estimated', False):
+                reason = (
+                    'TuShare etf_share_size official path failed; '
+                    'daily_info estimated fallback present, needs Stage2(Tavily)/Stage2.5 verification'
+                )
             print(f"  [{flow['name']}] 占位符已创建,需Stage2/Stage2.5补充")
             self._record_missing(
                 'fund_flow',
                 flow['key'],
                 flow['name'],
-                'TuShare/公共接口不可用，需Stage2(Tavily)/Stage2.5',
+                reason,
                 search_query=flow['search_query'],
                 source_hint='eastmoney.com',
-                attempted_tushare=flow['key'] in {'northbound', 'southbound'}
+                attempted_tushare=flow['key'] in {'northbound', 'southbound', 'etf'}
             )
 
         return fund_flow_dict

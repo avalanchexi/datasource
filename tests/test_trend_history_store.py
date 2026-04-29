@@ -40,6 +40,27 @@ def test_block_reports_source(tmp_path: Path):
         write_from_market_data(market_data, is_partial=True, source_path=Path("reports/fake.md"), base_dir=tmp_path)
 
 
+def test_write_from_market_data_preserves_fund_flow_estimated_flag(tmp_path: Path):
+    market_data = {
+        "metadata": {"date": "2026-04-27"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": 12.3,
+                "total_120d": 45.6,
+                "source": "TuShare daily_info estimate",
+                "is_estimated": True,
+            }
+        },
+    }
+
+    writes = write_from_market_data(market_data, is_partial=False, base_dir=tmp_path)
+
+    assert writes == 2
+    for symbol in ("etf_recent_5d", "etf_total_120d"):
+        payload = json.loads((tmp_path / "series" / "fund_flow" / f"{symbol}.json").read_text(encoding="utf-8"))
+        assert payload["values"][0]["is_estimated"] is True
+
+
 def test_scan_trend_history_reports_estimated_and_partial_ratios(tmp_path: Path):
     base_dir = tmp_path / "trend"
     write_series_record(

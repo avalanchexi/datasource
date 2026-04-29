@@ -416,7 +416,7 @@ def write_from_market_data(
                     source=item.get("source"),
                     source_timestamp=source_timestamp,
                     market_calendar=_calendar_for_symbol("fund_flow", key),
-                    is_estimated=False,
+                    is_estimated=bool(item.get("is_estimated", False)),
                     is_partial=is_partial,
                     metric=metric,
                 )

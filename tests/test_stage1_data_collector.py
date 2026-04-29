@@ -17,7 +17,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from scripts.stage1_data_collector import MarketDataCollector
+from scripts.stage1_data_collector import FundFlowData, MarketDataCollector
 
 
 class _FakeManager:
@@ -438,3 +438,50 @@ def test_fetch_etf_flow_from_tushare_share_size_returns_none_when_window_incompl
     result = collector._fetch_etf_flow_from_tushare_share_size()
 
     assert result is None
+
+
+def test_collect_fund_flow_keeps_etf_missing_when_only_estimated_fallback(monkeypatch):
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    async def _empty_hsgt():
+        return {
+            "north_recent_5d": None,
+            "north_total_120d": None,
+            "south_recent_5d": None,
+            "south_total_120d": None,
+            "as_of_trade_date": None,
+            "full_120_window": False,
+        }
+
+    async def _no_margin():
+        return None
+
+    async def _estimated_etf_proxy():
+        return FundFlowData(
+            type="etf",
+            recent_5d=12.3,
+            total_120d=45.6,
+            trend="inflow",
+            source="TuShare daily_info estimate",
+            metric_basis="estimated_net_flow",
+            is_estimated=True,
+            note="diagnostic estimate",
+        )
+
+    monkeypatch.setattr(collector, "_fetch_hsgt_from_tushare", _empty_hsgt)
+    monkeypatch.setattr(collector, "_fetch_margin_flow_from_tushare", _no_margin)
+    monkeypatch.setattr(collector, "_fetch_etf_flow_from_tushare_share_size", lambda: None)
+    monkeypatch.setattr(collector, "_fetch_etf_flow_proxy", _estimated_etf_proxy)
+
+    fund_flow = asyncio.run(collector.collect_fund_flow())
+
+    assert fund_flow["etf"].is_estimated is True
+    etf_missing = [
+        item
+        for item in collector.missing_items.get("fund_flow", [])
+        if isinstance(item, dict) and item.get("key") == "etf"
+    ]
+    assert len(etf_missing) == 1
+    assert "etf_share_size" in etf_missing[0]["reason"]
+    assert "estimated fallback" in etf_missing[0]["reason"]
