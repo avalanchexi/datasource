@@ -56,6 +56,8 @@ class ForexData(BaseModel):
     trend: str
     source: str
     source_url: Optional[str] = None
+    as_of_date: Optional[str] = None
+    note: Optional[str] = None
 
 
 class BondYieldData(BaseModel):

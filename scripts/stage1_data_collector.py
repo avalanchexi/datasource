@@ -910,6 +910,22 @@ class MarketDataCollector:
         except Exception:
             return _empty_result()
 
+    def _discover_dxy_fxcm_code(self, pro: Any) -> Optional[str]:
+        try:
+            data = pro.fx_obasic(classify="FX_BASKET", exchange="FXCM")
+            if data is None or getattr(data, "empty", True):
+                return None
+            if "ts_code" not in getattr(data, "columns", []):
+                return None
+
+            for raw_code in data["ts_code"].dropna():
+                code = str(raw_code).strip()
+                if code and "USDOLLAR" in code.upper():
+                    return code
+            return None
+        except Exception:
+            return None
+
     async def _fetch_fx_from_tushare(self, symbol: str, name: str) -> Optional[ForexData]:
         """尝试用 TuShare fx_daily 获取在岸/离岸汇率"""
         try:
@@ -917,12 +933,18 @@ class MarketDataCollector:
             token = os.getenv("TUSHARE_TOKEN")
             pro = ts.pro_api(token) if token else ts.pro_api()
 
-            if symbol not in {"USDCNY", "USDCNH"}:
+            if symbol not in {"USDCNY", "USDCNH", "DXY"}:
                 return None
 
             start = self.start_date.replace("-", "")
             end = self.end_date.replace("-", "")
-            ts_code_candidates = [symbol]
+            if symbol == "DXY":
+                dxy_code = self._discover_dxy_fxcm_code(pro)
+                if not dxy_code:
+                    return None
+                ts_code_candidates = [dxy_code]
+            else:
+                ts_code_candidates = [symbol]
             if symbol == "USDCNH":
                 # TuShare fx_daily 对离岸人民币通常使用 USDCNH.FXCM
                 ts_code_candidates.append("USDCNH.FXCM")
@@ -944,11 +966,36 @@ class MarketDataCollector:
 
             df = df.sort_values("trade_date")
             def _pick_rate(row):
-                return row.get("bid_close") or row.get("ask_close") or row.get("bid_open") or row.get("ask_open")
+                for col in ("bid_close", "ask_close", "bid_open", "ask_open"):
+                    value = row.get(col)
+                    if value is None:
+                        continue
+                    try:
+                        rate = float(value)
+                    except (TypeError, ValueError):
+                        continue
+                    if pd.notna(rate):
+                        return rate
+                return None
+
+            def _format_trade_date(value):
+                if value is None:
+                    return None
+                text = str(value).strip()
+                if not text:
+                    return None
+                parsed = pd.to_datetime(text, format="%Y%m%d", errors="coerce")
+                if pd.isna(parsed):
+                    parsed = pd.to_datetime(text, errors="coerce")
+                if pd.isna(parsed):
+                    return text
+                return parsed.strftime("%Y-%m-%d")
 
             latest_row = df.iloc[-1]
             latest_rate = _pick_rate(latest_row)
             if latest_rate is None:
+                return None
+            if symbol == "DXY" and not 70 <= float(latest_rate) <= 140:
                 return None
 
             prev_rate = None
@@ -964,15 +1011,32 @@ class MarketDataCollector:
             change_120d = _pct_change(latest_rate, _pick_rate(df.iloc[0]))
             trend = "贬值" if change_120d > 0 else "升值" if change_120d < 0 else "平稳"
 
-            return ForexData(
-                pair=symbol,
-                name=name,
-                current_rate=float(latest_rate),
-                daily_change=float(daily_change),
-                change_120d=float(change_120d),
-                trend=trend,
-                source=f"TuShare fx_daily({selected_code or symbol})",
-            )
+            fx_name = name
+            source = f"TuShare fx_daily({selected_code or symbol})"
+            note = None
+            if symbol == "DXY":
+                fx_name = "DXY美元指数(TuShare USDOLLAR代理)"
+                source = f"TuShare fx_daily({selected_code}, FX_BASKET proxy)"
+                as_of_date = _format_trade_date(latest_row.get("trade_date"))
+                note = (
+                    "TuShare FXCM USDOLLAR basket proxy; not equivalent to ICE DXY. "
+                    "Stage2/Stage2.5 remains fallback when unavailable."
+                )
+
+            forex_kwargs = {
+                "pair": symbol,
+                "name": fx_name,
+                "current_rate": float(latest_rate),
+                "daily_change": float(daily_change),
+                "change_120d": float(change_120d),
+                "trend": trend,
+                "source": source,
+            }
+            if symbol == "DXY":
+                forex_kwargs["as_of_date"] = as_of_date
+                forex_kwargs["note"] = note
+
+            return ForexData(**forex_kwargs)
         except Exception:
             return None
 
