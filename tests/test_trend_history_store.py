@@ -108,4 +108,9 @@ def test_write_trend_history_gap_snapshot_writes_run_file(tmp_path: Path):
     saved = json.loads(output_path.read_text(encoding="utf-8"))
     assert saved == payload
     assert saved["date"] == "2026-04-28"
+    assert isinstance(saved["series"]["missing"], list)
+    assert isinstance(saved["series"]["insufficient"], list)
+    assert isinstance(saved["series"]["stale"], list)
+    assert isinstance(saved["events"]["missing"], list)
+    assert isinstance(saved["events"]["insufficient"], list)
     assert any(item["category"] == "forex" and item["symbol"] == "USDCNY" for item in saved["series"]["quality"])
