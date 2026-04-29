@@ -494,6 +494,19 @@ def write_from_market_data(
     return writes
 
 
+def _quality_summary(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    total = len(items)
+    estimated_count = sum(1 for item in items if isinstance(item, dict) and bool(item.get("is_estimated")))
+    partial_count = sum(1 for item in items if isinstance(item, dict) and bool(item.get("is_partial")))
+    return {
+        "count": total,
+        "estimated_count": estimated_count,
+        "estimated_ratio": round(estimated_count / total, 4) if total else 0.0,
+        "partial_count": partial_count,
+        "partial_ratio": round(partial_count / total, 4) if total else 0.0,
+    }
+
+
 def scan_trend_history(
     target_date: str,
     *,
@@ -503,8 +516,8 @@ def scan_trend_history(
     target_date = _normalize_date(target_date)
     results: Dict[str, Any] = {
         "date": target_date,
-        "series": {"missing": [], "insufficient": [], "stale": []},
-        "events": {"missing": [], "insufficient": []},
+        "series": {"missing": [], "insufficient": [], "stale": [], "quality": []},
+        "events": {"missing": [], "insufficient": [], "quality": []},
     }
 
     last_open_cn = _get_last_open_date_cn(target_date) if target_date else None
@@ -522,6 +535,9 @@ def scan_trend_history(
             if not values:
                 results["series"]["missing"].append({"category": category, "symbol": path.stem, "reason": "empty"})
                 continue
+            summary = _quality_summary([item for item in values if isinstance(item, dict)])
+            summary.update({"category": category, "symbol": path.stem})
+            results["series"]["quality"].append(summary)
             if len(values) < window:
                 results["series"]["insufficient"].append(
                     {"category": category, "symbol": path.stem, "count": len(values), "required": window}
@@ -552,6 +568,9 @@ def scan_trend_history(
             if not events:
                 results["events"]["missing"].append({"indicator": path.stem, "reason": "empty"})
                 continue
+            summary = _quality_summary([item for item in events if isinstance(item, dict)])
+            summary.update({"indicator": path.stem})
+            results["events"]["quality"].append(summary)
             if len(events) < 6:
                 results["events"]["insufficient"].append(
                     {"indicator": path.stem, "count": len(events), "required": 6}

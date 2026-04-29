@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 import pytest
 
-from datasource.utils.trend_history_store import SeriesRecord, write_series_record, write_from_market_data
+from datasource.utils.trend_history_store import (
+    SeriesRecord,
+    scan_trend_history,
+    write_from_market_data,
+    write_series_record,
+)
 
 
 def test_series_trim_window(tmp_path: Path):
@@ -32,3 +37,47 @@ def test_block_reports_source(tmp_path: Path):
     }
     with pytest.raises(ValueError):
         write_from_market_data(market_data, is_partial=True, source_path=Path("reports/fake.md"), base_dir=tmp_path)
+
+
+def test_scan_trend_history_reports_estimated_and_partial_ratios(tmp_path: Path):
+    base_dir = tmp_path / "trend"
+    write_series_record(
+        "commodities",
+        "BCOM",
+        SeriesRecord(
+            date="2026-04-27",
+            value=131.48,
+            unit="points",
+            source="manual",
+            source_timestamp=None,
+            market_calendar="GLOBAL",
+            is_estimated=True,
+            is_partial=False,
+        ),
+        base_dir=base_dir,
+    )
+    write_series_record(
+        "commodities",
+        "BCOM",
+        SeriesRecord(
+            date="2026-04-28",
+            value=132.0,
+            unit="points",
+            source="manual",
+            source_timestamp=None,
+            market_calendar="GLOBAL",
+            is_estimated=False,
+            is_partial=True,
+        ),
+        base_dir=base_dir,
+    )
+
+    result = scan_trend_history("2026-04-28", base_dir=base_dir)
+
+    quality = result["series"]["quality"]
+    bcom = next(item for item in quality if item["category"] == "commodities" and item["symbol"] == "BCOM")
+    assert bcom["count"] == 2
+    assert bcom["estimated_count"] == 1
+    assert bcom["estimated_ratio"] == 0.5
+    assert bcom["partial_count"] == 1
+    assert bcom["partial_ratio"] == 0.5
