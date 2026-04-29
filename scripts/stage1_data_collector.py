@@ -918,9 +918,13 @@ class MarketDataCollector:
             if "ts_code" not in getattr(data, "columns", []):
                 return None
 
-            for raw_code in data["ts_code"].dropna():
-                code = str(raw_code).strip()
-                if code and "USDOLLAR" in code.upper():
+            candidates = [str(raw_code).strip() for raw_code in data["ts_code"].dropna()]
+            for code in candidates:
+                if code.upper() == "USDOLLAR.FXCM":
+                    return code
+            for code in candidates:
+                base_symbol = code.upper().split(".", 1)[0]
+                if base_symbol == "USDOLLAR":
                     return code
             return None
         except Exception:
@@ -974,7 +978,7 @@ class MarketDataCollector:
                         rate = float(value)
                     except (TypeError, ValueError):
                         continue
-                    if pd.notna(rate):
+                    if pd.notna(rate) and np.isfinite(rate) and rate > 0:
                         return rate
                 return None
 

@@ -353,6 +353,42 @@ def test_fetch_fx_from_tushare_discovers_dxy_fxcm_proxy(monkeypatch):
     assert "Stage2/Stage2.5" in result.note
 
 
+def test_fetch_fx_from_tushare_dxy_prefers_exact_usdollar_fxcm(monkeypatch):
+    class _Pro:
+        def __init__(self):
+            self.daily_calls = []
+
+        def fx_obasic(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "ts_code": ["XUSDOLLAR.FXCM", "USDOLLAR_ALT.FXCM", "USDOLLAR.FXCM"],
+                }
+            )
+
+        def fx_daily(self, **kwargs):
+            self.daily_calls.append(kwargs)
+            return pd.DataFrame({"trade_date": ["20260427"], "bid_close": [102.5]})
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    pro = _Pro()
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(pro))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
+
+    assert result is not None
+    assert pro.daily_calls == [
+        {"ts_code": "USDOLLAR.FXCM", "start_date": "20251228", "end_date": "20260427"}
+    ]
+
+
 def test_fetch_fx_from_tushare_dxy_returns_none_without_usdollar_candidate(monkeypatch):
     class _Pro:
         def __init__(self):
@@ -403,6 +439,65 @@ def test_fetch_fx_from_tushare_dxy_rejects_out_of_range_proxy_value(monkeypatch)
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
+
+    assert result is None
+
+
+def test_fetch_fx_from_tushare_usdcny_skips_zero_quote_candidates(monkeypatch):
+    class _Pro:
+        def fx_daily(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260427"],
+                    "bid_close": [0.0],
+                    "ask_close": [7.25],
+                    "bid_open": [7.24],
+                    "ask_open": [7.26],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(collector._fetch_fx_from_tushare("USDCNY", "USD/CNY在岸"))
+
+    assert result is not None
+    assert result.current_rate == pytest.approx(7.25)
+
+
+def test_fetch_fx_from_tushare_usdcny_returns_none_when_all_quotes_invalid(monkeypatch):
+    class _Pro:
+        def fx_daily(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260427"],
+                    "bid_close": [0.0],
+                    "ask_close": [None],
+                    "bid_open": [0.0],
+                    "ask_open": [0.0],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(collector._fetch_fx_from_tushare("USDCNY", "USD/CNY在岸"))
 
     assert result is None
 
