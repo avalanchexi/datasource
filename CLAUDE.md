@@ -136,8 +136,9 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。失败分类需结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`tavily_unavailable_reason=quota_or_rate_limit`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构、月份）。
 - Stage2.5 在接收 Stage2 `results` 结构时，会保留 `manual_required/manual_reason` 并生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`，按 `category:indicator_key` 去重）。
-- official override 仅用于 allowlist：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。只有可信官方 HTTPS URL evidence 才会把显式 `is_estimated=True` 正规化为 `False`，并追加 `manual_official_not_estimated`。
-- official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 均不触发。ETF/fund_flow 不在 allowlist；普通 manual 来源不会因为不是官方域名而默认改成 estimated/blocked。
+- official override 仅用于代码内 `official manual override allowlist`：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。只有可信官方 HTTPS URL evidence 才会把显式 `is_estimated=True` 正规化为 `False`，并追加 `manual_official_not_estimated`。
+- 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 BCOM/USDCNY/MLF 的 estimated allowlist。
+- official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 均不触发。ETF/fund_flow 不在代码内 `official manual override allowlist`；普通 manual 来源不会因为不是官方域名而默认改成 estimated/blocked。
 - Stage2.5 中 `macro_indicators.change_rate` 统一为百分比口径（`(current-previous)/abs(previous)*100`），分母为 0 时保留缺口并标记质量阻断。
 
 ### Operational Pitfalls（操作陷阱）
@@ -150,7 +151,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 **inject 脚本跳过已有值**:
 - 若指标已有 `current_value` 且不是 `PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}` 且 `is_stale≠True`，inject 脚本会跳过该条目
 - 典型场景：Stage2 DeepSeek 填了值但 `is_estimated=True` → inject 跳过 → Stage3 仍被 gate 约束
-- 解法：官方口径用带可信单个 HTTPS `source_url` 的 Stage2.5 manual 重新注入；只有 official allowlist 指标（代码为准，当前 `monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`）可触发 `manual_official_not_estimated` 并把显式 `is_estimated=True` 正规化为 `False`。显式 URL 字段必须是单个字符串 URL，混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 均不触发；ETF/fund_flow 不在 allowlist，普通 manual 来源不会因为不是官方域名而默认改成 estimated/blocked。
+- 解法：官方口径用带可信单个 HTTPS `source_url` 的 Stage2.5 manual 重新注入；只有代码内 `official manual override allowlist` 指标（当前 `monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`）可触发 `manual_official_not_estimated` 并把显式 `is_estimated=True` 正规化为 `False`。这不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`（当前 `CN10Y_CDB`、`bdi`），后者只用于 Stage3/quality 对估计值评分/告警处理。显式 URL 字段必须是单个字符串 URL，混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 均不触发；ETF/fund_flow 不在代码内 `official manual override allowlist`，普通 manual 来源不会因为不是官方域名而默认改成 estimated/blocked。
 
 **Stage3 Gate 三路阻断**（需逐一排查，彼此独立）:
 1. **policy gate** (`block_stage3=True`)：`redlist` 有 `critical_missing_keys` 中的项 → 修正 Stage2.5 manual/source 数据，重跑 Stage2.5/Stage3

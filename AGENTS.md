@@ -161,8 +161,9 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 - 输入也可用 Stage2 自动结果 `websearch_results_auto.json`；脚本会自动转换 `results` 结构，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 骨架。
 - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`。
-- official manual override 仅适用于代码 allowlist 中的指标：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。这些指标在 `_manual.json` 显式 `is_estimated=True` 时，只有提供可信官方 HTTPS `source_url` 证据才会正规化为 `is_estimated=False`，并追加 `manual_official_not_estimated`。
-- official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在 allowlist，估算仍受 gate 约束。
+- official manual override 仅适用于代码内 `official manual override allowlist` 中的指标：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。这些指标在 `_manual.json` 显式 `is_estimated=True` 时，只有提供可信官方 HTTPS `source_url` 证据才会正规化为 `is_estimated=False`，并追加 `manual_official_not_estimated`。
+- 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 official override 白名单。
+- official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在代码内 `official manual override allowlist`，估算仍受 gate 约束。
 - 普通 manual 来源不要因为不是官方域名就默认改成 estimated 或 blocked；是否 official override 只影响显式估算值能否被正规化。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
 - 若终端显示“注入数据项: 0”，说明结果无可解析数值或文件为空，应改用手工 schema 版 `_manual.json`。

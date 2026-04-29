@@ -1434,6 +1434,23 @@ def test_manual_official_helper_trusted_explicit_source_url_is_official():
     ) is True
 
 
+def test_manual_official_helper_bcom_decimal_note_does_not_count_as_url_evidence():
+    payload = {
+        "symbol": "BCOM",
+        "name": "Bloomberg Commodity Index",
+        "current_price": 131.4824,
+        "source_url": "https://www.bloomberg.com/quote/BCOM:IND",
+        "source": "Bloomberg official quote",
+        "note": "BCOM latest value 131.4824 points",
+        "is_estimated": True,
+    }
+
+    evidence = injector._iter_url_like_evidence(payload)
+
+    assert "131.4824" not in evidence
+    assert injector._is_manual_official_value("commodities", "BCOM", payload) is True
+
+
 def test_manual_official_helper_explicit_source_url_with_prefix_text_blocks_official():
     assert injector._is_manual_official_value(
         "monetary_policy",

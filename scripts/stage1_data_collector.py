@@ -33,7 +33,11 @@ from datasource.models.market_data_contract import (
     MacroIndicatorData,
     MonetaryPolicyData
 )
-from datasource.utils.trend_history_store import scan_trend_history, write_from_market_data, load_series_values
+from datasource.utils.trend_history_store import (
+    write_from_market_data,
+    load_series_values,
+    write_trend_history_gap_snapshot,
+)
 from datasource.utils.run_paths import build_run_paths
 
 
@@ -2341,13 +2345,10 @@ async def main():
     # Pre-scan trend_history gaps before Stage1 collection
     try:
         gap_output = run_paths.trend_history_gap
-        gap_output.parent.mkdir(parents=True, exist_ok=True)
-        gap_report = scan_trend_history(trading_date)
-        with gap_output.open("w", encoding="utf-8") as f:
-            json.dump(gap_report, f, ensure_ascii=False, indent=2)
-        print(f"[INFO] trend_history scan saved: {gap_output}")
+        write_trend_history_gap_snapshot(trading_date, gap_output)
+        print(f"[INFO] trend_history gap snapshot refreshed: {gap_output}")
     except Exception as exc:  # noqa: BLE001
-        print(f"[WARN] trend_history scan failed: {exc}")
+        print(f"[WARN] trend_history gap snapshot refresh failed: {exc}")
 
     # 创建收集器
     collector = MarketDataCollector(
@@ -2382,6 +2383,11 @@ async def main():
     try:
         write_count = write_from_market_data(market_payload, is_partial=True, source_path=output_path)
         print(f"[INFO] trend_history partial write: {write_count} items")
+        try:
+            write_trend_history_gap_snapshot(trading_date, run_paths.trend_history_gap)
+            print(f"[INFO] trend_history gap snapshot refreshed: {run_paths.trend_history_gap}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[WARN] trend_history gap snapshot refresh failed: {exc}")
     except Exception as exc:  # noqa: BLE001
         print(f"[WARN] trend_history partial write failed: {exc}")
 
