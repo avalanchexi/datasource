@@ -702,6 +702,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             if policy.get('is_estimated'):
                 name = policy.get('policy_name') or '货币政策'
                 items.append(f"货币政策:{name}")
+        for key, flow in market_data.get('fund_flow', {}).items():
+            if isinstance(flow, dict) and flow.get('is_estimated'):
+                name = {
+                    "northbound": "北向资金",
+                    "southbound": "南向资金",
+                    "etf": "ETF资金流",
+                    "margin": "融资融券",
+                }.get(key, key)
+                items.append(f"资金流:{name}")
         return items
 
     estimated_items = _collect_estimated_items()

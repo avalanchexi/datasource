@@ -304,6 +304,69 @@ def test_task_planner_keeps_etf_field_queries(tmp_path: Path):
     assert "total_120d" in task["field_queries"]
 
 
+def test_task_planner_skips_complete_official_tushare_etf(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": 85.6,
+                "total_120d": 1250.0,
+                "trend": "流入",
+                "source": "tushare etf_share_size",
+                "metric_basis": "etf_total_size_delta",
+                "is_estimated": False,
+            }
+        },
+        "missing_items": [],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    assert "etf" not in {task["indicator_key"] for task in tasks}
+
+
+def test_task_planner_skips_complete_tushare_dxy_proxy(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "name": "美元指数（TuShare USDOLLAR.FXCM proxy）",
+                "current_rate": 105.23,
+                "source": "tushare fx_obasic/fx_daily FX_BASKET proxy USDOLLAR.FXCM",
+            }
+        ],
+        "missing_items": [],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    assert "dxy" not in {str(task["indicator_key"]).lower() for task in tasks}
+
+
+def test_task_planner_keeps_estimated_etf_missing_item_for_stage2(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": 85.6,
+                "total_120d": 1250.0,
+                "trend": "流入",
+                "source": "fallback estimate",
+                "is_estimated": True,
+            }
+        },
+        "missing_items": [{"key": "etf", "reason": "estimated_not_allowed"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    task = next(task for task in tasks if task["indicator_key"] == "etf")
+    assert task["trigger_reason"] == "missing"
+    assert "recent_5d" in task["field_queries"]
+    assert "total_120d" in task["field_queries"]
+
+
 def test_task_planner_passes_report_usage_contract_to_task(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-04-28"},

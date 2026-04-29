@@ -276,9 +276,12 @@ if comp < 0.8:
 - Stage2 Tavily second: TuShare 不可得或缺失字段统一走 Stage2。
 - Stage2.5 last resort: 用 `data/runs/${DATE_NH}/websearch_results_manual.json` 或手工 `_manual.json` 注入。
 - Market fallback: legacy-only path，必要时运行 `scripts/legacy/fill_market_data_from_yahoo.py`，再通过 Stage2.5 注入补 commodities/bonds/forex 缺口。
+- `fund_flow.etf`: Stage1 可用 TuShare `etf_share_size.total_size` 计算全市场规模窗口变化，`metric_basis=etf_total_size_delta`；该口径是 ETF 规模 delta，不等同于新闻口径净流入。若 TuShare 不可得、窗口不完整或质量阻断，继续 Stage2/Stage2.5 补数。
+- `DXY`: Stage1 可探测 TuShare `fx_obasic` 的 `FX_BASKET`/`USDOLLAR.FXCM` 并用 `fx_daily` 取数；报告必须标注为 TuShare `USDOLLAR` proxy，不得写成 ICE DXY。若不可得或不完整，继续 Stage2/Stage2.5。
 - `USDCNH`: `fx_daily` 优先使用 `ts_code=USDCNH.FXCM`；`USDCNH` 常返回空。
 - `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；若空则回退 `curve_type=1`。
 - `CN10Y_CDB`: 当前无稳定 TuShare 直采口径，仍需 WebSearch/手工注入；若为利差估算需保留 `is_estimated=True`。
+- 不得静默用近似 TuShare 接口替换 `commodities.GC=F/CL=F/BZ=F/HG=F`、`commodities.BCOM`、`commodities.GSG`、`bonds.CN10Y_CDB`、`macro_indicators.industrial`、`macro_indicators.industrial_sales`、`macro_indicators.bdi`、`monetary_policy.reserve_ratio`、`monetary_policy.reverse_repo`、`monetary_policy.mlf`；无稳定口径时应进入 Stage2/Stage2.5 或保留质量阻断。
 - 债券日期列展示“最近可用日期”，优先 `as_of_date/date/report_period`，不强制等于报告日。Stage1/Stage2 写入债券收益率时不得清空已存在日期字段。
 - 宏观 `change_rate` 统一为百分比：`(current-previous)/abs(previous)*100`；分母为 0 时标记 `reason=change_rate_pct_div_by_zero` 并进入质量阻断。
 - Stage4 MLF 展示：当 `policy_name`、`note`、`source` 或 `manual_reason` 中出现 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示为类似 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值保持两位百分比，变化保持 `pp`。

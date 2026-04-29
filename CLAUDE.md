@@ -261,15 +261,18 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 - 股指日线、两融余额
 
 **TuShare 直采口径注意**:
+- `fund_flow.etf`: 可用 `etf_share_size.total_size` 计算全市场规模 delta（`metric_basis=etf_total_size_delta`），不是新闻净流入；窗口不完整继续 Stage2/Stage2.5。
+- `DXY`: 可探测 `fx_obasic` `FX_BASKET`/`USDOLLAR.FXCM` + `fx_daily`，报告标注 TuShare USDOLLAR proxy，不写 ICE DXY。
 - `USDCNH`: `fx_daily` 需用 `ts_code=USDCNH.FXCM`（`USDCNH` 常返回空）
 - `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；空则回退 `curve_type=1`
 - `CN10Y_CDB`: 无稳定 TuShare 口径，需 WebSearch/手工注入；利差估算保留 `is_estimated=True`
+- 不得静默用近似 TuShare 接口替换 `GC=F/CL=F/BZ=F/HG=F`、`BCOM/GSG`、`CN10Y_CDB`、`industrial/industrial_sales/bdi`、`reserve_ratio/reverse_repo/mlf`。
 
 **必须 WebSearch** (Stage2/2.5):
-- 外汇: DXY（美元指数）, USDCNY/USDCNH
+- 外汇: DXY（Stage1 proxy 不可得或不完整时）, USDCNY/USDCNH
 - 债券: CN10Y, CN10Y_CDB, US10Y
 - 商品: BDI（波罗的海干散货指数）
-- 资金流: 北向/南向/ETF
+- 资金流: 北向/南向/ETF（Stage1 ETF 规模窗口不完整时）
 - 宏观: 工业增加值、工业营收
 
 ## Environment Variables

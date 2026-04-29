@@ -330,3 +330,73 @@ def test_commodity_table_prefers_120d_when_all_rows_also_have_ytd(tmp_path: Path
     assert "| WTI Oil | 70.25 $/bbl | N/A | -4.40% | down |" in text
     assert "+8.80%" not in text
     assert "+9.90%" not in text
+
+
+def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
+    market = _base_market()
+    market["fund_flow"] = {
+        "etf": {
+            "recent_5d": 85.6,
+            "total_120d": 1250.0,
+            "trend": "流入",
+            "source": "fallback estimate",
+            "note": "estimated fallback pending official source",
+            "is_estimated": True,
+        }
+    }
+    pring = {
+        "final_stage": "stage 3",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert "估计值提醒" in text
+    assert "资金流:ETF资金流" in text
+
+
+def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "DXY",
+            "name": "美元指数（TuShare USDOLLAR.FXCM proxy）",
+            "current_rate": 105.23,
+            "daily_change": 0.12,
+            "change_120d": 1.34,
+            "trend": "上行",
+            "source": "tushare fx_obasic/fx_daily FX_BASKET proxy USDOLLAR.FXCM",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 3",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert "| 美元指数（TuShare USDOLLAR.FXCM proxy） | 105.2300 | +0.12% | +1.34% | 上行 |" in text
