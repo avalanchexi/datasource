@@ -17,6 +17,63 @@ import scripts.stage2_5_injector as injector
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 
 
+def test_stage25_refreshes_trend_history_gap_from_custom_base_dir(
+    tmp_path: Path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    market_path = tmp_path / "market_data_stage2.json"
+    manual_path = tmp_path / "websearch_results_manual.json"
+    output_path = tmp_path / "market_data_complete.json"
+    trend_base = tmp_path / "isolated_trend_history" / "min"
+    snapshot_path = tmp_path / "data" / "runs" / "20260427" / "trend_history_gap.json"
+
+    market_path.write_text(
+        json.dumps(
+            {
+                "metadata": {"date": "2026-04-27", "data_completeness": 1.0},
+                "missing_items": [],
+                "monetary_policy": {},
+                "macro_indicators": {},
+                "fund_flow": {},
+                "commodities": [],
+                "forex": [
+                    {
+                        "pair": "USDCNY",
+                        "name": "USD/CNY",
+                        "current_rate": 7.12,
+                        "source": "manual https://example.com/usdcny",
+                        "source_url": "https://example.com/usdcny",
+                    }
+                ],
+                "bonds": [],
+                "stock_indices": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manual_path.write_text(json.dumps({}, ensure_ascii=False), encoding="utf-8")
+
+    injector.inject_websearch_data(
+        market_path,
+        manual_path,
+        output_path,
+        backfill_trend=False,
+        gap_monitor_path=tmp_path / "gap_monitor.json",
+        trend_history_base_dir=trend_base,
+    )
+
+    assert snapshot_path.exists()
+    snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert snapshot["date"] == "2026-04-27"
+    assert any(
+        item["category"] == "forex" and item["symbol"] == "USDCNY"
+        for item in snapshot["series"]["quality"]
+    )
+    assert not (tmp_path / "data" / "trend_history" / "min").exists()
+
+
 def test_stage25_outputs_are_accepted_by_unified_quality_state(
     tmp_path: Path,
     monkeypatch,

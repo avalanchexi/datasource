@@ -16,7 +16,12 @@ from typing import Any, Dict, Optional, List, Tuple
 from urllib.parse import urlparse
 
 from datasource.models.market_data_contract import FundFlowData
-from datasource.utils.trend_history_store import write_from_market_data, DEFAULT_BASE_DIR, SERIES_WINDOWS
+from datasource.utils.trend_history_store import (
+    write_from_market_data,
+    write_trend_history_gap_snapshot,
+    DEFAULT_BASE_DIR,
+    SERIES_WINDOWS,
+)
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.quality_metrics import build_quality_metrics
@@ -1650,6 +1655,15 @@ def inject_websearch_data(
                 base_dir=trend_base_dir,
             )
             print(f"  - trend_history final write: {write_count} items")
+            try:
+                write_trend_history_gap_snapshot(
+                    run_paths.date,
+                    run_paths.trend_history_gap,
+                    base_dir=trend_base_dir,
+                )
+                print(f"  - trend_history gap snapshot refreshed: {run_paths.trend_history_gap}")
+            except Exception as exc:  # noqa: BLE001
+                print(f"  [WARN] trend_history gap snapshot refresh failed: {exc}")
         except Exception as exc:  # noqa: BLE001
             print(f"  - trend_history final write failed: {exc}")
 
