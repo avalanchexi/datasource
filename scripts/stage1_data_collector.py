@@ -794,14 +794,20 @@ class MarketDataCollector:
         else:
             print("  [WARN] TuShare margin暂未返回数据，融资融券仍需Stage2/Stage2.5补充")
 
-        # 2) 日度成交统计（daily_info）估算ETF热度
-        etf_entry = await self._fetch_etf_flow_proxy()
+        # 2) TuShare ETF份额/规模 -> fund_flow.etf；daily_info 仅作为估计兜底
+        etf_entry = self._fetch_etf_flow_from_tushare_share_size()
         if etf_entry:
             fund_flow_dict['etf'] = etf_entry
             pending_missing = [item for item in pending_missing if item['key'] != 'etf']
-            print("  [OK] ETF资金流以TuShare daily_info成交额估算（已注明来源）")
+            print("  [OK] ETF资金流已通过 TuShare etf_share_size 获取近5日/120日规模变化")
         else:
-            print("  [WARN] 无法从TuShare daily_info获取成交统计，ETF仍记为缺口")
+            etf_entry = await self._fetch_etf_flow_proxy()
+            if etf_entry:
+                fund_flow_dict['etf'] = etf_entry
+                pending_missing = [item for item in pending_missing if item['key'] != 'etf']
+                print("  [WARN] ETF资金流以TuShare daily_info成交额估算（is_estimated=True）")
+            else:
+                print("  [WARN] 无法从TuShare etf_share_size/daily_info获取ETF数据，ETF仍记为缺口")
 
         # 其余类型仍需 WebSearch
         for flow in pending_missing:
@@ -1961,6 +1967,74 @@ class MarketDataCollector:
         except Exception:
             return None
 
+    def _fetch_etf_total_size_on_date(self, trade_date: str) -> Optional[float]:
+        """Fetch SSE+SZSE ETF total_size for one trade date, converted from 万元 to 亿元."""
+        try:
+            import tushare as ts
+
+            token = os.getenv("TUSHARE_TOKEN")
+            pro = ts.pro_api(token) if token else ts.pro_api()
+            trade_date_norm = str(trade_date).replace("-", "")
+            total_wan = 0.0
+
+            for exchange in ("SSE", "SZSE"):
+                try:
+                    df = pro.etf_share_size(trade_date=trade_date_norm, exchange=exchange)
+                except TypeError:
+                    df = pro.etf_share_size(trade_date=trade_date_norm, market=exchange)
+                if df is None or getattr(df, "empty", True):
+                    return None
+                frame = df.copy()
+                frame.columns = [str(col).lower() for col in frame.columns]
+                if "total_size" not in frame.columns:
+                    return None
+                values = pd.to_numeric(frame["total_size"], errors="coerce").dropna()
+                if values.empty:
+                    return None
+                total_wan += float(values.sum())
+
+            if total_wan <= 0:
+                return None
+            return total_wan / 10000.0
+        except Exception:
+            return None
+
+    def _fetch_etf_flow_from_tushare_share_size(self) -> Optional[FundFlowData]:
+        """Use TuShare etf_share_size total ETF size deltas for ETF fund-flow proxy."""
+        open_dates = self._get_recent_open_dates(count=121)
+        if len(open_dates) < 121:
+            return None
+
+        dates = open_dates[-121:]
+        size_values: List[float] = []
+        for trade_date in dates:
+            total_size = self._fetch_etf_total_size_on_date(trade_date)
+            if total_size is None:
+                return None
+            size_values.append(float(total_size))
+
+        series = pd.Series(size_values)
+        recent_delta = self._calc_flow_delta(series, window=5)
+        total_delta = self._calc_flow_delta(series, window=120)
+        if recent_delta is None or total_delta is None:
+            return None
+
+        latest_size = float(series.iloc[-1])
+        as_of_trade_date = dates[-1]
+        return FundFlowData(
+            type="ETF资金流",
+            recent_5d=round(float(recent_delta), 2),
+            total_120d=round(float(total_delta), 2),
+            trend=self._infer_trend(recent_delta),
+            source="TuShare etf_share_size",
+            metric_basis="etf_total_size_delta",
+            is_estimated=False,
+            note=(
+                "依据TuShare ETF规模/份额推导，统计SSE+SZSE total_size"
+                f"（万元折算为亿元）；最新规模≈{latest_size:.2f}亿元，截至{as_of_trade_date}"
+            ),
+        )
+
     async def _fetch_etf_flow_proxy(self) -> Optional[FundFlowData]:
         """基于daily_info成交额估算ETF热度（权限不足时返回None）"""
         if not hasattr(self.manager, "get_daily_market_info"):
@@ -2000,6 +2074,7 @@ class MarketDataCollector:
             trend=self._infer_trend(recent_delta),
             source="TuShare daily_info估算",
             metric_basis="estimated_net_flow",
+            is_estimated=True,
             note="; ".join(note_parts)
         )
 

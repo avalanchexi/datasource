@@ -85,6 +85,7 @@ class FundFlowData(BaseModel):
     source: str
     source_url: Optional[str] = None
     metric_basis: Optional[str] = None
+    is_estimated: bool = False
     note: Optional[str] = None
     stage_task_id: Optional[str] = None
 

@@ -291,3 +291,125 @@ def test_previous_trade_fallback_returns_none_window_changes(monkeypatch):
     assert result is not None
     assert result.change_5d is None
     assert result.change_120d is None
+
+
+def test_fetch_etf_total_size_on_date_sums_exchanges_and_converts_to_yi(monkeypatch):
+    class _Pro:
+        def __init__(self):
+            self.calls = []
+
+        def etf_share_size(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs.get("exchange") == "SSE":
+                return pd.DataFrame({"total_size": [10000.0, 30000.0]})
+            if kwargs.get("exchange") == "SZSE":
+                return pd.DataFrame({"total_size": [20000.0]})
+            return pd.DataFrame()
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    pro = _Pro()
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(pro))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = collector._fetch_etf_total_size_on_date("20260427")
+
+    assert result == pytest.approx(6.0)
+    assert pro.calls == [
+        {"trade_date": "20260427", "exchange": "SSE"},
+        {"trade_date": "20260427", "exchange": "SZSE"},
+    ]
+
+
+def test_fetch_etf_total_size_on_date_returns_none_when_one_exchange_missing(monkeypatch):
+    class _Pro:
+        def etf_share_size(self, **kwargs):
+            if kwargs.get("exchange") == "SSE":
+                return pd.DataFrame({"total_size": [10000.0]})
+            if kwargs.get("exchange") == "SZSE":
+                return pd.DataFrame()
+            return pd.DataFrame()
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = collector._fetch_etf_total_size_on_date("20260427")
+
+    assert result is None
+
+
+def test_fetch_etf_flow_from_tushare_share_size_builds_trade_cal_windows(monkeypatch):
+    trade_dates = [f"2026{i:04d}" for i in range(121)]
+
+    class _Pro:
+        def trade_cal(self, **_kwargs):
+            return pd.DataFrame({"cal_date": trade_dates, "is_open": [1] * len(trade_dates)})
+
+        def etf_share_size(self, **kwargs):
+            idx = trade_dates.index(kwargs["trade_date"])
+            total_yi = 1000.0 + idx
+            half_wan = total_yi * 10000.0 / 2
+            return pd.DataFrame({"total_size": [half_wan]})
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = collector._fetch_etf_flow_from_tushare_share_size()
+
+    assert result is not None
+    assert result.type == "ETF资金流"
+    assert result.recent_5d == pytest.approx(5.0)
+    assert result.total_120d == pytest.approx(120.0)
+    assert result.trend == "流入"
+    assert result.source == "TuShare etf_share_size"
+    assert result.metric_basis == "etf_total_size_delta"
+    assert result.is_estimated is False
+    assert "ETF规模/份额推导" in (result.note or "")
+
+
+def test_fetch_etf_flow_from_tushare_share_size_returns_none_when_window_incomplete(monkeypatch):
+    trade_dates = [f"2026{i:04d}" for i in range(120)]
+
+    class _Pro:
+        def trade_cal(self, **_kwargs):
+            return pd.DataFrame({"cal_date": trade_dates, "is_open": [1] * len(trade_dates)})
+
+        def etf_share_size(self, **_kwargs):
+            return pd.DataFrame({"total_size": [10000.0]})
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = collector._fetch_etf_flow_from_tushare_share_size()
+
+    assert result is None
