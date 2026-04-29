@@ -367,6 +367,30 @@ def test_task_planner_keeps_estimated_etf_missing_item_for_stage2(tmp_path: Path
     assert "total_120d" in task["field_queries"]
 
 
+def test_task_planner_routes_estimated_etf_fallback_without_missing_item(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-04-28"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": 85.6,
+                "total_120d": 1250.0,
+                "trend": "娴佸叆",
+                "source": "legacy daily_info estimated fallback",
+                "is_estimated": True,
+            }
+        },
+        "missing_items": [],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    etf_tasks = [task for task in tasks if task["indicator_key"] == "etf"]
+    assert len(etf_tasks) == 1
+    assert etf_tasks[0]["trigger_reason"] == "estimated_fallback"
+    assert "recent_5d" in etf_tasks[0]["field_queries"]
+    assert "total_120d" in etf_tasks[0]["field_queries"]
+
+
 def test_task_planner_passes_report_usage_contract_to_task(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-04-28"},

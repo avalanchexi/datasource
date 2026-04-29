@@ -217,6 +217,22 @@ class Stage2TaskPlanner:
                 )
         return tasks
 
+    def _scan_estimated_fund_flow(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+        tasks: List[Dict[str, Any]] = []
+        fund_flow = payload.get("fund_flow", {})
+        for flow_key, flow_payload in fund_flow.items():
+            if not isinstance(flow_payload, dict) or not bool(flow_payload.get("is_estimated")):
+                continue
+            tasks.append(
+                self._new_task(
+                    flow_key,
+                    "assets",
+                    backend=self.fund_flow_backend,
+                    trigger_reason="estimated_fallback",
+                )
+            )
+        return tasks
+
     def _scan_stale_entries(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         tasks: List[Dict[str, Any]] = []
         macro = payload.get("macro_indicators", {})
@@ -322,10 +338,15 @@ class Stage2TaskPlanner:
                 fallback_to_today=True,
             ).search_tasks_stage2
         self.query_context = self._build_query_context(payload)
-        tasks = self._from_missing_items(payload) + self._scan_placeholders(payload) + self._scan_stale_entries(payload)
+        tasks = (
+            self._from_missing_items(payload)
+            + self._scan_placeholders(payload)
+            + self._scan_estimated_fund_flow(payload)
+            + self._scan_stale_entries(payload)
+        )
         # 去重：同一 indicator_key 只保留一条，避免 basic/advanced 双倍调用
         seen: Dict[str, int] = {}
-        priority = {"stale_data": 3, "placeholder": 2, "missing": 1}
+        priority = {"stale_data": 4, "placeholder": 3, "missing": 2, "estimated_fallback": 1}
         unique_tasks: List[Dict[str, Any]] = []
         for task in tasks:
             key = task.get("query_template_id") or task["indicator_key"]
