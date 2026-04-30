@@ -995,15 +995,28 @@ class MarketDataCollector:
                     return text
                 return parsed.strftime("%Y-%m-%d")
 
-            latest_row = df.iloc[-1]
-            latest_rate = _pick_rate(latest_row)
+            usable_rows = []
+            for _, row in df.iterrows():
+                rate = _pick_rate(row)
+                if rate is not None:
+                    usable_rows.append((row, rate))
+            if symbol == "DXY" and len(usable_rows) < 2:
+                return None
+
+            if symbol == "DXY":
+                latest_row, latest_rate = usable_rows[-1]
+            else:
+                latest_row = df.iloc[-1]
+                latest_rate = _pick_rate(latest_row)
             if latest_rate is None:
                 return None
             if symbol == "DXY" and not 70 <= float(latest_rate) <= 140:
                 return None
 
             prev_rate = None
-            if len(df) >= 2:
+            if symbol == "DXY":
+                prev_rate = usable_rows[-2][1]
+            elif len(df) >= 2:
                 prev_rate = _pick_rate(df.iloc[-2])
 
             def _pct_change(cur, prev):
@@ -1012,8 +1025,12 @@ class MarketDataCollector:
                 return (float(cur) / float(prev) - 1.0) * 100.0
 
             daily_change = _pct_change(latest_rate, prev_rate)
-            change_120d = _pct_change(latest_rate, _pick_rate(df.iloc[0]))
-            trend = "贬值" if change_120d > 0 else "升值" if change_120d < 0 else "平稳"
+            if symbol == "DXY":
+                change_120d = _pct_change(latest_rate, usable_rows[0][1])
+                trend = "上行" if change_120d > 0 else "下行" if change_120d < 0 else "平稳"
+            else:
+                change_120d = _pct_change(latest_rate, _pick_rate(df.iloc[0]))
+                trend = "贬值" if change_120d > 0 else "升值" if change_120d < 0 else "平稳"
 
             fx_name = name
             source = f"TuShare fx_daily({selected_code or symbol})"

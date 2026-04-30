@@ -406,6 +406,60 @@ def test_task_planner_passes_report_usage_contract_to_task(tmp_path: Path):
     assert "caifuhao.eastmoney.com" in task["bad_url_patterns"]
 
 
+def test_apply_extraction_etf_complete_writeback_clears_stale_estimate_flag():
+    payload = {
+        "metadata": {"date": "2026-03-06"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": 85.6,
+                "total_120d": 1250.0,
+                "trend": "流入",
+                "source": "tushare daily_info fallback",
+                "is_estimated": True,
+            }
+        },
+    }
+    task = {"indicator_key": "etf", "task_id": "fund_flow.etf"}
+    extraction = {
+        "value": 85.0,
+        "recent_5d": 85.0,
+        "total_120d": 1200.0,
+        "trend": "inflow",
+        "source_url": "https://data.eastmoney.com/etf",
+        "note": "stage2 verified windows",
+    }
+
+    assert _apply_extraction(payload, task, extraction) == "fund_flow"
+    assert payload["fund_flow"]["etf"]["recent_5d"] == pytest.approx(85.0)
+    assert payload["fund_flow"]["etf"]["total_120d"] == pytest.approx(1200.0)
+    assert payload["fund_flow"]["etf"]["is_estimated"] is False
+
+
+def test_apply_extraction_etf_preserves_explicit_estimate_flag():
+    payload = {
+        "metadata": {"date": "2026-03-06"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": None,
+                "total_120d": None,
+                "is_estimated": False,
+            }
+        },
+    }
+    task = {"indicator_key": "etf", "task_id": "fund_flow.etf"}
+    extraction = {
+        "value": 85.0,
+        "recent_5d": 85.0,
+        "total_120d": 1200.0,
+        "trend": "inflow",
+        "source_url": "https://data.eastmoney.com/etf",
+        "is_estimated": True,
+    }
+
+    assert _apply_extraction(payload, task, extraction) == "fund_flow"
+    assert payload["fund_flow"]["etf"]["is_estimated"] is True
+
+
 def test_task_planner_dedupes_rrr_and_reserve_ratio_aliases(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-04-28"},

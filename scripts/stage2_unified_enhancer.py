@@ -1149,6 +1149,8 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         if recent_5d is not None and total_120d is not None:
             flow["recent_5d"] = recent_5d
             flow["total_120d"] = total_120d
+            if indicator_key == "etf":
+                flow["is_estimated"] = extraction.get("is_estimated") is True
             if trend in {"inflow", "outflow"}:
                 flow["trend"] = "流入" if trend == "inflow" else "流出"
             flow["current_value"] = recent_5d

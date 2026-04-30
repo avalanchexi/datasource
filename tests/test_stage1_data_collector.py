@@ -345,6 +345,7 @@ def test_fetch_fx_from_tushare_discovers_dxy_fxcm_proxy(monkeypatch):
     assert result.current_rate == pytest.approx(102.5)
     assert result.daily_change == pytest.approx((102.5 / 101.0 - 1.0) * 100.0)
     assert result.change_120d == pytest.approx((102.5 / 101.0 - 1.0) * 100.0)
+    assert result.trend == "上行"
     assert result.source == "TuShare fx_daily(USDOLLAR.FXCM, FX_BASKET proxy)"
     assert result.as_of_date == "2026-04-27"
     assert result.note is not None
@@ -367,7 +368,12 @@ def test_fetch_fx_from_tushare_dxy_prefers_exact_usdollar_fxcm(monkeypatch):
 
         def fx_daily(self, **kwargs):
             self.daily_calls.append(kwargs)
-            return pd.DataFrame({"trade_date": ["20260427"], "bid_close": [102.5]})
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260424", "20260427"],
+                    "bid_close": [101.0, 102.5],
+                }
+            )
 
     class _Tushare:
         def __init__(self, pro):
@@ -387,6 +393,30 @@ def test_fetch_fx_from_tushare_dxy_prefers_exact_usdollar_fxcm(monkeypatch):
     assert pro.daily_calls == [
         {"ts_code": "USDOLLAR.FXCM", "start_date": "20251228", "end_date": "20260427"}
     ]
+
+
+def test_fetch_fx_from_tushare_dxy_returns_none_with_single_usable_row(monkeypatch):
+    class _Pro:
+        def fx_obasic(self, **_kwargs):
+            return pd.DataFrame({"ts_code": ["USDOLLAR.FXCM"]})
+
+        def fx_daily(self, **_kwargs):
+            return pd.DataFrame({"trade_date": ["20260427"], "bid_close": [102.5]})
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
+
+    assert result is None
 
 
 def test_fetch_fx_from_tushare_dxy_returns_none_without_usdollar_candidate(monkeypatch):
