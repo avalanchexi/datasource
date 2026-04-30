@@ -999,6 +999,8 @@ class MarketDataCollector:
             for _, row in df.iterrows():
                 rate = _pick_rate(row)
                 if rate is not None:
+                    if symbol == "DXY" and not 70 <= float(rate) <= 140:
+                        return None
                     usable_rows.append((row, rate))
             if symbol == "DXY" and len(usable_rows) < 2:
                 return None
@@ -1009,8 +1011,6 @@ class MarketDataCollector:
                 latest_row = df.iloc[-1]
                 latest_rate = _pick_rate(latest_row)
             if latest_rate is None:
-                return None
-            if symbol == "DXY" and not 70 <= float(latest_rate) <= 140:
                 return None
 
             prev_rate = None

@@ -473,6 +473,35 @@ def test_fetch_fx_from_tushare_dxy_rejects_out_of_range_proxy_value(monkeypatch)
     assert result is None
 
 
+def test_fetch_fx_from_tushare_dxy_rejects_out_of_range_prior_proxy_value(monkeypatch):
+    class _Pro:
+        def fx_obasic(self, **_kwargs):
+            return pd.DataFrame({"ts_code": ["USDOLLAR.FXCM"]})
+
+        def fx_daily(self, **_kwargs):
+            return pd.DataFrame(
+                {
+                    "trade_date": ["20260424", "20260427"],
+                    "bid_close": [1000.0, 102.5],
+                }
+            )
+
+    class _Tushare:
+        def __init__(self, pro):
+            self.pro = pro
+
+        def pro_api(self, *_args, **_kwargs):
+            return self.pro
+
+    monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
+    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    collector = MarketDataCollector("2026-04-27")
+
+    result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY缇庡厓鎸囨暟"))
+
+    assert result is None
+
+
 def test_fetch_fx_from_tushare_usdcny_skips_zero_quote_candidates(monkeypatch):
     class _Pro:
         def fx_daily(self, **_kwargs):
