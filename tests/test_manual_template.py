@@ -52,7 +52,7 @@ def test_manual_template_numeric_examples_have_url_evidence() -> None:
         if any(isinstance(item.get(field), (int, float)) for field in numeric_fields):
             evidence = " ".join(
                 str(item.get(field) or "")
-                for field in ("source_url", "source", "note", "_note")
+                for field in ("source_url", "sourceUrl", "url", "source", "note")
             )
             if "http://" not in evidence and "https://" not in evidence:
                 missing.append(item)
@@ -65,6 +65,9 @@ def test_manual_template_official_examples_are_not_estimated() -> None:
         payload["macro_indicators"]["industrial"],
         payload["forex"][0],
         payload["commodities"][0],
+        payload["fund_flow"]["northbound"],
+        payload["fund_flow"]["southbound"],
+        payload["fund_flow"]["etf"],
     ]
     for item in official_paths:
         assert item["is_estimated"] is False
