@@ -15,6 +15,7 @@ case "$BASH_PLATFORM" in
 esac
 
 VENV_ACTIVATE=""
+DATASOURCE_SELECTED_PYTHON=""
 if [ -f ".venv/bin/activate" ]; then
   VENV_ACTIVATE=".venv/bin/activate"
 elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; then
@@ -28,13 +29,13 @@ fi
 if [ -n "$VENV_ACTIVATE" ]; then
   # shellcheck disable=SC1090
   source "$VENV_ACTIVATE"
-  DATASOURCE_PYTHON="${DATASOURCE_PYTHON:-python}"
+  DATASOURCE_SELECTED_PYTHON="python"
 elif [ "${ALLOW_SYSTEM_PYTHON:-}" = "1" ]; then
   echo "[WARNING] Missing virtual environment; using current system Python because ALLOW_SYSTEM_PYTHON=1"
   if command -v python3 >/dev/null 2>&1; then
-    DATASOURCE_PYTHON="python3"
+    DATASOURCE_SELECTED_PYTHON="python3"
   elif command -v python >/dev/null 2>&1; then
-    DATASOURCE_PYTHON="python"
+    DATASOURCE_SELECTED_PYTHON="python"
   else
     echo "[ERROR] No python3 or python command found for system fallback"
     return 1 2>/dev/null || exit 1
@@ -45,10 +46,21 @@ else
   return 1 2>/dev/null || exit 1
 fi
 
+DATASOURCE_ALLEXPORT_WAS_SET=0
+case "$-" in
+  *a*) DATASOURCE_ALLEXPORT_WAS_SET=1 ;;
+esac
+
 set -a
 # shellcheck disable=SC1091
 source .env
-set +a
+if [ "$DATASOURCE_ALLEXPORT_WAS_SET" = "1" ]; then
+  set -a
+else
+  set +a
+fi
+
+DATASOURCE_PYTHON="$DATASOURCE_SELECTED_PYTHON"
 
 # Keep no_proxy/NO_PROXY, clear active proxy variables for direct connectivity.
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
@@ -66,3 +78,6 @@ fi
 export DATASOURCE_RUNTIME_DIR
 export DATASOURCE_PYTHON
 export PYTHONPATH
+
+unset DATASOURCE_SELECTED_PYTHON
+unset DATASOURCE_ALLEXPORT_WAS_SET

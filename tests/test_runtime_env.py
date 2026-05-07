@@ -59,12 +59,14 @@ def _run_source(
     *,
     env: Optional[dict] = None,
     path_prefix: Optional[str] = None,
+    pre_source: str = "",
 ) -> subprocess.CompletedProcess:
     merged = os.environ.copy()
     merged.pop("ALLOW_SYSTEM_PYTHON", None)
     merged.update(env or {})
     command = (
         "set -euo pipefail; "
+        f"{pre_source}"
         "source scripts/runtime_env.sh; "
         f"{script}"
     )
@@ -111,6 +113,48 @@ def test_runtime_env_uses_linux_venv_first(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout
     assert result.stdout.strip().splitlines()[-1] == "linux"
+
+
+def test_runtime_env_venv_python_ignores_env_file_override(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    with (root / ".env").open("a", encoding="utf-8") as handle:
+        handle.write("DATASOURCE_PYTHON=bad-python\n")
+    bin_dir = root / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "activate").write_text(
+        "export RUNTIME_ACTIVATE=linux\n",
+        encoding="utf-8",
+    )
+
+    result = _run_source(root, "printf '%s\\n' \"$DATASOURCE_PYTHON\"")
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "python"
+
+
+def test_runtime_env_venv_python_ignores_caller_override(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    bin_dir = root / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "activate").write_text(
+        "export RUNTIME_ACTIVATE=linux\n",
+        encoding="utf-8",
+    )
+
+    result = _run_source(
+        root,
+        "printf '%s\\n' \"$DATASOURCE_PYTHON\"",
+        env={"DATASOURCE_PYTHON": "bad-python"},
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "python"
 
 
 def test_runtime_env_uses_windows_venv_only_on_windows_bash(tmp_path: Path) -> None:
@@ -227,6 +271,104 @@ def test_runtime_env_system_fallback_prefers_python3_and_sets_pythonpath(tmp_pat
     assert last.startswith("python3|")
     assert "./src" in last
     assert "custom_path" in last
+
+
+def test_runtime_env_system_python_ignores_caller_override(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    fake_python = _write_fake_python(root, "python3")
+
+    result = _run_source(
+        root,
+        "printf '%s\\n' \"$DATASOURCE_PYTHON\"",
+        env={"ALLOW_SYSTEM_PYTHON": "1", "DATASOURCE_PYTHON": "bad-python"},
+        path_prefix=str(fake_python),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "python3"
+
+
+def test_runtime_env_system_python_ignores_env_file_override(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    with (root / ".env").open("a", encoding="utf-8") as handle:
+        handle.write("DATASOURCE_PYTHON=bad-python\n")
+    fake_python = _write_fake_python(root, "python3")
+
+    result = _run_source(
+        root,
+        "printf '%s\\n' \"$DATASOURCE_PYTHON\"",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+        path_prefix=str(fake_python),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "python3"
+
+
+def test_runtime_env_clears_active_proxies_and_keeps_no_proxy(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    fake_python = _write_fake_python(root, "python3")
+
+    result = _run_source(
+        root,
+        "printf '%s|%s|%s\\n' \"${http_proxy:-}\" \"${HTTPS_PROXY:-}\" \"${NO_PROXY:-}\"",
+        env={
+            "ALLOW_SYSTEM_PYTHON": "1",
+            "http_proxy": "http://proxy.local:8080",
+            "HTTPS_PROXY": "http://secure-proxy.local:8080",
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
+        path_prefix=str(fake_python),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "||localhost,127.0.0.1"
+
+
+def test_runtime_env_exports_runtime_dir(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    fake_python = _write_fake_python(root, "python3")
+
+    result = _run_source(
+        root,
+        "printf '%s\\n' \"$DATASOURCE_RUNTIME_DIR\"",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+        path_prefix=str(fake_python),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == str(root)
+
+
+def test_runtime_env_preserves_existing_allexport_state(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    fake_python = _write_fake_python(root, "python3")
+
+    result = _run_source(
+        root,
+        "case \"$-\" in *a*) printf 'allexport-on\\n' ;; *) printf 'allexport-off\\n' ;; esac",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+        path_prefix=str(fake_python),
+        pre_source="set -a; ",
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "allexport-on"
 
 
 def test_runtime_env_without_venv_requires_explicit_fallback(tmp_path: Path) -> None:
