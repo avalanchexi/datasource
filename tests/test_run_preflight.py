@@ -135,3 +135,46 @@ def test_preflight_accepts_non_2xx_http_response(tmp_path: Path) -> None:
     assert "[OK] DNS api.tavily.com" in result.stdout
     assert "[OK] HTTPS https://api.tavily.com" in result.stdout
     assert "Proxy cleared" in result.stdout
+
+
+def test_preflight_curl_transport_failure_with_000_output_fails(
+    tmp_path: Path,
+) -> None:
+    root = _copy_preflight(tmp_path)
+    (root / ".env").write_text(VALID_ENV, encoding="utf-8")
+    fake_bin = _write_fake_command(
+        root,
+        "getent",
+        "printf '127.0.0.1 %s\\n' \"${@: -1}\"\n",
+    )
+    _write_fake_command(root, "curl", "printf '000'\nexit 7\n")
+
+    result = _run_preflight(root, path_prefix=fake_bin)
+
+    assert result.returncode != 0
+    assert "HTTPS check failed" in result.stdout
+    assert "HTTP 000000" not in result.stdout
+
+
+def test_preflight_dns_uses_hostname_without_port(tmp_path: Path) -> None:
+    root = _copy_preflight(tmp_path)
+    (root / ".env").write_text(VALID_ENV, encoding="utf-8")
+    fake_bin = _write_fake_command(
+        root,
+        "getent",
+        "printf '%s\\n' \"$*\" >> getent-args.txt\n"
+        "case \"$*\" in *api.deepseek.com:443*) exit 9 ;; esac\n"
+        "printf '127.0.0.1 %s\\n' \"${@: -1}\"\n",
+    )
+    _write_fake_command(root, "curl", "printf '405'\nexit 0\n")
+
+    result = _run_preflight(
+        root,
+        env={"DEEPSEEK_BASE_URL": "https://api.deepseek.com:443/v1"},
+        path_prefix=fake_bin,
+    )
+
+    assert result.returncode == 0, result.stdout
+    dns_calls = (root / "getent-args.txt").read_text(encoding="utf-8")
+    assert "hosts api.deepseek.com\n" in dns_calls
+    assert "api.deepseek.com:443" not in dns_calls

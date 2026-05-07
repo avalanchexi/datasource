@@ -20,7 +20,7 @@ _url_host() {
 import sys
 from urllib.parse import urlparse
 parsed = urlparse(sys.argv[1])
-print(parsed.netloc or parsed.path)
+print(parsed.hostname or parsed.netloc or parsed.path)
 PY
 }
 
@@ -50,7 +50,11 @@ _check_https() {
   url="$1"
   code="000"
   if command -v curl >/dev/null 2>&1; then
-    code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 8 "$url" || printf '000')"
+    if code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 8 "$url")"; then
+      :
+    else
+      code="000"
+    fi
   else
     code="$("$DATASOURCE_PYTHON" - "$url" <<'PY'
 import http.client
@@ -70,7 +74,7 @@ except Exception:
 PY
 )"
   fi
-  if [ "$code" = "000" ]; then
+  if [[ ! "$code" =~ ^[0-9][0-9][0-9]$ ]] || [ "$code" = "000" ]; then
     echo "[FAIL] HTTPS check failed: $url"
     return 1
   fi
