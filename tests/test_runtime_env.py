@@ -156,7 +156,36 @@ def test_runtime_env_does_not_use_windows_venv_on_linux(tmp_path: Path) -> None:
     )
 
     assert result.returncode != 0
-    assert "Missing virtual environment" in result.stdout
+    assert ".venv exists but no usable activate script found" in result.stdout
+    assert "windows" not in result.stdout
+    assert "not-activated" not in result.stdout
+
+
+def test_runtime_env_windows_venv_on_linux_hard_fails_even_with_fallback(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    fake_uname = _write_fake_uname(root, "Linux")
+    scripts_dir = root / ".venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    (scripts_dir / "activate").write_text(
+        "export RUNTIME_ACTIVATE=windows\n",
+        encoding="utf-8",
+    )
+
+    result = _run_source(
+        root,
+        "printf '%s\\n' \"${RUNTIME_ACTIVATE:-not-activated}\"",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+        path_prefix=str(fake_uname),
+    )
+
+    assert result.returncode != 0
+    assert ".venv exists but no usable activate script found" in result.stdout
+    assert "using current system Python" not in result.stdout
     assert "windows" not in result.stdout
     assert "not-activated" not in result.stdout
 
