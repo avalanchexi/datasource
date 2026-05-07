@@ -19,6 +19,8 @@ if [ -f ".venv/bin/activate" ]; then
   VENV_ACTIVATE=".venv/bin/activate"
 elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; then
   VENV_ACTIVATE=".venv/Scripts/activate"
+elif [ "$IS_WINDOWS_NATIVE_BASH" != "1" ] && [ -f ".venv/Scripts/activate" ]; then
+  :
 elif [ -d ".venv" ]; then
   echo "[ERROR] .venv exists but no usable activate script found"
   echo "[ERROR] Recreate it with: python -m venv .venv"
