@@ -1,0 +1,124 @@
+{
+  "_rules": {
+    "purpose": "Copy category entries from this file into data/runs/${DATE_NH}/websearch_results_manual.json, then run scripts/stage2_5_injector.py.",
+    "source_url": "Every numeric manual value must include a single source_url string, or a URL in source/note.",
+    "is_estimated": "Official published values, official midpoint rates, exchange values, and index vendor values should use is_estimated=false. Use true only for spread estimates, formulas, proxy series, extrapolation, or other approximations.",
+    "allow_estimated": "--allow-estimated is not a global bypass. It only allows policy allowlist estimated keys to participate; compare_gaps, stale_redlist, and policy gate still apply.",
+    "bdi_estimated_allow_conditions": "BDI is allowlisted only when config/policy_rules.yaml secondary constraints pass: trusted_domains, max_age_days, value_range, unit_keywords."
+  },
+  "macro_indicators": {
+    "industrial": {
+      "_note": "工业增加值如果使用国家统计局 1-2月 累计同比作为流水线 current value, still set value_type=yoy_month and yoy_month explicitly, otherwise the injector may classify it as yoy_ytd and current_value will be missing. Source: https://www.stats.gov.cn/",
+      "indicator_name": "工业增加值",
+      "current_value": 6.3,
+      "yoy_month": 6.3,
+      "value_type": "yoy_month",
+      "previous_value": 5.9,
+      "change_rate": 6.78,
+      "unit": "%",
+      "date": "2026-02",
+      "report_period": "2026-02",
+      "source": "国家统计局",
+      "source_url": "https://www.stats.gov.cn/",
+      "is_estimated": false
+    },
+    "bdi": {
+      "_note": "If is_estimated=true, BDI must satisfy bdi_estimated_allow_conditions: trusted_domains, max_age_days<=2, value_range, and unit_keywords. Example source: https://www.investing.com/indices/baltic-dry",
+      "_rules": {
+        "trusted_domains": [
+          "balticexchange.com",
+          "tradingeconomics.com",
+          "investing.com",
+          "eastmoney.com"
+        ],
+        "max_age_days": 2,
+        "value_range": [
+          200.0,
+          10000.0
+        ],
+        "unit_keywords": [
+          "点",
+          "point",
+          "points"
+        ]
+      },
+      "indicator_name": "BDI",
+      "current_value": 2730,
+      "previous_value": 2650,
+      "change_rate": 3.02,
+      "unit": "points",
+      "date": "2026-05-06",
+      "source": "Investing.com",
+      "source_url": "https://www.investing.com/indices/baltic-dry",
+      "is_estimated": true,
+      "estimation_method": "trusted recent market page"
+    }
+  },
+  "forex": [
+    {
+      "pair": "USDCNY",
+      "name": "USD/CNY在岸",
+      "current_rate": 7.248,
+      "unit": "CNY",
+      "date": "2026-05-07",
+      "source": "CFETS/PBOC official quote",
+      "source_url": "https://www.chinamoney.com.cn/",
+      "is_estimated": false
+    }
+  ],
+  "bonds": [
+    {
+      "symbol": "CN10Y_CDB",
+      "name": "10年期国开债收益率",
+      "current_yield": 2.25,
+      "unit": "%",
+      "date": "2026-05-07",
+      "source": "manual spread estimate with source evidence",
+      "source_url": "https://yield.chinabond.com.cn/",
+      "is_estimated": true,
+      "estimation_method": "CN10Y plus observed CDB spread"
+    }
+  ],
+  "commodities": [
+    {
+      "symbol": "BCOM",
+      "name": "Bloomberg Commodity Index",
+      "current_price": 101.5,
+      "unit": "points",
+      "date": "2026-05-07",
+      "source": "Bloomberg index page",
+      "source_url": "https://www.bloomberg.com/quote/BCOM:IND",
+      "is_estimated": false
+    }
+  ],
+  "fund_flow": {
+    "northbound": {
+      "_note": "Use official or trusted current flow source. Do not use AKShare direct final values. Source example: https://data.eastmoney.com/hsgt/index.html",
+      "recent_5d": 85.6,
+      "total_120d": 1250.0,
+      "trend": "流入",
+      "source": "Stage2.5 manual",
+      "source_url": "https://data.eastmoney.com/hsgt/index.html",
+      "is_estimated": false
+    },
+    "southbound": {
+      "_note": "Use official or trusted current flow source. Source example: https://data.eastmoney.com/hsgt/index.html",
+      "recent_5d": 42.1,
+      "total_120d": 980.0,
+      "trend": "流入",
+      "source": "Stage2.5 manual",
+      "source_url": "https://data.eastmoney.com/hsgt/index.html",
+      "is_estimated": false
+    },
+    "etf": {
+      "_note": "ETF manual values must state whether they are news net-flow or TuShare total-size delta. Source example: https://data.eastmoney.com/etf/",
+      "recent_5d": 63.2,
+      "total_120d": 1500.0,
+      "trend": "流入",
+      "source": "Stage2.5 manual",
+      "source_url": "https://data.eastmoney.com/etf/",
+      "metric_basis": "news_net_flow",
+      "is_estimated": false
+    }
+  }
+}
