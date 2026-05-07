@@ -36,6 +36,30 @@ def _write_fake_uname(root: Path, system_name: str) -> None:
     (fake_bin / "uname").chmod(0o755)
 
 
+def _write_fake_venv_python(root: Path, *, windows: bool = False) -> Path:
+    if windows:
+        python_path = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        python_path = root / ".venv" / "bin" / "python"
+    python_path.write_bytes(b"#!/usr/bin/env bash\nprintf 'fake-venv-python\\n'\n")
+    python_path.chmod(0o755)
+    return python_path
+
+
+def _write_fake_python_commands(root: Path) -> Path:
+    fake_bin = root / "py-bin"
+    fake_bin.mkdir()
+    (fake_bin / "python").write_bytes(
+        b"#!/usr/bin/env bash\nprintf 'wrong-python\\n'\nexit 42\n"
+    )
+    (fake_bin / "python3").write_bytes(
+        b"#!/usr/bin/env bash\nprintf 'fake-python3\\n'\n"
+    )
+    (fake_bin / "python").chmod(0o755)
+    (fake_bin / "python3").chmod(0o755)
+    return fake_bin
+
+
 def _run(
     root: Path,
     *args: str,
@@ -104,6 +128,7 @@ def test_uses_windows_venv_activate_when_windows_native_bash(tmp_path: Path) -> 
     scripts_dir = root / ".venv" / "Scripts"
     scripts_dir.mkdir(parents=True)
     (scripts_dir / "activate").write_bytes(b"export RUN_CLEAN_ACTIVATE=windows\n")
+    _write_fake_venv_python(root, windows=True)
 
     result = _run(
         root,
@@ -166,6 +191,7 @@ def test_system_fallback_flag_still_prefers_existing_linux_venv(
     bin_dir = root / ".venv" / "bin"
     bin_dir.mkdir(parents=True)
     (bin_dir / "activate").write_bytes(b"export RUN_CLEAN_ACTIVATE=linux\n")
+    _write_fake_venv_python(root)
 
     result = _run(
         root,
@@ -203,6 +229,24 @@ def test_explicit_system_fallback_succeeds_and_sets_pythonpath(tmp_path: Path) -
     assert result.returncode == 0, result.stdout
     assert "WARNING" in result.stdout
     assert _last_output_line(result) == "./src"
+
+
+def test_python_command_uses_selected_system_python3(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+    fake_bin = _write_fake_python_commands(root)
+
+    result = _run(
+        root,
+        "python",
+        "-c",
+        "print('should use python3')",
+        env={"ALLOW_SYSTEM_PYTHON": "1", "PYTHONPATH": ""},
+        path_prefix=str(fake_bin),
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert _last_output_line(result) == "fake-python3"
+    assert "wrong-python" not in result.stdout
 
 
 def test_missing_env_fails_even_with_system_fallback(tmp_path: Path) -> None:

@@ -13,5 +13,9 @@ fi
 # shellcheck disable=SC1091
 source scripts/runtime_env.sh
 
+if [ "${1:-}" = "python" ]; then
+  set -- "$DATASOURCE_PYTHON" "${@:2}"
+fi
+
 exec env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
   PYTHONPATH="$PYTHONPATH" "$@"

@@ -15,11 +15,18 @@ case "$BASH_PLATFORM" in
 esac
 
 VENV_ACTIVATE=""
+VENV_PYTHON=""
 DATASOURCE_SELECTED_PYTHON=""
 if [ -f ".venv/bin/activate" ]; then
   VENV_ACTIVATE=".venv/bin/activate"
+  VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/bin/python"
 elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; then
   VENV_ACTIVATE=".venv/Scripts/activate"
+  if [ -x ".venv/Scripts/python.exe" ]; then
+    VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/Scripts/python.exe"
+  elif [ -x ".venv/Scripts/python" ]; then
+    VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/Scripts/python"
+  fi
 elif [ -d ".venv" ]; then
   echo "[ERROR] .venv exists but no usable activate script found"
   echo "[ERROR] Recreate it with: python -m venv .venv"
@@ -27,9 +34,14 @@ elif [ -d ".venv" ]; then
 fi
 
 if [ -n "$VENV_ACTIVATE" ]; then
+  if [ -z "$VENV_PYTHON" ] || [ ! -x "$VENV_PYTHON" ]; then
+    echo "[ERROR] .venv exists but no usable Python interpreter found"
+    echo "[ERROR] Recreate it with: python -m venv .venv"
+    return 1 2>/dev/null || exit 1
+  fi
   # shellcheck disable=SC1090
   source "$VENV_ACTIVATE"
-  DATASOURCE_SELECTED_PYTHON="python"
+  DATASOURCE_SELECTED_PYTHON="$VENV_PYTHON"
 elif [ "${ALLOW_SYSTEM_PYTHON:-}" = "1" ]; then
   echo "[WARNING] Missing virtual environment; using current system Python because ALLOW_SYSTEM_PYTHON=1"
   if command -v python3 >/dev/null 2>&1; then

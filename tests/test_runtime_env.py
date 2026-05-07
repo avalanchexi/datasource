@@ -53,6 +53,19 @@ def _write_fake_python(root: Path, name: str = "python3") -> Path:
     return fake_bin
 
 
+def _write_fake_venv_python(root: Path, *, windows: bool = False) -> Path:
+    if windows:
+        python_path = root / ".venv" / "Scripts" / "python.exe"
+    else:
+        python_path = root / ".venv" / "bin" / "python"
+    python_path.write_text(
+        "#!/usr/bin/env bash\nprintf 'fake-venv-python\\n'\n",
+        encoding="utf-8",
+    )
+    python_path.chmod(0o755)
+    return python_path
+
+
 def _run_source(
     root: Path,
     script: str,
@@ -108,6 +121,7 @@ def test_runtime_env_uses_linux_venv_first(tmp_path: Path) -> None:
         "export RUNTIME_ACTIVATE=linux\n",
         encoding="utf-8",
     )
+    _write_fake_venv_python(root)
 
     result = _run_source(root, "printf '%s\\n' \"$RUNTIME_ACTIVATE\"")
 
@@ -128,11 +142,12 @@ def test_runtime_env_venv_python_ignores_env_file_override(tmp_path: Path) -> No
         "export RUNTIME_ACTIVATE=linux\n",
         encoding="utf-8",
     )
+    venv_python = _write_fake_venv_python(root)
 
     result = _run_source(root, "printf '%s\\n' \"$DATASOURCE_PYTHON\"")
 
     assert result.returncode == 0, result.stdout
-    assert result.stdout.strip().splitlines()[-1] == "python"
+    assert result.stdout.strip().splitlines()[-1] == str(venv_python)
 
 
 def test_runtime_env_venv_python_ignores_caller_override(tmp_path: Path) -> None:
@@ -146,6 +161,7 @@ def test_runtime_env_venv_python_ignores_caller_override(tmp_path: Path) -> None
         "export RUNTIME_ACTIVATE=linux\n",
         encoding="utf-8",
     )
+    venv_python = _write_fake_venv_python(root)
 
     result = _run_source(
         root,
@@ -154,7 +170,7 @@ def test_runtime_env_venv_python_ignores_caller_override(tmp_path: Path) -> None
     )
 
     assert result.returncode == 0, result.stdout
-    assert result.stdout.strip().splitlines()[-1] == "python"
+    assert result.stdout.strip().splitlines()[-1] == str(venv_python)
 
 
 def test_runtime_env_uses_windows_venv_only_on_windows_bash(tmp_path: Path) -> None:
@@ -169,6 +185,7 @@ def test_runtime_env_uses_windows_venv_only_on_windows_bash(tmp_path: Path) -> N
         "export RUNTIME_ACTIVATE=windows\n",
         encoding="utf-8",
     )
+    _write_fake_venv_python(root, windows=True)
 
     result = _run_source(
         root,
@@ -249,6 +266,32 @@ def test_runtime_env_empty_venv_is_hard_failure(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert ".venv exists but no usable activate script found" in result.stdout
+    assert "should-not-run" not in result.stdout
+
+
+def test_runtime_env_venv_activate_without_python_is_hard_failure(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    bin_dir = root / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "activate").write_text(
+        "export RUNTIME_ACTIVATE=linux\n",
+        encoding="utf-8",
+    )
+
+    result = _run_source(
+        root,
+        "printf 'should-not-run\\n'",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+    )
+
+    assert result.returncode != 0
+    assert ".venv exists but no usable Python interpreter found" in result.stdout
+    assert "using current system Python" not in result.stdout
     assert "should-not-run" not in result.stdout
 
 
