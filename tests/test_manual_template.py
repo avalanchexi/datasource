@@ -3,7 +3,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-TEMPLATE = Path("data/runs/templates/manual_template.json")
+TEMPLATE = (
+    Path(__file__).resolve().parents[1] / "data/runs/templates/manual_template.json"
+)
 
 
 def _walk_values(value: Any) -> Iterable[dict]:
@@ -41,18 +43,21 @@ def test_manual_template_numeric_examples_have_url_evidence() -> None:
     payload = json.loads(TEMPLATE.read_text(encoding="utf-8"))
     missing = []
     numeric_fields = {
+        "change_rate",
         "current_value",
         "current_price",
         "current_rate",
         "current_yield",
+        "previous_value",
         "recent_5d",
         "total_120d",
+        "yoy_month",
     }
     for item in _walk_values(payload):
         if any(isinstance(item.get(field), (int, float)) for field in numeric_fields):
             evidence = " ".join(
                 str(item.get(field) or "")
-                for field in ("source_url", "sourceUrl", "url", "source", "note")
+                for field in ("source_url", "source", "note")
             )
             if "http://" not in evidence and "https://" not in evidence:
                 missing.append(item)
