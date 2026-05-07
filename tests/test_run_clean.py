@@ -8,8 +8,12 @@ from typing import Optional
 def _copy_runner(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
+    scripts = root / "scripts"
+    scripts.mkdir()
     runner = Path("run_clean.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
+    runtime = Path("scripts/runtime_env.sh").read_text(encoding="utf-8").replace("\r\n", "\n")
     (root / "run_clean.sh").write_bytes(runner.encode("utf-8"))
+    (scripts / "runtime_env.sh").write_bytes(runtime.encode("utf-8"))
     (root / ".env").write_bytes(
         b"TUSHARE_TOKEN=x\nTAVILY_API_KEY=y\nDEEPSEEK_API_KEY=z\n"
     )
@@ -73,6 +77,27 @@ def _last_output_line(result: subprocess.CompletedProcess) -> str:
     return lines[-1] if lines else ""
 
 
+def test_run_clean_script_uses_lf_line_endings() -> None:
+    body = Path("run_clean.sh").read_bytes()
+    assert b"\r\n" not in body
+
+
+def test_empty_venv_directory_fails_even_with_system_fallback(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+    (root / ".venv").mkdir()
+
+    result = _run(
+        root,
+        "printf",
+        "should not run\n",
+        env={"ALLOW_SYSTEM_PYTHON": "1"},
+    )
+
+    assert result.returncode == 1
+    assert ".venv exists but no usable activate script found" in result.stdout
+    assert "should not run" not in result.stdout
+
+
 def test_uses_windows_venv_activate_when_windows_native_bash(tmp_path: Path) -> None:
     root = _copy_runner(tmp_path)
     _write_fake_uname(root, "MINGW64_NT-10.0")
@@ -108,12 +133,11 @@ def test_rejects_windows_venv_activate_under_linux_without_system_fallback(
     )
 
     assert result.returncode == 1
-    assert "Missing virtual environment" in result.stdout
-    assert "ALLOW_SYSTEM_PYTHON=1" in result.stdout
+    assert ".venv exists but no usable activate script found" in result.stdout
     assert "windows" not in result.stdout
 
 
-def test_linux_with_only_windows_venv_can_use_explicit_system_fallback(
+def test_linux_with_only_windows_venv_fails_even_with_system_fallback(
     tmp_path: Path,
 ) -> None:
     root = _copy_runner(tmp_path)
@@ -130,10 +154,9 @@ def test_linux_with_only_windows_venv_can_use_explicit_system_fallback(
         path_prefix="./fake-bin",
     )
 
-    assert result.returncode == 0, result.stdout
-    assert "WARNING" in result.stdout
+    assert result.returncode == 1
+    assert ".venv exists but no usable activate script found" in result.stdout
     assert "windows" not in result.stdout
-    assert _last_output_line(result) == "./src"
 
 
 def test_system_fallback_flag_still_prefers_existing_linux_venv(
