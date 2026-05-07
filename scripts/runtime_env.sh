@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+
+DATASOURCE_RUNTIME_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$DATASOURCE_RUNTIME_DIR"
+
+if [ ! -f ".env" ]; then
+  echo "[ERROR] Missing .env. Copy from .env.example first."
+  return 1 2>/dev/null || exit 1
+fi
+
+BASH_PLATFORM="$(uname -s 2>/dev/null || echo unknown)"
+IS_WINDOWS_NATIVE_BASH=0
+case "$BASH_PLATFORM" in
+  MINGW*|MSYS*|CYGWIN*) IS_WINDOWS_NATIVE_BASH=1 ;;
+esac
+
+VENV_ACTIVATE=""
+if [ -f ".venv/bin/activate" ]; then
+  VENV_ACTIVATE=".venv/bin/activate"
+elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; then
+  VENV_ACTIVATE=".venv/Scripts/activate"
+elif [ -d ".venv" ]; then
+  echo "[ERROR] .venv exists but no usable activate script found"
+  echo "[ERROR] Recreate it with: python -m venv .venv"
+  return 1 2>/dev/null || exit 1
+fi
+
+if [ -n "$VENV_ACTIVATE" ]; then
+  # shellcheck disable=SC1090
+  source "$VENV_ACTIVATE"
+  DATASOURCE_PYTHON="${DATASOURCE_PYTHON:-python}"
+elif [ "${ALLOW_SYSTEM_PYTHON:-}" = "1" ]; then
+  echo "[WARNING] Missing virtual environment; using current system Python because ALLOW_SYSTEM_PYTHON=1"
+  if command -v python3 >/dev/null 2>&1; then
+    DATASOURCE_PYTHON="python3"
+  elif command -v python >/dev/null 2>&1; then
+    DATASOURCE_PYTHON="python"
+  else
+    echo "[ERROR] No python3 or python command found for system fallback"
+    return 1 2>/dev/null || exit 1
+  fi
+else
+  echo "[ERROR] Missing virtual environment. Run: python -m venv .venv"
+  echo "[ERROR] To use current system Python explicitly, set ALLOW_SYSTEM_PYTHON=1"
+  return 1 2>/dev/null || exit 1
+fi
+
+set -a
+# shellcheck disable=SC1091
+source .env
+set +a
+
+# Keep no_proxy/NO_PROXY, clear active proxy variables for direct connectivity.
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+
+EXISTING_PY_PATH="${PYTHONPATH:-}"
+if [ -n "$EXISTING_PY_PATH" ]; then
+  case ":$EXISTING_PY_PATH:" in
+    *":./src:"*|*":src:"*) PYTHONPATH="$EXISTING_PY_PATH" ;;
+    *) PYTHONPATH="./src:$EXISTING_PY_PATH" ;;
+  esac
+else
+  PYTHONPATH="./src"
+fi
+
+export DATASOURCE_RUNTIME_DIR
+export DATASOURCE_PYTHON
+export PYTHONPATH
