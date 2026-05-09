@@ -127,6 +127,49 @@ def test_summary_diagnostics_persist_tavily_unavailable_reason():
     assert summary_fields["tavily_unavailable_reason"] == "quota_or_rate_limit"
 
 
+def test_apply_extraction_clears_stale_status_on_matching_force_refresh():
+    market_payload = {
+        "metadata": {"date": "2026-05-08"},
+        "macro_indicators": {
+            "pmi_production": {
+                "indicator_name": "PMI production",
+                "current_value": 51.4,
+                "previous_value": 49.6,
+                "change_rate": 1.8,
+                "unit": "points",
+                "date": "2026-03",
+                "is_stale": True,
+                "expected_period": "2026-04",
+                "stale_reason": "actual_period_behind_expected",
+            }
+        },
+    }
+    task = {
+        "task_id": "pmi-production-refresh",
+        "indicator_key": "pmi_production",
+        "force_refresh": True,
+        "expected_period": "2026-04",
+    }
+    extraction = {
+        "value": 51.5,
+        "unit": "points",
+        "source_url": "https://www.stats.gov.cn/example.html",
+        "as_of_date": "2026-04-30",
+        "report_period": "2026-04",
+        "note": "deepseek_structured",
+    }
+
+    section = _apply_extraction(market_payload, task, extraction)
+
+    entry = market_payload["macro_indicators"]["pmi_production"]
+    assert section == "macro_indicators"
+    assert entry["current_value"] == 51.5
+    assert entry["date"] == "2026-04"
+    assert entry["as_of_date"] == "2026-04-30"
+    assert entry["is_stale"] is False
+    assert entry["stale_reason"] is None
+
+
 def test_task_planner_uses_rrr_profile_for_reserve_ratio_alias(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-04-28"},

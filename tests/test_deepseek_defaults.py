@@ -24,6 +24,19 @@ def test_stage2_cli_deepseek_model_defaults_to_v4_pro(monkeypatch) -> None:
     assert args.deepseek_model == "deepseek-v4-pro"
 
 
+def test_stage2_cli_deepseek_timeouts_match_v4_pro_latency(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["stage2_unified_enhancer.py", "--market-data", "market_data.json"],
+    )
+
+    args = stage2_unified_enhancer._parse_args()
+
+    assert args.deepseek_timeout == 30.0
+    assert args.llm_hard_timeout == 35.0
+
+
 def test_simple_report_summary_model_defaults_to_v4_pro(monkeypatch) -> None:
     seen: dict[str, str] = {}
 

@@ -1099,6 +1099,30 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
     as_of_date = extraction.get("as_of_date")
     report_period = extraction.get("report_period")
 
+    def _period_matches_expected(candidate: Optional[Any]) -> bool:
+        expected = task.get("expected_period")
+        if not expected or not candidate:
+            return False
+        return str(candidate)[:7] == str(expected)[:7]
+
+    def _write_period_fields(entry: Dict[str, Any]) -> None:
+        force_refresh = _is_force_refresh_task(task)
+        if report_period and (force_refresh or not entry.get("report_period")):
+            entry["report_period"] = report_period
+        if as_of_date and (force_refresh or not entry.get("as_of_date")):
+            entry["as_of_date"] = as_of_date
+        if force_refresh:
+            candidate_date = report_period or as_of_date
+            if candidate_date:
+                entry["date"] = candidate_date
+            if task.get("expected_period"):
+                entry["expected_period"] = task.get("expected_period")
+            if _period_matches_expected(report_period) or _period_matches_expected(as_of_date):
+                entry["is_stale"] = False
+                entry["stale_reason"] = None
+        elif not entry.get("date"):
+            entry["date"] = as_of_date or report_period or entry.get("date") or ""
+
     def _write_common_fields(entry: Dict[str, Any], value_key: str) -> None:
         entry[value_key] = value
         entry["source"] = source_label
@@ -1111,12 +1135,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
     if indicator_key in macro:
         entry = macro[indicator_key]
         _write_common_fields(entry, "current_value")
-        if report_period and not entry.get("report_period"):
-            entry["report_period"] = report_period
-        if as_of_date and not entry.get("as_of_date"):
-            entry["as_of_date"] = as_of_date
-        if not entry.get("date"):
-            entry["date"] = as_of_date or report_period or entry.get("date") or ""
+        _write_period_fields(entry)
         if str(indicator_key).lower() == "bdi":
             allowed, reasons = is_estimated_allowlisted("macro_indicators", indicator_key, entry)
             if allowed:
@@ -1131,12 +1150,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
     if monetary_key in monetary:
         entry = monetary[monetary_key]
         _write_common_fields(entry, "current_value")
-        if report_period and not entry.get("report_period"):
-            entry["report_period"] = report_period
-        if as_of_date and not entry.get("as_of_date"):
-            entry["as_of_date"] = as_of_date
-        if not entry.get("date"):
-            entry["date"] = as_of_date or report_period or entry.get("date") or ""
+        _write_period_fields(entry)
         return "monetary_policy"
 
     # fund_flow 回写（简化：将抽取值写 recent_5d，total_120d 同值）
@@ -3434,7 +3448,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--connect-timeout", type=float, default=10.0)
     parser.add_argument("--read-timeout", type=float, default=30.0)
     parser.add_argument("--max-retries", type=int, default=2)
-    parser.add_argument("--deepseek-timeout", type=float, default=8.0, help="DeepSeek抽取超时时间(秒)")
+    parser.add_argument("--deepseek-timeout", type=float, default=30.0, help="DeepSeek抽取超时时间(秒)")
     parser.add_argument("--deepseek-max-concurrency", type=int, default=1, help="DeepSeek并发上限")
     parser.add_argument("--deepseek-model", default="deepseek-v4-pro", help="DeepSeek模型名")
     parser.add_argument(
@@ -3509,7 +3523,7 @@ def _parse_args() -> argparse.Namespace:
         "--extract-topk", type=int, default=3, help="Tavily extract 使用的搜索结果条数（默认3）"
     )
     parser.add_argument(
-        "--llm-hard-timeout", type=float, default=10.0, help="对单次 LLM 抽取的 asyncio 硬超时（秒），0 表示不设硬超时"
+        "--llm-hard-timeout", type=float, default=35.0, help="对单次 LLM 抽取的 asyncio 硬超时（秒），0 表示不设硬超时"
     )
     parser.add_argument(
         "--fast-mode",

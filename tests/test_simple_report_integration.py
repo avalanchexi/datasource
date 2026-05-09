@@ -9,6 +9,7 @@ from pathlib import Path
 import json
 import pytest
 
+from datasource.generators import simple_report
 from datasource.generators.simple_report import generate_report
 
 
@@ -330,6 +331,85 @@ def test_commodity_table_prefers_120d_when_all_rows_also_have_ytd(tmp_path: Path
     assert "| WTI Oil | 70.25 $/bbl | N/A | -4.40% | down |" in text
     assert "+8.80%" not in text
     assert "+9.90%" not in text
+
+
+def test_quality_gate_does_not_red_flag_estimated_allowlist_items():
+    rules = {
+        "estimated_allowlist_keys": ["CN10Y_CDB", "bdi"],
+        "bdi_estimated_allow_conditions": {
+            "trusted_domains": ["tradingeconomics.com"],
+            "max_age_days": 9999,
+            "value_range": [200.0, 10000.0],
+            "unit_keywords": ["points"],
+        },
+    }
+    market = _base_market()
+    market["bonds"] = [
+        {
+            "symbol": "CN10Y_CDB",
+            "name": "China policy bank 10Y",
+            "current_yield": 1.86,
+            "change_120d_bp": -27.69,
+            "is_estimated": True,
+            "source_url": "https://example.com/cdb",
+        }
+    ]
+    market["macro_indicators"] = {
+        "bdi": {
+            "indicator_name": "BDI",
+            "current_value": 1410.0,
+            "previous_value": 1380.0,
+            "change_rate": 2.17,
+            "unit": "points",
+            "date": "2026-05-08",
+            "as_of_date": "2026-05-08",
+            "is_estimated": True,
+            "source_url": "https://tradingeconomics.com/commodity/baltic",
+        }
+    }
+
+    issues = simple_report._collect_quality_issues(market, policy_rules=rules)
+
+    assert not issues
+
+
+def test_commodity_daily_change_spike_is_hidden_in_report(tmp_path: Path):
+    market = _base_market()
+    market["commodities"] = [
+        {
+            "symbol": "BCOM",
+            "name": "BCOM index",
+            "current_price": 137.33,
+            "unit": "points",
+            "daily_change": 119.62,
+            "change_120d": 33.55,
+            "ytd_change": None,
+            "trend": "up",
+            "source": "websearch_manual",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 3",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| BCOM index | 137.33 points | \u2014\uff08\u5f02\u5e38\uff09 | +33.55% | up |" in text
+    assert "+119.62%" not in text
 
 
 def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):

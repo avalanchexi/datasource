@@ -16,6 +16,8 @@ from datetime import datetime
 from typing import Any, Optional
 
 from datasource.utils.coercion import to_float
+from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
+from datasource.utils.quality_metrics import build_quality_metrics
 from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import load_series_values
 
@@ -25,6 +27,7 @@ except Exception:  # pragma: no cover - 环境缺省时延迟导入
     OpenAI = None  # type: ignore
 
 NA_TEXT = "N/A（待 WebSearch）"
+ANOMALY_TEXT = "\u2014\uff08\u5f02\u5e38\uff09"
 DEFAULT_ASSET_CONCLUSION = "资金流转正，汇率偏稳，债券小幅下行，商品分化。"
 MAX_CONCLUSION_CHARS = 50
 QUALITY_REASONS = {
@@ -553,8 +556,9 @@ def _bond_display_date(bond: dict, report_date: str) -> str:
     return "N/A"
 
 
-def _collect_quality_issues(market_data: dict) -> list[dict]:
+def _collect_quality_issues(market_data: dict, policy_rules: Optional[dict] = None) -> list[dict]:
     issues: list[dict] = []
+    rules = policy_rules or load_policy_rules()
 
     def _issue(category: str, key: str, field: str, reason: str, detail: Optional[str] = None) -> None:
         if reason not in QUALITY_REASONS:
@@ -574,6 +578,10 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
             return list(section.values())
         return section or []
 
+    def _estimated_allowed(category: str, key: str, entry: dict) -> bool:
+        allowed, _ = is_estimated_allowlisted(category, key, entry, rules=rules)
+        return allowed
+
     # Bonds: change_120d_bp 缺失
     for bond in _as_list(market_data.get("bonds", [])):
         symbol = bond.get("symbol") or bond.get("name") or "bond"
@@ -581,7 +589,7 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
         if current in (None, 0.0):
             _issue("bonds", symbol, "current_yield", "manual_incomplete")
             continue
-        if bond.get("is_estimated"):
+        if bond.get("is_estimated") and not _estimated_allowed("bonds", str(symbol), bond):
             _issue("bonds", str(symbol), "current_yield", "estimated_not_allowed")
         change_120d = bond.get("change_120d_bp")
         if change_120d is None:
@@ -602,7 +610,7 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
         if curr in (None, "N/A"):
             _issue("macro_indicators", key, "current_value", "manual_incomplete")
             continue
-        if indicator.get("is_estimated"):
+        if indicator.get("is_estimated") and not _estimated_allowed("macro_indicators", key, indicator):
             _issue("macro_indicators", key, "current_value", "estimated_not_allowed")
         reason = _extract_reason(indicator.get("note"))
         if indicator.get("previous_value") is None and indicator.get("change_rate") is None:
@@ -614,7 +622,7 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
         if curr in (None, "N/A"):
             _issue("monetary_policy", key, "current_value", "manual_incomplete")
             continue
-        if policy.get("is_estimated"):
+        if policy.get("is_estimated") and not _estimated_allowed("monetary_policy", key, policy):
             _issue("monetary_policy", key, "current_value", "estimated_not_allowed")
         reason = _extract_reason(policy.get("note"))
         change = policy.get("change_from_120d")
@@ -622,6 +630,20 @@ def _collect_quality_issues(market_data: dict) -> list[dict]:
             _issue("monetary_policy", key, "change_from_120d", reason or "no_previous_value")
 
     return issues
+
+
+def _collect_anomaly_keys(market_data: dict, *, category: str, reason: str) -> set[str]:
+    try:
+        metrics = build_quality_metrics(market_data)
+    except Exception:
+        return set()
+    keys: set[str] = set()
+    for item in metrics.get("anomalies", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("category") == category and item.get("reason") == reason and item.get("key"):
+            keys.add(str(item.get("key")))
+    return keys
 
 
 def _write_quality_gate_logs(report_date: str, issues: list[dict]) -> None:
@@ -687,6 +709,11 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     commodities = _as_list(market_data.get('commodities', []))
     bonds = _as_list(market_data.get('bonds', []))
     forex_list = _as_list(market_data.get('forex', []))
+    commodity_daily_spike_keys = _collect_anomaly_keys(
+        market_data,
+        category="commodities",
+        reason="daily_change_spike",
+    )
 
     def _collect_estimated_items() -> list[str]:
         items: list[str] = []
@@ -819,12 +846,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             else:
                 latest_price = f"{current_price:.2f}"
 
-        daily_change = _fmt_change_cell(
-            comm.get("daily_change"),
-            digits=2,
-            suffix="%",
-            low_confidence=low_confidence,
-        )
+        if str(comm.get("symbol") or "") in commodity_daily_spike_keys:
+            daily_change = ANOMALY_TEXT
+        else:
+            daily_change = _fmt_change_cell(
+                comm.get("daily_change"),
+                digits=2,
+                suffix="%",
+                low_confidence=low_confidence,
+            )
         if use_commodity_120d_window:
             commodity_window_change = comm.get("change_120d")
         else:

@@ -7,6 +7,9 @@ cd "$ROOT_DIR"
 # shellcheck disable=SC1091
 source scripts/runtime_env.sh
 
+PREFLIGHT_CONNECT_TIMEOUT="${PREFLIGHT_CONNECT_TIMEOUT:-10}"
+PREFLIGHT_MAX_TIME="${PREFLIGHT_MAX_TIME:-15}"
+
 for k in TAVILY_API_KEY DEEPSEEK_API_KEY TUSHARE_TOKEN; do
   v=${!k-}
   if [ -z "$v" ] || [ "${#v}" -lt 20 ]; then
@@ -50,7 +53,7 @@ _check_https() {
   url="$1"
   code="000"
   if command -v curl >/dev/null 2>&1; then
-    if code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 8 "$url")"; then
+    if code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout "$PREFLIGHT_CONNECT_TIMEOUT" --max-time "$PREFLIGHT_MAX_TIME" "$url")"; then
       :
     else
       code="000"

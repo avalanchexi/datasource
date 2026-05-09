@@ -28,9 +28,11 @@ elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; the
     VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/Scripts/python"
   fi
 elif [ -d ".venv" ]; then
-  echo "[ERROR] .venv exists but no usable activate script found"
-  echo "[ERROR] Recreate it with: python -m venv .venv"
-  return 1 2>/dev/null || exit 1
+  if [ -n "$(find ".venv" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    echo "[ERROR] .venv exists but no usable activate script found"
+    echo "[ERROR] Recreate it with: python -m venv .venv"
+    return 1 2>/dev/null || exit 1
+  fi
 fi
 
 if [ -n "$VENV_ACTIVATE" ]; then

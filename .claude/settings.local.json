@@ -93,7 +93,8 @@
       "Bash(bash:*)",
       "Bash(fc-list :lang=zh)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(ALLOW_SYSTEM_PYTHON=1 bash run_preflight.sh)"
     ],
     "deny": [],
     "ask": []

@@ -13,7 +13,7 @@ def _write_runtime(root: Path) -> None:
         body = source.read_text(encoding="utf-8").replace("\r\n", "\n")
     else:
         body = "#!/usr/bin/env bash\nreturn 1\n"
-    (scripts / "runtime_env.sh").write_text(body, encoding="utf-8")
+    (scripts / "runtime_env.sh").write_bytes(body.replace("\r", "\n").encode("utf-8"))
 
 
 def _write_env(root: Path) -> None:
@@ -29,14 +29,15 @@ def _write_env(root: Path) -> None:
 def _write_fake_uname(root: Path, system_name: str) -> Path:
     fake_bin = root / "fake-bin"
     fake_bin.mkdir(exist_ok=True)
-    (fake_bin / "uname").write_text(
-        "#!/usr/bin/env bash\n"
-        "if [ \"${1:-}\" = \"-s\" ]; then\n"
-        f"  printf '%s\\n' {shlex.quote(system_name)}\n"
-        "else\n"
-        f"  printf '%s\\n' {shlex.quote(system_name)}\n"
-        "fi\n",
-        encoding="utf-8",
+    (fake_bin / "uname").write_bytes(
+        (
+            "#!/usr/bin/env bash\n"
+            "if [ \"${1:-}\" = \"-s\" ]; then\n"
+            f"  printf '%s\\n' {shlex.quote(system_name)}\n"
+            "else\n"
+            f"  printf '%s\\n' {shlex.quote(system_name)}\n"
+            "fi\n"
+        ).encode("utf-8")
     )
     (fake_bin / "uname").chmod(0o755)
     return fake_bin
@@ -45,10 +46,7 @@ def _write_fake_uname(root: Path, system_name: str) -> Path:
 def _write_fake_python(root: Path, name: str = "python3") -> Path:
     fake_bin = root / "py-bin"
     fake_bin.mkdir(exist_ok=True)
-    (fake_bin / name).write_text(
-        "#!/usr/bin/env bash\nprintf 'fake-python\\n'\n",
-        encoding="utf-8",
-    )
+    (fake_bin / name).write_bytes(b"#!/usr/bin/env bash\nprintf 'fake-python\\n'\n")
     (fake_bin / name).chmod(0o755)
     return fake_bin
 
@@ -58,12 +56,22 @@ def _write_fake_venv_python(root: Path, *, windows: bool = False) -> Path:
         python_path = root / ".venv" / "Scripts" / "python.exe"
     else:
         python_path = root / ".venv" / "bin" / "python"
-    python_path.write_text(
-        "#!/usr/bin/env bash\nprintf 'fake-venv-python\\n'\n",
-        encoding="utf-8",
-    )
+    python_path.write_bytes(b"#!/usr/bin/env bash\nprintf 'fake-venv-python\\n'\n")
     python_path.chmod(0o755)
     return python_path
+
+
+def _bash_path(path: str, *, root: Optional[Path] = None) -> str:
+    if root is not None:
+        try:
+            relative = Path(path).resolve().relative_to(root.resolve())
+            return f"./{relative.as_posix()}"
+        except ValueError:
+            pass
+    text = str(path)
+    if len(text) > 2 and text[1] == ":":
+        return f"/mnt/{text[0].lower()}{text[2:].replace(chr(92), '/')}"
+    return text
 
 
 def _run_source(
@@ -77,18 +85,28 @@ def _run_source(
     merged = os.environ.copy()
     merged.pop("ALLOW_SYSTEM_PYTHON", None)
     merged.update(env or {})
+    env_exports = ""
+    for key, value in (env or {}).items():
+        env_exports += f"export {key}={shlex.quote(str(value))}; "
     command = (
         "set -euo pipefail; "
+        f"{env_exports}"
         f"{pre_source}"
         "source scripts/runtime_env.sh; "
         f"{script}"
     )
     if path_prefix:
-        command = f"PATH={shlex.quote(path_prefix)}:\"$PATH\"; export PATH; {command}"
+        quoted_prefix = shlex.quote(_bash_path(path_prefix, root=root))
+        command = (
+            f"_path_prefix={quoted_prefix}; "
+            "PATH=\"$_path_prefix:$PATH\"; export PATH; "
+            f"{command}"
+        )
     return subprocess.run(
-        ["bash", "-c", command],
+        ["bash"],
         cwd=root,
         env=merged,
+        input=command,
         text=True,
         encoding="utf-8",
         errors="replace",
@@ -147,7 +165,7 @@ def test_runtime_env_venv_python_ignores_env_file_override(tmp_path: Path) -> No
     result = _run_source(root, "printf '%s\\n' \"$DATASOURCE_PYTHON\"")
 
     assert result.returncode == 0, result.stdout
-    assert result.stdout.strip().splitlines()[-1] == str(venv_python)
+    assert result.stdout.strip().splitlines()[-1] == _bash_path(str(venv_python))
 
 
 def test_runtime_env_venv_python_ignores_caller_override(tmp_path: Path) -> None:
@@ -170,7 +188,7 @@ def test_runtime_env_venv_python_ignores_caller_override(tmp_path: Path) -> None
     )
 
     assert result.returncode == 0, result.stdout
-    assert result.stdout.strip().splitlines()[-1] == str(venv_python)
+    assert result.stdout.strip().splitlines()[-1] == _bash_path(str(venv_python))
 
 
 def test_runtime_env_uses_windows_venv_only_on_windows_bash(tmp_path: Path) -> None:
@@ -251,22 +269,24 @@ def test_runtime_env_windows_venv_on_linux_hard_fails_even_with_fallback(
     assert "not-activated" not in result.stdout
 
 
-def test_runtime_env_empty_venv_is_hard_failure(tmp_path: Path) -> None:
+def test_runtime_env_empty_venv_allows_explicit_system_fallback(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write_runtime(root)
     _write_env(root)
     (root / ".venv").mkdir()
+    fake_python = _write_fake_python(root, "python3")
 
     result = _run_source(
         root,
-        "printf 'should-not-run\\n'",
+        "printf '%s\\n' \"$DATASOURCE_PYTHON\"",
         env={"ALLOW_SYSTEM_PYTHON": "1"},
+        path_prefix=str(fake_python),
     )
 
-    assert result.returncode != 0
-    assert ".venv exists but no usable activate script found" in result.stdout
-    assert "should-not-run" not in result.stdout
+    assert result.returncode == 0, result.stdout
+    assert "using current system Python because ALLOW_SYSTEM_PYTHON=1" in result.stdout
+    assert result.stdout.strip().splitlines()[-1] == "python3"
 
 
 def test_runtime_env_venv_activate_without_python_is_hard_failure(
@@ -392,7 +412,7 @@ def test_runtime_env_exports_runtime_dir(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stdout
-    assert result.stdout.strip().splitlines()[-1] == str(root)
+    assert result.stdout.strip().splitlines()[-1] == _bash_path(str(root))
 
 
 def test_runtime_env_preserves_existing_allexport_state(tmp_path: Path) -> None:

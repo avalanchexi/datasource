@@ -43,6 +43,18 @@ def _count_filled(items: List[Any], key: str) -> Tuple[int, int]:
     return filled, total
 
 
+def _period_matches_expected(item: Dict[str, Any]) -> bool:
+    expected = str(item.get("expected_period") or "").strip()
+    if not expected:
+        return False
+    expected_prefix = expected[:7]
+    for field in ("report_period", "as_of_date", "date"):
+        candidate = str(item.get(field) or "").strip()
+        if candidate and candidate[:7] == expected_prefix:
+            return True
+    return False
+
+
 def _source_level(source: str) -> str:
     src = (source or "").lower()
     if "tushare" in src or "人民银行" in src or "stats.gov" in src:
@@ -121,7 +133,7 @@ def build_quality_metrics(market_payload: Dict[str, Any]) -> Dict[str, Any]:
         for key, item in section.items():
             if not isinstance(item, dict):
                 continue
-            if not item.get("is_stale"):
+            if not item.get("is_stale") or _period_matches_expected(item):
                 continue
             stale_items.append(
                 {
