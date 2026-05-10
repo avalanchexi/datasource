@@ -1624,7 +1624,19 @@ def _expand_query_candidates(
                     "auto_parameters": task.get("auto_parameters"),
                 }
             )
-    return _dedupe_candidate_queries(candidates)
+    deduped = _dedupe_candidate_queries(candidates)
+    if include_primary and not field_scopes:
+        limit_raw = task.get("max_query_candidates")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else 0
+        except (TypeError, ValueError):
+            limit = 0
+        if limit > 0:
+            directed = [item for item in deduped if item.get("family") == "directed_retry"]
+            primary = [item for item in deduped if item.get("family") != "directed_retry"]
+            if len(primary) > limit:
+                return directed + primary[:limit]
+    return deduped
 
 
 def _build_directed_query(
@@ -3449,7 +3461,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--read-timeout", type=float, default=30.0)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--deepseek-timeout", type=float, default=30.0, help="DeepSeek抽取超时时间(秒)")
-    parser.add_argument("--deepseek-max-concurrency", type=int, default=1, help="DeepSeek并发上限")
+    parser.add_argument("--deepseek-max-concurrency", type=int, default=3, help="DeepSeek并发上限")
     parser.add_argument("--deepseek-model", default="deepseek-v4-pro", help="DeepSeek模型名")
     parser.add_argument(
         "--deepseek-base-url",
@@ -3489,7 +3501,19 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--log-output", default=None, help="Stage2 运行日志路径（默认: logs/runs/YYYYMMDD/stage2_unified_log.json）")
     parser.add_argument("--gap-monitor", default=None, help="gap_monitor 输出路径（默认: data/runs/YYYYMMDD/gap_monitor.json）")
-    parser.add_argument("--use-queue", action="store_true", help="开启 extraction 阶段 asyncio.Queue 消费模式")
+    parser.add_argument(
+        "--use-queue",
+        dest="use_queue",
+        action="store_true",
+        default=True,
+        help="开启 extraction 阶段 asyncio.Queue 消费模式（默认开启）",
+    )
+    parser.add_argument(
+        "--no-use-queue",
+        dest="use_queue",
+        action="store_false",
+        help="关闭 extraction 阶段 asyncio.Queue 消费模式，按任务串行抽取",
+    )
     parser.add_argument("--queue-concurrency", type=int, default=3, help="Queue 消费者并发数")
     parser.add_argument("--queue-maxsize", type=int, default=100, help="Queue 最大容量")
     parser.add_argument("--queue-retry-limit", type=int, default=2, help="Queue 抽取重试次数（超时/网络错误）")

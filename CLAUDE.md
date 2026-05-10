@@ -99,6 +99,7 @@ PYTHONPATH=./src python scripts/stage2_unified_enhancer.py \
   --extraction-backend deepseek \
   --deepseek-timeout 30 \
   --llm-hard-timeout 35 \
+  --deepseek-max-concurrency 3 \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
   --websearch-results data/runs/${DATE_NH}/websearch_results_auto.json \
   --log-output logs/runs/${DATE_NH}/stage2_unified_log.json \
@@ -131,7 +132,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 | 模式 | 关键参数 |
 |------|----------|
-| **Default (首次推荐)** | `--extraction-backend deepseek --deepseek-timeout 30 --llm-hard-timeout 35` |
+| **Default (首次推荐)** | `--extraction-backend deepseek --deepseek-timeout 30 --llm-hard-timeout 35 --deepseek-max-concurrency 3 --queue-concurrency 3` |
 | **Fast (仅补缺)** | `--extraction-backend regex --disable-extract` |
 | **重试指定缺口** | `--tasks USDCNY,northbound,etf` |
 | **资金流后端** | 固定 `--fund-flow-backend tavily`（当前唯一支持） |
@@ -143,6 +144,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 - DeepSeek 抽取采用”强 schema + 证据约束”，最少输出：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund_flow 还需 `recent_5d/total_120d/trend`。
 - DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖。
+- DeepSeek extraction 默认开启 queue，默认 `--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查时显式传 `--no-use-queue`。
+- `search_profiles` 支持 `max_query_candidates` 与 `extract_policy`；`BCOM/GSG/USDCNY/DXY/CN10Y_CDB` 默认限制 3 个 query candidates，并跳过 Tavily extract 直接用 snippets 抽取，降低 422 和 Stage2.5 手工补数压力。
 - `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
 - Tavily quota/rate limit 后同轮 fast-switch 到 `manual_required` skeleton；不要新增 quota probe 或重跑 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。失败分类需结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`tavily_unavailable_reason=quota_or_rate_limit`。

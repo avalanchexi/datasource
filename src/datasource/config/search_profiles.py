@@ -90,6 +90,7 @@ def _profile(
     bad_url_patterns: List[str] | None = None,
     report_usage: str | None = None,
     extract_policy: Dict[str, Any] | None = None,
+    max_query_candidates: int | None = None,
 ) -> SearchProfile:
     combined_queries = _dedupe_preserve(([query] if query else []) + list(queries or []))
     normalized_families: List[Dict[str, Any]] = []
@@ -150,6 +151,7 @@ def _profile(
         "bad_url_patterns": _dedupe_preserve(bad_url_patterns or []),
         "report_usage": report_usage,
         "extract_policy": extract_policy or {},
+        "max_query_candidates": max_query_candidates,
     }
 
 
@@ -1290,6 +1292,130 @@ def _apply_report_usage_profiles() -> None:
             "good_url_patterns": ["tradingeconomics.com", "investing.com/indices", "data.eastmoney.com/cjsj"],
             "bad_url_patterns": ["/Circulars/", "/faqs", "market-announcements", "2018"],
             "report_usage": "Stage4 macro table and Pring macro score require current_value plus comparable previous/change",
+        }
+    )
+
+    _prepend_profile_family(
+        "BCOM",
+        {
+            "name": "bloomberg_index_quote",
+            "queries": [
+                "BCOM:IND Bloomberg Commodity Index quote latest level",
+                "Bloomberg Commodity Index BCOM latest level",
+                "BCOM Bloomberg Commodity Index current quote",
+            ],
+            "preferred_domains": ["bloomberg.com", "tradingeconomics.com", "stockcharts.com"],
+            "required_keywords": ["BCOM", "Bloomberg Commodity Index"],
+            "exclude_keywords": ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"],
+        },
+    )
+    SEARCH_PROFILES["BCOM"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["BCOM:IND", "Bloomberg Commodity Index", "BCOM", "level", "last price"],
+            "good_url_patterns": ["bloomberg.com/quote/BCOM:IND", "tradingeconomics.com", "stockcharts.com"],
+            "bad_url_patterns": ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    _prepend_profile_family(
+        "GSG",
+        {
+            "name": "ishares_current_quote",
+            "queries": [
+                "iShares S&P GSCI Commodity-Indexed Trust GSG current quote",
+                "NYSEARCA GSG iShares S&P GSCI Commodity-Indexed Trust price",
+                "GSG ETF latest price iShares BlackRock",
+            ],
+            "preferred_domains": ["ishares.com", "blackrock.com", "investing.com"],
+            "required_keywords": ["GSG", "iShares"],
+            "exclude_keywords": ["fund flows", "net inflow", "net outflow", "AUM change"],
+        },
+    )
+    SEARCH_PROFILES["GSG"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["GSG", "iShares S&P GSCI Commodity-Indexed Trust", "market price", "NAV"],
+            "good_url_patterns": ["ishares.com/us/products", "blackrock.com", "investing.com/etfs"],
+            "bad_url_patterns": ["fund flows", "net inflow", "net outflow", "AUM change", "holding", "portfolio"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    _prepend_profile_family(
+        "USDCNY",
+        {
+            "name": "onshore_current_quote",
+            "queries": [
+                "USD/CNY onshore spot rate latest China Foreign Exchange Trade System",
+                "USD/CNY current rate ChinaMoney latest",
+                "USDCNY onshore spot quote latest",
+            ],
+            "preferred_domains": ["chinamoney.com.cn", "cfets.com.cn", "investing.com", "tradingeconomics.com"],
+            "required_keywords": ["USD/CNY", "USDCNY"],
+            "exclude_keywords": ["bankofchina", "Bank of China", "cash selling", "bank note", "currency converter"],
+        },
+    )
+    SEARCH_PROFILES["USDCNY"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["USD/CNY", "USDCNY", "onshore", "spot", "central parity"],
+            "good_url_patterns": ["chinamoney.com.cn", "cfets.com.cn", "investing.com/currencies/usd-cny"],
+            "bad_url_patterns": ["bankofchina", "boc.cn", "cash selling", "bank note", "currency converter"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    _prepend_profile_family(
+        "DXY",
+        {
+            "name": "index_current_quote",
+            "queries": [
+                "US Dollar Index DXY current quote latest",
+                "DXY US Dollar Index latest value Investing.com",
+                "ICE US Dollar Index DXY latest level",
+            ],
+            "preferred_domains": ["investing.com", "tradingeconomics.com", "theice.com", "marketwatch.com"],
+            "required_keywords": ["DXY", "US Dollar Index"],
+            "exclude_keywords": ["DXY news", "forecast", "analysis", "outlook"],
+        },
+    )
+    SEARCH_PROFILES["DXY"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["DXY", "US Dollar Index", "latest", "last", "level"],
+            "good_url_patterns": [
+                "investing.com/indices/us-dollar-index",
+                "tradingeconomics.com",
+                "marketwatch.com/investing/index/dxy",
+            ],
+            "bad_url_patterns": ["DXY news", "forecast", "analysis", "outlook", "opinion"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    _prepend_profile_family(
+        "CN10Y_CDB",
+        {
+            "name": "policy_bank_yield_quote",
+            "queries": [
+                "CDB 10Y bond yield ChinaBond latest",
+                "China Development Bank 10 year bond yield latest",
+                "policy bank bond 10Y yield China latest",
+            ],
+            "preferred_domains": ["chinabond.com.cn", "chinamoney.com.cn", "cfets.com.cn", "eastmoney.com"],
+            "required_keywords": ["CDB", "10Y", "yield"],
+            "exclude_keywords": ["China 10Y Treasury", "government bond", "sovereign bond"],
+        },
+    )
+    SEARCH_PROFILES["CN10Y_CDB"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["CDB", "China Development Bank", "policy bank", "10Y", "yield"],
+            "good_url_patterns": ["chinabond.com.cn", "chinamoney.com.cn", "cfets.com.cn", "eastmoney.com"],
+            "bad_url_patterns": ["China 10Y Treasury", "government bond", "sovereign bond", "CN10Y"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
     )
 

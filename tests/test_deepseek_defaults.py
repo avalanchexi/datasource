@@ -37,6 +37,39 @@ def test_stage2_cli_deepseek_timeouts_match_v4_pro_latency(monkeypatch) -> None:
     assert args.llm_hard_timeout == 35.0
 
 
+def test_stage2_cli_uses_parallel_deepseek_defaults(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["stage2_unified_enhancer.py", "--market-data", "market_data.json"],
+    )
+
+    args = stage2_unified_enhancer._parse_args()
+
+    assert args.use_queue is True
+    assert args.queue_concurrency == 3
+    assert args.deepseek_max_concurrency == 3
+
+
+def test_stage2_cli_can_disable_queue_explicitly(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage2_unified_enhancer.py",
+            "--market-data",
+            "market_data.json",
+            "--no-use-queue",
+        ],
+    )
+
+    args = stage2_unified_enhancer._parse_args()
+
+    assert args.use_queue is False
+    assert args.queue_concurrency == 3
+    assert args.deepseek_max_concurrency == 3
+
+
 def test_simple_report_summary_model_defaults_to_v4_pro(monkeypatch) -> None:
     seen: dict[str, str] = {}
 

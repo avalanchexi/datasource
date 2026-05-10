@@ -322,6 +322,7 @@ class Stage2TaskPlanner:
             "low_score_threshold": profile.get("low_score_threshold"),
             "allow_low_score_extract": profile.get("allow_low_score_extract", False),
             "extract_policy": profile.get("extract_policy", {}),
+            "max_query_candidates": profile.get("max_query_candidates"),
             "source_hint": source_hint,
             "trigger_reason": trigger_reason,
             "force_refresh": trigger_reason == "stale_data",

@@ -123,7 +123,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
   --extraction-backend deepseek \
   --deepseek-timeout 30 \
   --llm-hard-timeout 35 \
-  --deepseek-max-concurrency 1 \
+  --deepseek-max-concurrency 3 \
   --queue-retry-limit 0 \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
   --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
@@ -141,7 +141,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
   --extraction-backend regex \
   --disable-extract \
   --deepseek-timeout 8 \
-  --deepseek-max-concurrency 1 \
+  --deepseek-max-concurrency 0 \
   --queue-retry-limit 0 \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
   --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
@@ -213,7 +213,9 @@ if comp < 0.8:
 ## 6. Stage2 搜索/抽取规则
 - Stage2 Unified 中 fund flow 与 forex 统一使用 `tavily`；`--fund-flow-backend` 当前仅支持 `tavily`。
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`；宏观/低时效指标用 `time_range=year/month`, `max_results<=6`, `search_depth=basic`。
-- `search_profiles` 支持 `query_families`、`queries`、`field_queries`、`exclude_domains`；Stage2 记录 `query_used/query_family_used/query_attempts`。
+- `search_profiles` 支持 `query_families`、`queries`、`field_queries`、`exclude_domains`、`max_query_candidates`、`extract_policy`；Stage2 记录 `query_used/query_family_used/query_attempts`。
+- DeepSeek extraction 默认开启 queue：`--use-queue --queue-concurrency 3 --deepseek-max-concurrency 3`；需要串行排查时显式传 `--no-use-queue`。
+- `BCOM/GSG/USDCNY/DXY/CN10Y_CDB` 等实时报价高缺口 profile 默认 `max_query_candidates=3`，并跳过 Tavily extract，直接将 Tavily search snippets 交给 DeepSeek schema 抽取，以减少 422 冷却和 Stage2.5 补数压力。
 - 多 query 选优按后过滤质量，而不是原始 `score_max`：先做域名、时效、关键词、发布机构、期次过滤，再选 `usable_count` 更高的 query，并统计 `post_filter_query_switch_count`。
 - 全部结果 `score_max < low_score_threshold`（默认 0.2）则跳过抽取，标记 `manual_required`，统计 `low_score_drop`。
 - Tavily extract 422 默认回退 DeepSeek 从 snippets 抽取；同指标连续 422 可按指标冷却（`extract_cooldown_count`），不会全局停用其他指标 extract。仍不稳时用 `--disable-extract` 或 `--extract-topk 1`。

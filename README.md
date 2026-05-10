@@ -66,7 +66,7 @@ PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
   --output data/runs/${DATE_NH}/market_data_stage2.json \
   --execute-search --phase all --fund-flow-backend tavily \
   --extraction-backend regex --disable-extract \
-  --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1 \
+  --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 0 \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
   --log-output logs/runs/${DATE_NH}/stage2_unified_log.json \
   --gap-monitor data/runs/${DATE_NH}/gap_monitor.json \
@@ -526,15 +526,15 @@ python3 scripts/stage2_unified_enhancer.py \
   --task-log logs/runs/20251203/stage_task_log.jsonl
 ```
 
-可选：开启队列化抽取以削峰限流
+默认：队列化抽取已开启；可显式调整并发，排障时用 `--no-use-queue` 关闭
 ```bash
-  --use-queue --queue-concurrency 3 --queue-retry-limit 1
+  --queue-concurrency 3 --deepseek-max-concurrency 3
 ```
 
 ## 关键默认值
 - fund_flow_backend: `tavily`
 - deepseek_model: `deepseek-v4-pro`
-- deepseek_timeout: 12s；超时/网络错误自动重试 1 次
+- deepseek_timeout: 30s；llm_hard_timeout: 35s；DeepSeek 默认并发 3，extraction queue 默认开启
 - 实时类搜索参数：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
 - 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
 

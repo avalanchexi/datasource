@@ -232,6 +232,56 @@ def test_profiles_expose_report_usage_contract_for_high_risk_tasks():
     assert "stats.gov.cn" in industrial["good_url_patterns"]
 
 
+def test_realtime_quote_profiles_use_snippet_extraction_and_small_query_budget():
+    for key in ("BCOM", "GSG", "USDCNY", "DXY", "CN10Y_CDB"):
+        profile = SEARCH_PROFILES[key]
+
+        assert profile["max_query_candidates"] == 3
+        assert profile["extract_policy"]["use_tavily_extract"] is False
+        assert profile["extract_policy"]["extract_topk"] == 0
+
+
+def test_high_gap_quote_profiles_have_report_quality_patterns():
+    bcom = SEARCH_PROFILES["BCOM"]
+    assert "BCOM:IND" in bcom["evidence_keywords"]
+    assert "bloomberg.com/quote/BCOM:IND" in bcom["good_url_patterns"]
+    assert "BCOMX" in bcom["bad_url_patterns"]
+
+    gsg = SEARCH_PROFILES["GSG"]
+    assert "iShares S&P GSCI Commodity-Indexed Trust" in gsg["evidence_keywords"]
+    assert "ishares.com/us/products" in gsg["good_url_patterns"]
+    assert "fund flows" in gsg["bad_url_patterns"]
+
+    usdcny = SEARCH_PROFILES["USDCNY"]
+    assert "USD/CNY" in usdcny["evidence_keywords"]
+    assert "chinamoney.com.cn" in usdcny["good_url_patterns"]
+    assert "bankofchina" in usdcny["bad_url_patterns"]
+
+    dxy = SEARCH_PROFILES["DXY"]
+    assert "US Dollar Index" in dxy["evidence_keywords"]
+    assert "investing.com/indices/us-dollar-index" in dxy["good_url_patterns"]
+    assert "DXY news" in dxy["bad_url_patterns"]
+
+    cn10y_cdb = SEARCH_PROFILES["CN10Y_CDB"]
+    assert "CDB" in cn10y_cdb["evidence_keywords"]
+    assert "chinabond.com.cn" in cn10y_cdb["good_url_patterns"]
+    assert "China 10Y Treasury" in cn10y_cdb["bad_url_patterns"]
+
+
+def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-10"},
+        "missing_items": [{"key": "BCOM"}],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "BCOM")
+
+    assert task["max_query_candidates"] == 3
+    assert task["extract_policy"]["use_tavily_extract"] is False
+    assert task["extract_policy"]["extract_topk"] == 0
+
+
 def test_fund_flow_profiles_have_field_queries_for_all_report_windows():
     for key in ("northbound", "southbound", "etf"):
         profile = SEARCH_PROFILES[key]
@@ -251,6 +301,67 @@ def test_etf_primary_query_family_is_all_market_window_search():
     assert "全市场" in joined
     assert "近5日" in joined
     assert "120" in joined
+
+
+def test_expand_query_candidates_applies_profile_budget_after_dedup():
+    task = {
+        "indicator_key": "BCOM",
+        "preferred_domains": [],
+        "exclude_domains": [],
+        "required_keywords": [],
+        "exclude_keywords": [],
+        "query_families": [
+            {"name": "primary", "queries": ["q1", "q2", "q2"]},
+            {"name": "fallback", "queries": ["q3", "q4"]},
+        ],
+        "max_query_candidates": 2,
+    }
+
+    candidates = stage2._expand_query_candidates(task)
+
+    assert [item["query"] for item in candidates] == ["q1", "q2"]
+
+
+def test_expand_query_candidates_does_not_count_directed_retry_against_primary_budget():
+    task = {
+        "indicator_key": "BCOM",
+        "preferred_domains": [],
+        "exclude_domains": [],
+        "required_keywords": [],
+        "exclude_keywords": [],
+        "query_families": [
+            {"name": "primary", "queries": ["q1", "q2", "q3"]},
+        ],
+        "max_query_candidates": 2,
+    }
+
+    candidates = stage2._expand_query_candidates(task, directed_query_override="directed q")
+
+    assert [item["query"] for item in candidates] == ["directed q", "q1", "q2"]
+    assert candidates[0]["family"] == "directed_retry"
+
+
+def test_expand_query_candidates_does_not_budget_field_scope_queries():
+    task = {
+        "indicator_key": "etf",
+        "preferred_domains": [],
+        "exclude_domains": [],
+        "required_keywords": [],
+        "exclude_keywords": [],
+        "field_queries": {
+            "recent_5d": ["recent q1", "recent q2"],
+            "total_120d": ["total q1"],
+        },
+        "max_query_candidates": 1,
+    }
+
+    candidates = stage2._expand_query_candidates(
+        task,
+        field_scopes=["recent_5d", "total_120d"],
+        include_primary=False,
+    )
+
+    assert [item["query"] for item in candidates] == ["recent q1", "recent q2", "total q1"]
 
 
 def test_policy_profiles_distinguish_current_level_and_operation_notice():

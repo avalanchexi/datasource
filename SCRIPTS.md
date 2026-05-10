@@ -16,10 +16,10 @@
 **状态**: ✅ 更新（Tavily+DeepSeek，去 MCP，支持队列）
 
 **关键默认**:
-- fund_flow_backend=`tavily`；DeepSeek 模型=`deepseek-reasoner`；timeout=10s
+- fund_flow_backend=`tavily`；DeepSeek 模型=`deepseek-v4-pro`；timeout=30s；hard timeout=35s；默认并发=3
 - 实时类：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
 - 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
-- 可选队列：`--use-queue --queue-concurrency 3 --queue-retry-limit 1`
+- 默认启用队列：`--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查可传 `--no-use-queue`
 
 **使用**:
 ```bash
@@ -35,7 +35,7 @@ python3 scripts/stage2_unified_enhancer.py \
   --gap-monitor data/runs/YYYYMMDD/gap_monitor.json \
   --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json
 ```
-可选队列：追加 `--use-queue --queue-concurrency 3 --queue-retry-limit 1`
+队列默认开启；如需显式配置可追加 `--queue-concurrency 3 --deepseek-max-concurrency 3`，串行排查传 `--no-use-queue`
 
 **输出**:
 - 增强后的 market_data JSON
@@ -47,8 +47,8 @@ python3 scripts/stage2_unified_enhancer.py \
 - 禁用无效代理：命令前加 `env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY` 或传 `--http-proxy '' --https-proxy ''`。
 - 资金流后端仅支持 Tavily：使用 `--fund-flow-backend tavily`；搜索失败、低分或超时后转 Stage2.5 manual JSON 补数。
 - 极速模式（跳过 LLM）：`--extraction-backend regex --queue-concurrency 6 --deepseek-max-concurrency 0 --deepseek-timeout 8 --queue-retry-limit 0`，几分钟跑完但精度略降。
-- 必用 LLM 时：`--deepseek-timeout 8 --queue-concurrency 5 --deepseek-max-concurrency 4 --queue-retry-limit 0`，可分批跑 `--phase essential` 再 `--phase assets`。
-- 降低 Tavily extract 负载：如需手动调优，可把代码里 `top_for_extract = snippets[:3]` 改为 `[:2]`，或将商品/外汇任务的 `extract_depth` 设为 `"basic"`。
+- 必用 LLM 时：默认 `--deepseek-timeout 30 --llm-hard-timeout 35 --queue-concurrency 3 --deepseek-max-concurrency 3 --queue-retry-limit 0`，可分批跑 `--phase essential` 再 `--phase assets`。
+- 降低 Tavily extract 负载：优先用 `search_profiles.extract_policy` 调整；`BCOM/GSG/USDCNY/DXY/CN10Y_CDB` 已默认跳过 Tavily extract，直接用 snippets 抽取。
 - 复用缓存：保留 `data/cache/tavily_cache.sqlite`，第二轮只跑缺口，提升 `cache_hit_rate`。
 - 新增快捷参数：`--fast-mode`（自动启用 regex 抽取、并发放大、8s 硬超时、禁用 extract，资金流仍使用 Tavily）；`--disable-extract` 跳过 Tavily extract；`--extract-topk N` 控制 extract 使用的搜索条数；`--llm-hard-timeout 12` 为 LLM 抽取增加 asyncio 硬超时。
 

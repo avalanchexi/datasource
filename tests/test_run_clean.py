@@ -60,6 +60,36 @@ def _write_fake_python_commands(root: Path) -> Path:
     return fake_bin
 
 
+def _bash_path(path: str) -> str:
+    normalized = path.replace("\\", "/")
+    if len(normalized) >= 2 and normalized[1] == ":":
+        for converter in ("wslpath -u", "cygpath -u"):
+            result = subprocess.run(
+                ["bash", "-lc", f"command -v {converter.split()[0]} >/dev/null 2>&1 && {converter} {shlex.quote(path)}"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            converted = result.stdout.strip()
+            if result.returncode == 0 and converted:
+                return converted
+        platform = subprocess.run(
+            ["bash", "-lc", "uname -s"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).stdout.strip()
+        prefix = "/mnt" if platform == "Linux" else ""
+        return f"{prefix}/{normalized[0].lower()}/{normalized[2:].lstrip('/')}"
+    return normalized
+
+
 def _run(
     root: Path,
     *args: str,
@@ -82,7 +112,7 @@ def _run(
         ]
     )
     if path_prefix is not None:
-        command = f"PATH={shlex.quote(path_prefix)}:\"$PATH\"; export PATH; {command}"
+        command = f"PATH={shlex.quote(_bash_path(path_prefix))}:\"$PATH\"; export PATH; {command}"
     return subprocess.run(
         ["bash", "-c", command],
         cwd=root,
@@ -106,20 +136,21 @@ def test_run_clean_script_uses_lf_line_endings() -> None:
     assert b"\r\n" not in body
 
 
-def test_empty_venv_directory_fails_even_with_system_fallback(tmp_path: Path) -> None:
+def test_empty_venv_directory_uses_explicit_system_fallback(tmp_path: Path) -> None:
     root = _copy_runner(tmp_path)
     (root / ".venv").mkdir()
 
     result = _run(
         root,
         "printf",
-        "should not run\n",
+        "fallback run\n",
         env={"ALLOW_SYSTEM_PYTHON": "1"},
     )
 
-    assert result.returncode == 1
-    assert ".venv exists but no usable activate script found" in result.stdout
-    assert "should not run" not in result.stdout
+    assert result.returncode == 0, result.stdout
+    assert "Missing virtual environment" in result.stdout
+    assert ".venv exists but no usable activate script found" not in result.stdout
+    assert _last_output_line(result) == "fallback run"
 
 
 def test_uses_windows_venv_activate_when_windows_native_bash(tmp_path: Path) -> None:
