@@ -465,6 +465,13 @@ def test_task_planner_does_not_attach_monthly_tokens_to_daily_quotes(tmp_path: P
     assert "2026-05-12" in joined or "2026年5月12日" in joined
 
 
+def test_task_planner_daily_quote_context_checks_indicator_key_when_profile_differs(tmp_path: Path):
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+
+    assert planner._time_context_type("legacy_primary", "GC=F", None) == "daily_quote"
+    assert planner._time_context_type("legacy_primary", "GC=F", "2026-04") == "monthly_period"
+
+
 def test_task_planner_gives_pmi_production_official_period_profile(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-05-12"},

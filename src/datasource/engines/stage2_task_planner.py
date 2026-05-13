@@ -285,8 +285,7 @@ class Stage2TaskPlanner:
     def _time_context_type(self, profile_key: str, indicator_key: str, expected_period: Optional[str]) -> str:
         if expected_period:
             return "monthly_period"
-        normalized = profile_key or indicator_key
-        return "daily_quote" if normalized in DAILY_QUOTE_KEYS else "monthly_period"
+        return "daily_quote" if profile_key in DAILY_QUOTE_KEYS or indicator_key in DAILY_QUOTE_KEYS else "monthly_period"
 
     def _expected_period_tokens_for(
         self,
