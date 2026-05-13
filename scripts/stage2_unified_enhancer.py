@@ -561,6 +561,13 @@ def _filter_by_domain(
     return snippets if fallback_to_original else []
 
 
+def _official_extract_domains(extract_policy: Dict[str, Any]) -> List[str]:
+    if not extract_policy.get("official_domains_only"):
+        return []
+    domains = extract_policy.get("official_domains") or []
+    return [str(domain).strip().lower() for domain in domains if str(domain).strip()]
+
+
 def _snippet_blob(snippet: Dict[str, Any]) -> str:
     return " ".join(
         [
@@ -2608,7 +2615,22 @@ async def _execute_tasks(
                                 if cooldown_until and time.time() < cooldown_until:
                                     extract_skipped_reason = "extract_cooldown"
                             if extract_skipped_reason is None:
-                                top_for_extract = snippets[: max(1, local_extract_topk)]
+                                extract_candidates = snippets
+                                official_domains = _official_extract_domains(extract_policy)
+                                if official_domains:
+                                    extract_candidates = _filter_by_domain(
+                                        snippets,
+                                        official_domains,
+                                        indicator_key=task.get("indicator_key"),
+                                        fallback_to_original=False,
+                                    )
+                                    if not extract_candidates:
+                                        extract_skipped_reason = "official_domain_filter_empty"
+                                top_for_extract = (
+                                    extract_candidates[: max(1, local_extract_topk)]
+                                    if extract_skipped_reason is None
+                                    else []
+                                )
                                 if top_for_extract:
                                     stats["tavily_extract_calls"] += 1
                                     extract_resp = await client.extract(

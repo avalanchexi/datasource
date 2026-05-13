@@ -302,6 +302,7 @@ def test_usdcny_extract_policy_uses_official_table_exception():
         "use_tavily_extract": True,
         "extract_topk": 1,
         "official_domains_only": True,
+        "official_domains": ["chinamoney.com.cn", "cfets.com.cn"],
     }
     assert "chinamoney.com.cn" in profile["good_url_patterns"]
     assert "cfets.com.cn" in profile["good_url_patterns"]
@@ -319,6 +320,34 @@ def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: 
     assert task["max_query_candidates"] == 3
     assert task["extract_policy"]["use_tavily_extract"] is False
     assert task["extract_policy"]["extract_topk"] == 0
+
+
+@pytest.mark.parametrize(
+    ("indicator_key", "expected_family"),
+    [
+        ("BCOM", "dated_index_quote"),
+        ("GSG", "dated_etf_quote"),
+        ("DXY", "dated_index_quote"),
+    ],
+)
+def test_high_gap_quote_dated_families_survive_profile_budget(
+    tmp_path: Path,
+    indicator_key: str,
+    expected_family: str,
+):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "missing_items": [{"key": indicator_key}],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == indicator_key)
+    candidates = stage2._expand_query_candidates(task)
+
+    assert candidates
+    assert candidates[0]["family"] == expected_family
+    assert any(item["family"] == expected_family for item in candidates)
+    assert any("2026-05-12" in item["query"] or "2026年5月12日" in item["query"] for item in candidates)
 
 
 def test_fund_flow_profiles_have_field_queries_for_all_report_windows():
@@ -1245,6 +1274,81 @@ def test_execute_tasks_force_refresh_ignores_existing_value_skip(tmp_path: Path)
     assert not failures
     assert results[0]["result_type"] == "search_success"
     assert results[0]["extraction"].get("note") != "existing_value"
+
+
+def test_execute_tasks_usdcny_extract_uses_official_domain_before_topk(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "forex": [{"pair": "USDCNY", "current_rate": None, "source": ""}],
+        "missing_items": [{"key": "USDCNY"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "USDCNY")
+
+    class DummyClient:
+        def __init__(self):
+            self.extract_inputs = []
+
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://www.investing.com/currencies/usd-cny",
+                        "snippet": "USD/CNY 7.18 onshore spot rate",
+                        "content": "USD/CNY 7.18 onshore spot rate",
+                        "score": 0.99,
+                    },
+                    {
+                        "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                        "snippet": "ChinaMoney USD/CNY onshore spot rate 7.12",
+                        "content": "ChinaMoney USD/CNY onshore spot rate 7.12",
+                        "score": 0.75,
+                    },
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            self.extract_inputs.append(kwargs["search_results"])
+            return {
+                "results": [
+                    {
+                        "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                        "content": "ChinaMoney USD/CNY onshore spot rate 7.12",
+                        "score": 0.75,
+                    }
+                ]
+            }
+
+    class DummyExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            assert any("chinamoney.com.cn" in (s.get("url") or "") for s in snippets)
+            return {
+                "value": 7.12,
+                "unit": "",
+                "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                "confidence": 0.9,
+                "manual_required": False,
+                "manual_reason": None,
+            }
+
+    client = DummyClient()
+    completed, failures, _ = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            client,
+            None,
+            DummyExtractor(),
+            tmp_path / "usdcny_extract.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+        )
+    )
+
+    assert completed or failures
+    assert client.extract_inputs
+    assert all(len(items) == 1 for items in client.extract_inputs)
+    assert all("chinamoney.com.cn" in items[0]["url"] for items in client.extract_inputs)
 
 
 def test_execute_tasks_skip_existing_value_clears_missing_items_and_marks_result_type(tmp_path: Path):

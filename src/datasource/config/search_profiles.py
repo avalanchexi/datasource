@@ -1166,6 +1166,17 @@ def _prepend_profile_family(profile_key: str, family: Dict[str, Any]) -> None:
     ]
 
 
+def _move_profile_family_first(profile_key: str, family_name: str) -> None:
+    existing = list(SEARCH_PROFILES[profile_key].get("query_families") or [])
+    matched = [item for item in existing if item.get("name") == family_name]
+    if not matched:
+        return
+    SEARCH_PROFILES[profile_key]["query_families"] = [
+        *matched,
+        *[item for item in existing if item.get("name") != family_name],
+    ]
+
+
 def _apply_report_usage_profiles() -> None:
     """Attach downstream report-usage metadata used by Stage2 post-filtering."""
     current_value_keys = [
@@ -1485,6 +1496,7 @@ def _apply_report_usage_profiles() -> None:
                 "use_tavily_extract": True,
                 "extract_topk": 1,
                 "official_domains_only": True,
+                "official_domains": ["chinamoney.com.cn", "cfets.com.cn"],
             },
         }
     )
@@ -1519,6 +1531,13 @@ def _apply_report_usage_profiles() -> None:
             "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
     )
+
+    for profile_key, family_name in {
+        "BCOM": "dated_index_quote",
+        "GSG": "dated_etf_quote",
+        "DXY": "dated_index_quote",
+    }.items():
+        _move_profile_family_first(profile_key, family_name)
 
     _prepend_profile_family(
         "CN10Y_CDB",
