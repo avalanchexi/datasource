@@ -1409,38 +1409,49 @@ def test_execute_tasks_usdcny_extract_skips_when_official_filter_empty(tmp_path:
             raise AssertionError("extract should not run without official snippets")
 
     class DummyExtractor:
+        def __init__(self):
+            self.called = False
+
         async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.called = True
             return {
-                "value": None,
+                "value": 7.18,
                 "unit": "",
-                "source_url": None,
-                "confidence": 0.0,
-                "manual_required": True,
-                "manual_reason": "no_value",
+                "source_url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
+                "confidence": 0.95,
+                "manual_required": False,
+                "manual_reason": None,
             }
 
     client = DummyClient()
+    extractor = DummyExtractor()
     completed, failures, _ = asyncio.run(
         _execute_tasks(
             [task],
             payload,
             client,
             None,
-            DummyExtractor(),
+            extractor,
             tmp_path / "usdcny_extract_no_official.jsonl",
             cache_ttl=10,
             extraction_backend="deepseek",
         )
     )
 
-    assert completed or failures
+    assert not completed
+    assert failures
     assert client.extract_called is False
+    assert extractor.called is False
     rows = [
         json.loads(line)
         for line in (tmp_path / "usdcny_extract_no_official.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert rows
+    assert rows[-1]["manual_required"] is True
+    assert rows[-1]["manual_reason"] == "skipped_deepseek:official_domain_filter_empty"
+    assert rows[-1]["extraction_skipped_reason"] == "official_domain_filter_empty"
     assert rows[-1]["extract_skipped_reason"] == "official_domain_filter_empty"
+    assert payload["forex"][0].get("current_rate") is None
 
 
 def test_execute_tasks_skip_existing_value_clears_missing_items_and_marks_result_type(tmp_path: Path):

@@ -2651,6 +2651,8 @@ async def _execute_tasks(
                                     )
                                     if not extract_candidates:
                                         extract_skipped_reason = "official_domain_filter_empty"
+                                        if snippets:
+                                            skip_deepseek_reason = "official_domain_filter_empty"
                                 top_for_extract = (
                                     extract_candidates[: max(1, local_extract_topk)]
                                     if extract_skipped_reason is None
