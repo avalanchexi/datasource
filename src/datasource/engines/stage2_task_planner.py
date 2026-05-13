@@ -38,6 +38,11 @@ DAILY_QUOTE_KEYS = {
     "CN10Y",
     "CN10Y_CDB",
     "bdi",
+    "000001",
+    "000016",
+    "000300",
+    "399001",
+    "399006",
 }
 
 
@@ -303,6 +308,26 @@ class Stage2TaskPlanner:
         ]
         return [token for token in tokens if token and "None" not in token]
 
+    def _enrich_daily_quote_query_families(
+        self,
+        query_families: List[Dict[str, Any]],
+        task_context: Dict[str, object],
+    ) -> List[Dict[str, Any]]:
+        closing_date = str(task_context.get("closing_date") or "").strip()
+        closing_date_label = str(task_context.get("closing_date_label") or "").strip()
+        if not closing_date:
+            return query_families
+        enriched: List[Dict[str, Any]] = []
+        for family in query_families:
+            queries = [
+                q
+                if closing_date in q or (closing_date_label and closing_date_label in q)
+                else f"{q} {closing_date}"
+                for q in family.get("queries", [])
+            ]
+            enriched.append({**family, "queries": queries})
+        return enriched
+
     def _new_task(
         self,
         indicator_key: str,
@@ -326,17 +351,9 @@ class Stage2TaskPlanner:
             expected_period,
             task_context,
         )
-        query_candidates_expanded = [q for family in query_families for q in family.get("queries", [])]
         if time_context_type == "daily_quote" and not expected_period:
-            closing_date = str(task_context.get("closing_date") or "").strip()
-            closing_date_label = str(task_context.get("closing_date_label") or "").strip()
-            if closing_date:
-                query_candidates_expanded = [
-                    q
-                    if closing_date in q or (closing_date_label and closing_date_label in q)
-                    else f"{q} {closing_date}"
-                    for q in query_candidates_expanded
-                ]
+            query_families = self._enrich_daily_quote_query_families(query_families, task_context)
+        query_candidates_expanded = [q for family in query_families for q in family.get("queries", [])]
         return {
             "task_id": str(uuid.uuid4()),
             "stage_phase": phase,

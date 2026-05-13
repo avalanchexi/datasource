@@ -461,8 +461,27 @@ def test_task_planner_does_not_attach_monthly_tokens_to_daily_quotes(tmp_path: P
     assert task_map["DXY"]["time_context_type"] == "daily_quote"
     assert task_map["GC=F"]["expected_period_tokens"] == []
     assert task_map["DXY"]["expected_period_tokens"] == []
-    joined = " ".join(task_map["GC=F"]["query_candidates_expanded"])
+    executable_queries = [
+        query
+        for family in task_map["GC=F"]["query_families"]
+        for query in family.get("queries", [])
+    ]
+    joined = " ".join(executable_queries)
     assert "2026-05-12" in joined or "2026年5月12日" in joined
+    assert task_map["GC=F"]["query_candidates_expanded"] == executable_queries
+
+
+def test_task_planner_treats_stock_indices_as_daily_quotes(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "stock_indices": {"000001": {"current_value": None}},
+        "missing_items": [{"key": "000001"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "000001")
+
+    assert task["time_context_type"] == "daily_quote"
+    assert task["expected_period_tokens"] == []
 
 
 def test_task_planner_daily_quote_context_checks_indicator_key_when_profile_differs(tmp_path: Path):
