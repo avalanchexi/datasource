@@ -1391,8 +1391,8 @@ def test_execute_tasks_usdcny_extract_skips_when_official_filter_empty(tmp_path:
                 "results": [
                     {
                         "url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
-                        "snippet": "USD/CNY fake official-looking table 7.18",
-                        "content": "USD/CNY fake official-looking table 7.18",
+                        "snippet": "USD/CNY 7.1234 fake official-looking table",
+                        "content": "USD/CNY 7.1234 fake official-looking table",
                         "score": 0.99,
                     },
                     {
@@ -1425,7 +1425,8 @@ def test_execute_tasks_usdcny_extract_skips_when_official_filter_empty(tmp_path:
 
     client = DummyClient()
     extractor = DummyExtractor()
-    completed, failures, _ = asyncio.run(
+    stats = {}
+    completed, failures, websearch_results = asyncio.run(
         _execute_tasks(
             [task],
             payload,
@@ -1435,13 +1436,16 @@ def test_execute_tasks_usdcny_extract_skips_when_official_filter_empty(tmp_path:
             tmp_path / "usdcny_extract_no_official.jsonl",
             cache_ttl=10,
             extraction_backend="deepseek",
+            stats=stats,
         )
     )
 
     assert not completed
     assert failures
+    assert stats["regex_hits"] == 0
     assert client.extract_called is False
     assert extractor.called is False
+    assert websearch_results[-1]["extraction"]["value"] is None
     rows = [
         json.loads(line)
         for line in (tmp_path / "usdcny_extract_no_official.jsonl").read_text(encoding="utf-8").splitlines()

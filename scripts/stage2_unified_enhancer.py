@@ -2904,7 +2904,10 @@ async def _execute_tasks(
                             stats["extract_calls"] += 1
                             extraction = await _do_extract(snippets, task)
                         # regex 兜底：关键指标无值时尝试直接提取数字（低相关时跳过）
-                        if extraction.get("value") is None and skip_deepseek_reason != "low_score_all":
+                        if extraction.get("value") is None and skip_deepseek_reason not in {
+                            "low_score_all",
+                            "official_domain_filter_empty",
+                        }:
                             regex_val = _regex_fallback(snippets, task["indicator_key"])
                             if regex_val is not None:
                                 extraction["value"] = regex_val
