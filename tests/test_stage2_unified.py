@@ -206,11 +206,11 @@ def test_usdcny_profile_has_separate_midpoint_and_spot_families():
     assert {"pboc_midpoint", "cfets_spot", "onshore_spot"}.issubset(family_names)
 
 
-def test_bdi_profile_prioritizes_latest_market_data_family():
+def test_bdi_profile_prioritizes_dated_market_data_family():
     profile = SEARCH_PROFILES["bdi"]
     first_family = profile["query_families"][0]
 
-    assert first_family["name"] == "latest_market_data"
+    assert first_family["name"] == "dated_bdi_quote"
     assert "tradingeconomics.com" in first_family["preferred_domains"]
     assert "investing.com" in first_family["preferred_domains"]
 
@@ -232,13 +232,18 @@ def test_profiles_expose_report_usage_contract_for_high_risk_tasks():
     assert "stats.gov.cn" in industrial["good_url_patterns"]
 
 
-def test_realtime_quote_profiles_use_snippet_extraction_and_small_query_budget():
-    for key in ("BCOM", "GSG", "USDCNY", "DXY", "CN10Y_CDB"):
+def test_realtime_quote_profiles_use_small_query_budget_with_usdcny_extract_exception():
+    for key in ("BCOM", "GSG", "DXY", "CN10Y_CDB"):
         profile = SEARCH_PROFILES[key]
-
         assert profile["max_query_candidates"] == 3
         assert profile["extract_policy"]["use_tavily_extract"] is False
         assert profile["extract_policy"]["extract_topk"] == 0
+
+    usdcny = SEARCH_PROFILES["USDCNY"]
+    assert usdcny["max_query_candidates"] == 3
+    assert usdcny["extract_policy"]["use_tavily_extract"] is True
+    assert usdcny["extract_policy"]["extract_topk"] == 1
+    assert usdcny["extract_policy"]["official_domains_only"] is True
 
 
 def test_high_gap_quote_profiles_have_report_quality_patterns():
@@ -266,6 +271,37 @@ def test_high_gap_quote_profiles_have_report_quality_patterns():
     assert "CDB" in cn10y_cdb["evidence_keywords"]
     assert "chinabond.com.cn" in cn10y_cdb["good_url_patterns"]
     assert "China 10Y Treasury" in cn10y_cdb["bad_url_patterns"]
+
+
+def test_daily_quote_profiles_include_run_date_and_value_page_filters():
+    quote_keys = ("GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG", "DXY", "bdi")
+    for key in quote_keys:
+        profile = SEARCH_PROFILES[key]
+        joined_queries = " ".join(
+            query
+            for family in profile["query_families"]
+            for query in family.get("queries", [])
+        )
+        assert "{closing_date}" in joined_queries or "{closing_date_label}" in joined_queries
+
+    gold_bad = " ".join(SEARCH_PROFILES["GC=F"]["bad_url_patterns"]).lower()
+    assert "contract specifications" in gold_bad
+    assert "fact card" in gold_bad
+
+    bcom_bad = " ".join(SEARCH_PROFILES["BCOM"]["bad_url_patterns"]).lower()
+    assert "target weights" in bcom_bad
+    assert "annual rebalance" in bcom_bad
+
+
+def test_usdcny_extract_policy_uses_official_table_exception():
+    profile = SEARCH_PROFILES["USDCNY"]
+    assert profile["extract_policy"] == {
+        "use_tavily_extract": True,
+        "extract_topk": 1,
+        "official_domains_only": True,
+    }
+    assert "chinamoney.com.cn" in profile["good_url_patterns"]
+    assert "cfets.com.cn" in profile["good_url_patterns"]
 
 
 def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: Path):
