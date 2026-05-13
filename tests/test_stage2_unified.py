@@ -991,7 +991,7 @@ def test_candidate_query_quality_prefers_value_bearing_quote_over_contract_spec(
     assert value_quality["quality_score"] > spec_quality["quality_score"]
 
 
-def test_candidate_query_quality_rechecks_value_evidence_after_high_score_filtering():
+def test_candidate_query_quality_keeps_low_score_value_evidence_over_high_score_overview():
     task = {
         "indicator_key": "BCOM",
         "required_output_fields": ["current_price"],
@@ -1016,9 +1016,9 @@ def test_candidate_query_quality_rechecks_value_evidence_after_high_score_filter
 
     quality = _candidate_query_quality(task, candidate, snippets)
 
-    assert quality["unusable_reason"] == "value_evidence_miss"
-    assert quality["usable_count"] == 0
-    assert quality["value_evidence_score"] == 0
+    assert quality["unusable_reason"] is None
+    assert any(snippet["url"] == "https://example.com/market-data/bcom" for snippet in quality["snippets"])
+    assert quality["value_evidence_score"] > 0
 
 
 def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusable_page():

@@ -79,6 +79,15 @@ def test_deepseek_classifies_unterminated_json_as_truncated() -> None:
     assert DeepSeekExtractionAgent._json_error_reason(exc) == "deepseek_json_truncated"
 
 
+def test_deepseek_classifies_missing_closing_json_as_truncated() -> None:
+    try:
+        json.loads('{"value": 1')
+    except json.JSONDecodeError as exc:
+        assert DeepSeekExtractionAgent._json_error_reason(exc) == "deepseek_json_truncated"
+    else:
+        raise AssertionError("incomplete JSON should fail to decode")
+
+
 def test_stage2_cli_can_disable_queue_explicitly(monkeypatch) -> None:
     monkeypatch.setattr(
         sys,

@@ -889,23 +889,27 @@ def _candidate_query_quality(
             usable = []
             usable_scores = _score_usable(usable)
 
+    requires_value_evidence = bool(task.get("required_output_fields") or task.get("evidence_keywords"))
     high_score = [s for s in usable if s.get("score") is None or s.get("score", 0) >= 0.5]
     if high_score:
-        usable = high_score
-        usable_scores = _score_usable(usable)
-        issuer_hit = _snippets_have_issuer(
-            usable,
-            issuer_hint=task.get("issuer"),
-            issuer_aliases=task.get("issuer_aliases"),
-        )
-        period_hit = _snippets_have_expected_period(usable, task.get("expected_period_tokens"))
+        high_score_scores = _score_usable(high_score)
+        high_score_has_value = int(high_score_scores["value_evidence_score"]) > 0
+        current_has_value = int(usable_scores["value_evidence_score"]) > 0
+        if not requires_value_evidence or high_score_has_value or not current_has_value:
+            usable = high_score
+            usable_scores = high_score_scores
+            issuer_hit = _snippets_have_issuer(
+                usable,
+                issuer_hint=task.get("issuer"),
+                issuer_aliases=task.get("issuer_aliases"),
+            )
+            period_hit = _snippets_have_expected_period(usable, task.get("expected_period_tokens"))
 
     usage_evidence_score = int(usable_scores["usage_evidence_score"])
     value_evidence_score = int(usable_scores["value_evidence_score"])
     good_url_hit_count = int(usable_scores["good_url_hit_count"])
     bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
 
-    requires_value_evidence = bool(task.get("required_output_fields") or task.get("evidence_keywords"))
     if usable and not unusable_reason and requires_value_evidence and value_evidence_score <= 0:
         unusable_reason = "value_evidence_miss"
         usable = []

@@ -369,6 +369,21 @@ class DeepSeekExtractionAgent:
         text = str(exc).lower()
         if "unterminated string" in text or "expecting value" in text and exc.pos > 0:
             return "deepseek_json_truncated"
+        stripped_doc = (exc.doc or "").rstrip()
+        near_eof = bool(stripped_doc) and exc.pos >= len(stripped_doc) - 1
+        open_container = (
+            stripped_doc.count("{") > stripped_doc.count("}")
+            or stripped_doc.count("[") > stripped_doc.count("]")
+        )
+        if near_eof and open_container and any(
+            marker in text
+            for marker in (
+                "expecting ',' delimiter",
+                "expecting ':' delimiter",
+                "expecting property name enclosed in double quotes",
+            )
+        ):
+            return "deepseek_json_truncated"
         return "deepseek_json_parse_error"
 
     async def extract(
