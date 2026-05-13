@@ -739,6 +739,31 @@ def _value_evidence_score(snippet: Dict[str, Any], task: Dict[str, Any]) -> int:
     return max(0, score)
 
 
+def _final_snippet_diagnostics(task: Dict[str, Any], snippets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    good_url_patterns = task.get("good_url_patterns") or []
+    bad_url_patterns = task.get("bad_url_patterns") or []
+    evidence_keywords = task.get("evidence_keywords") or []
+    usage_evidence_score = 0
+    value_evidence_score = 0
+    good_url_hit_count = 0
+    bad_url_hit_count = 0
+    for snippet in snippets:
+        url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
+        if _pattern_hits(url_blob, good_url_patterns):
+            good_url_hit_count += 1
+        if _pattern_hits(url_blob, bad_url_patterns):
+            bad_url_hit_count += 1
+        usage_evidence_score += _usage_evidence_score(snippet, evidence_keywords)
+        value_evidence_score += _value_evidence_score(snippet, task)
+    return {
+        "score_stats": _score_stats(snippets),
+        "usage_evidence_score": usage_evidence_score,
+        "value_evidence_score": value_evidence_score,
+        "good_url_hit_count": good_url_hit_count,
+        "bad_url_hit_count": bad_url_hit_count,
+    }
+
+
 def _candidate_query_quality(
     task: Dict[str, Any],
     candidate: Dict[str, Any],
@@ -2424,6 +2449,10 @@ async def _execute_tasks(
                     "issuer_hit": task.get("issuer_hit"),
                     "period_hit": task.get("period_hit"),
                     "selected_reason": task.get("selected_reason"),
+                    "usage_evidence_score": task.get("usage_evidence_score"),
+                    "value_evidence_score": task.get("value_evidence_score"),
+                    "good_url_hit_count": task.get("good_url_hit_count"),
+                    "bad_url_hit_count": task.get("bad_url_hit_count"),
                     "score_min": (task.get("score_stats") or {}).get("score_min"),
                     "score_p50": (task.get("score_stats") or {}).get("score_p50"),
                     "score_p95": (task.get("score_stats") or {}).get("score_p95"),
@@ -2857,6 +2886,8 @@ async def _execute_tasks(
                     domain_filtered_drop_local = max(0, before - after) if before and before != after else 0
                     snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
                     snippets = _prefer_latest_report_snippets(snippets, task.get("indicator_key"))
+                    final_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
+                    score_stats = final_diagnostics["score_stats"]
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     task_for_log = {
                         **task,
@@ -2873,10 +2904,10 @@ async def _execute_tasks(
                         "issuer_hit": task_for_log.get("issuer_hit", False),
                         "period_hit": task_for_log.get("period_hit", False),
                         "selected_reason": task_for_log.get("selected_reason"),
-                        "usage_evidence_score": task_for_log.get("usage_evidence_score", 0),
-                        "value_evidence_score": task_for_log.get("value_evidence_score", 0),
-                        "good_url_hit_count": task_for_log.get("good_url_hit_count", 0),
-                        "bad_url_hit_count": task_for_log.get("bad_url_hit_count", 0),
+                        "usage_evidence_score": final_diagnostics["usage_evidence_score"],
+                        "value_evidence_score": final_diagnostics["value_evidence_score"],
+                        "good_url_hit_count": final_diagnostics["good_url_hit_count"],
+                        "bad_url_hit_count": final_diagnostics["bad_url_hit_count"],
                         "score_filtered_drop": score_filtered_drop_local,
                         "domain_filtered_drop": domain_filtered_drop_local,
                         "extraction_skipped_reason": skip_deepseek_reason,
