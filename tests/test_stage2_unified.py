@@ -308,6 +308,28 @@ def test_usdcny_extract_policy_uses_official_table_exception():
     assert "cfets.com.cn" in profile["good_url_patterns"]
 
 
+def test_official_domain_extract_filter_rejects_suffix_spoof():
+    snippets = [
+        {
+            "url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
+            "snippet": "spoofed USD/CNY table",
+        },
+        {
+            "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+            "snippet": "official USD/CNY table",
+        },
+    ]
+
+    filtered = stage2._filter_by_official_extract_domain(
+        snippets,
+        ["chinamoney.com.cn"],
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://www.chinamoney.com.cn/chinese/bkccpr/"
+    ]
+
+
 def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-05-10"},
@@ -1349,6 +1371,76 @@ def test_execute_tasks_usdcny_extract_uses_official_domain_before_topk(tmp_path:
     assert client.extract_inputs
     assert all(len(items) == 1 for items in client.extract_inputs)
     assert all("chinamoney.com.cn" in items[0]["url"] for items in client.extract_inputs)
+
+
+def test_execute_tasks_usdcny_extract_skips_when_official_filter_empty(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "forex": [{"pair": "USDCNY", "current_rate": None, "source": ""}],
+        "missing_items": [{"key": "USDCNY"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "USDCNY")
+
+    class DummyClient:
+        def __init__(self):
+            self.extract_called = False
+
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
+                        "snippet": "USD/CNY fake official-looking table 7.18",
+                        "content": "USD/CNY fake official-looking table 7.18",
+                        "score": 0.99,
+                    },
+                    {
+                        "url": "https://www.investing.com/currencies/usd-cny",
+                        "snippet": "USD/CNY market quote 7.19",
+                        "content": "USD/CNY market quote 7.19",
+                        "score": 0.88,
+                    },
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            self.extract_called = True
+            raise AssertionError("extract should not run without official snippets")
+
+    class DummyExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            return {
+                "value": None,
+                "unit": "",
+                "source_url": None,
+                "confidence": 0.0,
+                "manual_required": True,
+                "manual_reason": "no_value",
+            }
+
+    client = DummyClient()
+    completed, failures, _ = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            client,
+            None,
+            DummyExtractor(),
+            tmp_path / "usdcny_extract_no_official.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+        )
+    )
+
+    assert completed or failures
+    assert client.extract_called is False
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "usdcny_extract_no_official.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows
+    assert rows[-1]["extract_skipped_reason"] == "official_domain_filter_empty"
 
 
 def test_execute_tasks_skip_existing_value_clears_missing_items_and_marks_result_type(tmp_path: Path):

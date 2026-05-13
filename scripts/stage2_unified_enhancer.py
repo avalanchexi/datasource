@@ -568,6 +568,33 @@ def _official_extract_domains(extract_policy: Dict[str, Any]) -> List[str]:
     return [str(domain).strip().lower() for domain in domains if str(domain).strip()]
 
 
+def _host_matches_official_domain(host: str, domain: str) -> bool:
+    host = host.strip().lower().rstrip(".")
+    domain = domain.strip().lower().rstrip(".")
+    return bool(host and domain and (host == domain or host.endswith(f".{domain}")))
+
+
+def _filter_by_official_extract_domain(
+    snippets: List[Dict[str, Any]],
+    official_domains: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    if not official_domains:
+        return snippets
+    domains = [str(domain).strip().lower().rstrip(".") for domain in official_domains if str(domain).strip()]
+    if not domains:
+        return snippets
+    filtered: List[Dict[str, Any]] = []
+    for snip in snippets:
+        url = snip.get("url") or ""
+        try:
+            host = (urlparse(url).hostname or "").lower().rstrip(".")
+        except Exception:
+            continue
+        if any(_host_matches_official_domain(host, domain) for domain in domains):
+            filtered.append(snip)
+    return filtered
+
+
 def _snippet_blob(snippet: Dict[str, Any]) -> str:
     return " ".join(
         [
@@ -2618,11 +2645,9 @@ async def _execute_tasks(
                                 extract_candidates = snippets
                                 official_domains = _official_extract_domains(extract_policy)
                                 if official_domains:
-                                    extract_candidates = _filter_by_domain(
+                                    extract_candidates = _filter_by_official_extract_domain(
                                         snippets,
                                         official_domains,
-                                        indicator_key=task.get("indicator_key"),
-                                        fallback_to_original=False,
                                     )
                                     if not extract_candidates:
                                         extract_skipped_reason = "official_domain_filter_empty"
