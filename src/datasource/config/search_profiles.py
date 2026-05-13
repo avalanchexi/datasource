@@ -808,6 +808,32 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         max_age_days=35,
         **_MACRO_DEFAULTS,
     ),
+    "pmi_production": _profile(
+        query="中国PMI生产指数 最新公布 国家统计局",
+        domains=["stats.gov.cn", "eastmoney.com", "caixin.com"],
+        unit="点",
+        issuer="国家统计局",
+        issuer_aliases=["统计局", "NBS"],
+        query_families=[
+            {
+                "name": "official_nbs_pmi_production_site",
+                "queries": [
+                    "site:stats.gov.cn {expected_period_label} 制造业 PMI 生产指数",
+                    "国家统计局 {expected_period_label} 采购经理指数 生产指数",
+                    "中国制造业PMI 生产指数 {expected_period_label} 国家统计局",
+                ],
+                "preferred_domains": ["stats.gov.cn", "data.stats.gov.cn"],
+                "required_keywords": ["PMI", "生产指数", "采购经理指数"],
+            }
+        ],
+        required_keywords=["PMI", "生产指数", "采购经理指数"],
+        evidence_keywords=["PMI", "生产指数", "采购经理指数", "国家统计局"],
+        good_url_patterns=["stats.gov.cn", "data.stats.gov.cn"],
+        bad_url_patterns=["财新", "行业PMI", "地方"],
+        report_usage="Stage4 macro table requires national NBS PMI production sub-index for the expected period",
+        max_age_days=35,
+        **_MACRO_DEFAULTS,
+    ),
     "industrial": _profile(
         query="中国工业增加值 规模以上 最新同比增速 国家统计局",
         queries=[
@@ -1140,6 +1166,17 @@ def _prepend_profile_family(profile_key: str, family: Dict[str, Any]) -> None:
     ]
 
 
+def _move_profile_family_first(profile_key: str, family_name: str) -> None:
+    existing = list(SEARCH_PROFILES[profile_key].get("query_families") or [])
+    matched = [item for item in existing if item.get("name") == family_name]
+    if not matched:
+        return
+    SEARCH_PROFILES[profile_key]["query_families"] = [
+        *matched,
+        *[item for item in existing if item.get("name") != family_name],
+    ]
+
+
 def _apply_report_usage_profiles() -> None:
     """Attach downstream report-usage metadata used by Stage2 post-filtering."""
     current_value_keys = [
@@ -1295,6 +1332,95 @@ def _apply_report_usage_profiles() -> None:
         }
     )
 
+    daily_quote_families = {
+        "GC=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "COMEX gold futures GC=F price {closing_date} closing",
+                "COMEX gold futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com gold futures {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "CL=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "WTI crude oil futures CL=F price {closing_date} closing",
+                "NYMEX WTI crude futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com crude oil {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "BZ=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "Brent crude futures BZ=F price {closing_date} closing",
+                "ICE Brent crude futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com brent crude oil {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "HG=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "COMEX copper futures HG=F price {closing_date} closing",
+                "COMEX copper futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com copper futures {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "BCOM": {
+            "name": "dated_index_quote",
+            "queries": [
+                "Bloomberg Commodity Index BCOM level {closing_date}",
+                "BCOM:IND Bloomberg Commodity Index quote {closing_date}",
+                "Bloomberg Commodity Index current level {closing_date_label}",
+            ],
+            "bad": ["target weights", "annual rebalance", "2026 weights", "index methodology"],
+        },
+        "GSG": {
+            "name": "dated_etf_quote",
+            "queries": [
+                "GSG ETF price {closing_date} iShares",
+                "iShares GSG ETF market price {closing_date_label}",
+                "NYSEARCA GSG last price {closing_date}",
+            ],
+            "bad": ["fund flows", "net inflow", "net outflow", "AUM change", "holding", "portfolio"],
+        },
+        "DXY": {
+            "name": "dated_index_quote",
+            "queries": [
+                "DXY US Dollar Index {closing_date} closing level",
+                "US Dollar Index DXY current quote {closing_date}",
+                "ICE US Dollar Index DXY latest level {closing_date_label}",
+            ],
+            "bad": ["forecast", "analysis", "outlook", "opinion", "technical analysis"],
+        },
+        "bdi": {
+            "name": "dated_bdi_quote",
+            "queries": [
+                "Baltic Dry Index BDI {closing_date} latest value",
+                "BDI Baltic Dry Index {closing_date_label} points",
+                "Trading Economics Baltic Dry Index {closing_date} value",
+            ],
+            "bad": ["/Circulars/", "/faqs", "market-announcements", "methodology"],
+        },
+    }
+    for key, spec in daily_quote_families.items():
+        _prepend_profile_family(
+            key,
+            {
+                "name": spec["name"],
+                "queries": spec["queries"],
+                "preferred_domains": SEARCH_PROFILES[key]["preferred_domains"],
+                "required_keywords": SEARCH_PROFILES[key]["required_keywords"],
+                "exclude_keywords": spec["bad"],
+            },
+        )
+        SEARCH_PROFILES[key]["bad_url_patterns"] = _dedupe_preserve(
+            list(SEARCH_PROFILES[key].get("bad_url_patterns") or []) + list(spec["bad"])
+        )
+
     _prepend_profile_family(
         "BCOM",
         {
@@ -1314,7 +1440,10 @@ def _apply_report_usage_profiles() -> None:
             "max_query_candidates": 3,
             "evidence_keywords": ["BCOM:IND", "Bloomberg Commodity Index", "BCOM", "level", "last price"],
             "good_url_patterns": ["bloomberg.com/quote/BCOM:IND", "tradingeconomics.com", "stockcharts.com"],
-            "bad_url_patterns": ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"],
+            "bad_url_patterns": _dedupe_preserve(
+                list(SEARCH_PROFILES["BCOM"].get("bad_url_patterns") or [])
+                + ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"]
+            ),
             "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
     )
@@ -1363,7 +1492,12 @@ def _apply_report_usage_profiles() -> None:
             "evidence_keywords": ["USD/CNY", "USDCNY", "onshore", "spot", "central parity"],
             "good_url_patterns": ["chinamoney.com.cn", "cfets.com.cn", "investing.com/currencies/usd-cny"],
             "bad_url_patterns": ["bankofchina", "boc.cn", "cash selling", "bank note", "currency converter"],
-            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+            "extract_policy": {
+                "use_tavily_extract": True,
+                "extract_topk": 1,
+                "official_domains_only": True,
+                "official_domains": ["chinamoney.com.cn", "cfets.com.cn"],
+            },
         }
     )
 
@@ -1390,10 +1524,20 @@ def _apply_report_usage_profiles() -> None:
                 "tradingeconomics.com",
                 "marketwatch.com/investing/index/dxy",
             ],
-            "bad_url_patterns": ["DXY news", "forecast", "analysis", "outlook", "opinion"],
+            "bad_url_patterns": _dedupe_preserve(
+                list(SEARCH_PROFILES["DXY"].get("bad_url_patterns") or [])
+                + ["DXY news", "forecast", "analysis", "outlook", "opinion"]
+            ),
             "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
     )
+
+    for profile_key, family_name in {
+        "BCOM": "dated_index_quote",
+        "GSG": "dated_etf_quote",
+        "DXY": "dated_index_quote",
+    }.items():
+        _move_profile_family_first(profile_key, family_name)
 
     _prepend_profile_family(
         "CN10Y_CDB",

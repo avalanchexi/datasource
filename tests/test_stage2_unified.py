@@ -206,11 +206,11 @@ def test_usdcny_profile_has_separate_midpoint_and_spot_families():
     assert {"pboc_midpoint", "cfets_spot", "onshore_spot"}.issubset(family_names)
 
 
-def test_bdi_profile_prioritizes_latest_market_data_family():
+def test_bdi_profile_prioritizes_dated_market_data_family():
     profile = SEARCH_PROFILES["bdi"]
     first_family = profile["query_families"][0]
 
-    assert first_family["name"] == "latest_market_data"
+    assert first_family["name"] == "dated_bdi_quote"
     assert "tradingeconomics.com" in first_family["preferred_domains"]
     assert "investing.com" in first_family["preferred_domains"]
 
@@ -232,13 +232,18 @@ def test_profiles_expose_report_usage_contract_for_high_risk_tasks():
     assert "stats.gov.cn" in industrial["good_url_patterns"]
 
 
-def test_realtime_quote_profiles_use_snippet_extraction_and_small_query_budget():
-    for key in ("BCOM", "GSG", "USDCNY", "DXY", "CN10Y_CDB"):
+def test_realtime_quote_profiles_use_small_query_budget_with_usdcny_extract_exception():
+    for key in ("BCOM", "GSG", "DXY", "CN10Y_CDB"):
         profile = SEARCH_PROFILES[key]
-
         assert profile["max_query_candidates"] == 3
         assert profile["extract_policy"]["use_tavily_extract"] is False
         assert profile["extract_policy"]["extract_topk"] == 0
+
+    usdcny = SEARCH_PROFILES["USDCNY"]
+    assert usdcny["max_query_candidates"] == 3
+    assert usdcny["extract_policy"]["use_tavily_extract"] is True
+    assert usdcny["extract_policy"]["extract_topk"] == 1
+    assert usdcny["extract_policy"]["official_domains_only"] is True
 
 
 def test_high_gap_quote_profiles_have_report_quality_patterns():
@@ -268,6 +273,63 @@ def test_high_gap_quote_profiles_have_report_quality_patterns():
     assert "China 10Y Treasury" in cn10y_cdb["bad_url_patterns"]
 
 
+def test_daily_quote_profiles_include_run_date_and_value_page_filters():
+    quote_keys = ("GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG", "DXY", "bdi")
+    for key in quote_keys:
+        profile = SEARCH_PROFILES[key]
+        joined_queries = " ".join(
+            query
+            for family in profile["query_families"]
+            for query in family.get("queries", [])
+        )
+        assert "{closing_date}" in joined_queries or "{closing_date_label}" in joined_queries
+
+    gold_bad = " ".join(SEARCH_PROFILES["GC=F"]["bad_url_patterns"]).lower()
+    assert "contract specifications" in gold_bad
+    assert "fact card" in gold_bad
+
+    bcom_bad = " ".join(SEARCH_PROFILES["BCOM"]["bad_url_patterns"]).lower()
+    assert "target weights" in bcom_bad
+    assert "annual rebalance" in bcom_bad
+
+    dxy_bad = " ".join(SEARCH_PROFILES["DXY"]["bad_url_patterns"]).lower()
+    assert "technical analysis" in dxy_bad
+
+
+def test_usdcny_extract_policy_uses_official_table_exception():
+    profile = SEARCH_PROFILES["USDCNY"]
+    assert profile["extract_policy"] == {
+        "use_tavily_extract": True,
+        "extract_topk": 1,
+        "official_domains_only": True,
+        "official_domains": ["chinamoney.com.cn", "cfets.com.cn"],
+    }
+    assert "chinamoney.com.cn" in profile["good_url_patterns"]
+    assert "cfets.com.cn" in profile["good_url_patterns"]
+
+
+def test_official_domain_extract_filter_rejects_suffix_spoof():
+    snippets = [
+        {
+            "url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
+            "snippet": "spoofed USD/CNY table",
+        },
+        {
+            "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+            "snippet": "official USD/CNY table",
+        },
+    ]
+
+    filtered = stage2._filter_by_official_extract_domain(
+        snippets,
+        ["chinamoney.com.cn"],
+    )
+
+    assert [item["url"] for item in filtered] == [
+        "https://www.chinamoney.com.cn/chinese/bkccpr/"
+    ]
+
+
 def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-05-10"},
@@ -280,6 +342,34 @@ def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: 
     assert task["max_query_candidates"] == 3
     assert task["extract_policy"]["use_tavily_extract"] is False
     assert task["extract_policy"]["extract_topk"] == 0
+
+
+@pytest.mark.parametrize(
+    ("indicator_key", "expected_family"),
+    [
+        ("BCOM", "dated_index_quote"),
+        ("GSG", "dated_etf_quote"),
+        ("DXY", "dated_index_quote"),
+    ],
+)
+def test_high_gap_quote_dated_families_survive_profile_budget(
+    tmp_path: Path,
+    indicator_key: str,
+    expected_family: str,
+):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "missing_items": [{"key": indicator_key}],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == indicator_key)
+    candidates = stage2._expand_query_candidates(task)
+
+    assert candidates
+    assert candidates[0]["family"] == expected_family
+    assert any(item["family"] == expected_family for item in candidates)
+    assert any("2026-05-12" in item["query"] or "2026年5月12日" in item["query"] for item in candidates)
 
 
 def test_fund_flow_profiles_have_field_queries_for_all_report_windows():
@@ -444,6 +534,73 @@ def test_task_planner_expands_expected_period_for_query_families(tmp_path: Path)
     tasks = planner.build_tasks(payload)
     task = next(t for t in tasks if t["indicator_key"] == "industrial_sales")
     assert any("2026年1-2月" in q for q in task["query_candidates_expanded"])
+
+
+def test_task_planner_does_not_attach_monthly_tokens_to_daily_quotes(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "commodities": [{"symbol": "GC=F", "current_price": None}],
+        "forex": [{"pair": "DXY", "current_rate": None}],
+        "macro_indicators": {},
+        "missing_items": [{"key": "GC=F"}, {"key": "DXY"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task_map = {task["indicator_key"]: task for task in planner.build_tasks(payload)}
+
+    assert task_map["GC=F"]["time_context_type"] == "daily_quote"
+    assert task_map["DXY"]["time_context_type"] == "daily_quote"
+    assert task_map["GC=F"]["expected_period_tokens"] == []
+    assert task_map["DXY"]["expected_period_tokens"] == []
+    executable_queries = [
+        query
+        for family in task_map["GC=F"]["query_families"]
+        for query in family.get("queries", [])
+    ]
+    joined = " ".join(executable_queries)
+    assert "2026-05-12" in joined or "2026年5月12日" in joined
+    assert task_map["GC=F"]["query_candidates_expanded"] == executable_queries
+
+
+def test_task_planner_treats_stock_indices_as_daily_quotes(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "stock_indices": {"000001": {"current_value": None}},
+        "missing_items": [{"key": "000001"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "000001")
+
+    assert task["time_context_type"] == "daily_quote"
+    assert task["expected_period_tokens"] == []
+
+
+def test_task_planner_daily_quote_context_checks_indicator_key_when_profile_differs(tmp_path: Path):
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+
+    assert planner._time_context_type("legacy_primary", "GC=F", None) == "daily_quote"
+    assert planner._time_context_type("legacy_primary", "GC=F", "2026-04") == "monthly_period"
+
+
+def test_task_planner_gives_pmi_production_official_period_profile(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "macro_indicators": {
+            "pmi_production": {
+                "current_value": 50.0,
+                "is_stale": True,
+                "expected_period": "2026-04",
+            }
+        },
+        "missing_items": [],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "pmi_production")
+
+    assert task["query_template_id"] == "pmi_production"
+    assert task["time_context_type"] == "monthly_period"
+    assert "2026-04" in task["expected_period_tokens"]
+    assert task["query"] != "pmi_production"
+    assert any("生产指数" in query for query in task["query_candidates_expanded"])
 
 
 def test_task_planner_keeps_etf_field_queries(tmp_path: Path):
@@ -795,6 +952,133 @@ def test_candidate_query_quality_penalizes_bad_url_patterns_and_prefers_usage_ev
     assert noisy["bad_url_hit_count"] >= 1
 
 
+def test_candidate_query_quality_prefers_value_bearing_quote_over_contract_spec():
+    task = {
+        "indicator_key": "GC=F",
+        "preferred_domains": ["cmegroup.com", "tradingeconomics.com"],
+        "required_keywords": ["gold", "comex"],
+        "exclude_keywords": ["contract specifications", "fact card"],
+        "evidence_keywords": ["settlement", "price", "$/oz", "closing"],
+        "good_url_patterns": ["tradingeconomics.com/commodity/gold"],
+        "bad_url_patterns": ["contractSpecs", "fact-card"],
+        "expected_period_tokens": [],
+        "issuer": "COMEX/CME",
+        "issuer_aliases": ["CME", "COMEX"],
+    }
+    candidate = {"query": "COMEX gold futures price 2026-05-12 closing", "preferred_domains": task["preferred_domains"]}
+    value_snippets = [
+        {
+            "url": "https://tradingeconomics.com/commodity/gold",
+            "title": "Gold futures",
+            "content": "COMEX gold futures settled at 4730.70 USD per troy ounce on 2026-05-12.",
+            "score": 0.71,
+        }
+    ]
+    spec_snippets = [
+        {
+            "url": "https://www.cmegroup.com/markets/metals/precious/gold.contractSpecs.html",
+            "title": "Gold Futures Contract Specs",
+            "content": "Contract unit is 100 troy ounces. Minimum price fluctuation is 0.10.",
+            "score": 0.92,
+        }
+    ]
+
+    value_quality = _candidate_query_quality(task, candidate, value_snippets)
+    spec_quality = _candidate_query_quality(task, candidate, spec_snippets)
+
+    assert value_quality["value_evidence_score"] > 0
+    assert spec_quality["value_evidence_score"] == 0
+    assert value_quality["quality_score"] > spec_quality["quality_score"]
+
+
+def test_candidate_query_quality_keeps_low_score_value_evidence_over_high_score_overview():
+    task = {
+        "indicator_key": "BCOM",
+        "required_output_fields": ["current_price"],
+        "evidence_keywords": ["level", "last price", "points"],
+        "expected_period_tokens": [],
+    }
+    candidate = {"query": "Bloomberg Commodity Index BCOM level 2026-05-12"}
+    snippets = [
+        {
+            "url": "https://example.com/market-data/bcom",
+            "title": "BCOM quote",
+            "content": "BCOM last price was 101.25 points on 2026-05-12.",
+            "score": 0.28,
+        },
+        {
+            "url": "https://example.com/news/bcom-overview",
+            "title": "Bloomberg Commodity Index overview",
+            "content": "Bloomberg Commodity Index tracks diversified commodity futures markets.",
+            "score": 0.91,
+        },
+    ]
+
+    quality = _candidate_query_quality(task, candidate, snippets)
+
+    assert quality["unusable_reason"] is None
+    assert any(snippet["url"] == "https://example.com/market-data/bcom" for snippet in quality["snippets"])
+    assert quality["value_evidence_score"] > 0
+
+
+def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusable_page():
+    task = {
+        "indicator_key": "BCOM",
+        "preferred_domains": ["bloomberg.com"],
+        "required_keywords": ["BCOM", "Bloomberg Commodity Index"],
+        "exclude_keywords": ["target weights", "annual rebalance"],
+        "evidence_keywords": ["level", "last price", "points"],
+        "good_url_patterns": ["bloomberg.com/quote/BCOM:IND"],
+        "bad_url_patterns": ["target-weights", "annual-rebalance"],
+        "expected_period_tokens": [],
+        "issuer": "Bloomberg",
+        "issuer_aliases": ["Bloomberg"],
+    }
+    candidate = {"query": "Bloomberg Commodity Index BCOM level 2026-05-12", "preferred_domains": task["preferred_domains"]}
+    snippets = [
+        {
+            "url": "https://www.bloomberg.com/company/press/bloomberg-commodity-index-2026-target-weights/",
+            "title": "Bloomberg Commodity Index 2026 Target Weights",
+            "content": "Bloomberg announced target weights for the annual rebalance.",
+            "score": 0.88,
+        }
+    ]
+
+    quality = _candidate_query_quality(task, candidate, snippets)
+
+    assert quality["unusable_reason"] == "value_evidence_miss"
+    assert quality["usable_count"] == 0
+
+
+def test_value_evidence_rejects_methodology_and_rebalance_number_pages():
+    task = {
+        "indicator_key": "BCOM",
+        "unit": "points",
+        "evidence_keywords": ["level", "last price", "points"],
+        "required_output_fields": ["current_price"],
+    }
+    methodology_snippet = {
+        "url": "https://assets.bbhub.io/professional/sites/10/BCOM-Methodology.pdf",
+        "title": "Bloomberg Commodity Index Methodology and Rulebook",
+        "content": (
+            "The methodology describes calculation rules, target weights, annual rebalance, "
+            "contract specs, and index level procedures. Section 4.2 uses a base level of "
+            "100 points and applies 2/3 liquidity and 1/3 production weights."
+        ),
+        "score": 0.93,
+    }
+
+    assert stage2._value_evidence_score(methodology_snippet, task) == 0
+
+    quality = _candidate_query_quality(
+        task,
+        {"query": "Bloomberg Commodity Index BCOM level methodology"},
+        [methodology_snippet],
+    )
+    assert quality["unusable_reason"] == "value_evidence_miss"
+    assert quality["value_evidence_score"] == 0
+
+
 def test_candidate_query_quality_penalizes_all_bad_trusted_results_below_clean_data_page():
     task = {
         "indicator_key": "etf",
@@ -1141,6 +1425,381 @@ def test_execute_tasks_force_refresh_ignores_existing_value_skip(tmp_path: Path)
     assert results[0]["extraction"].get("note") != "existing_value"
 
 
+def test_execute_tasks_usdcny_extract_uses_official_domain_before_topk(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "forex": [{"pair": "USDCNY", "current_rate": None, "source": ""}],
+        "missing_items": [{"key": "USDCNY"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "USDCNY")
+
+    class DummyClient:
+        def __init__(self):
+            self.extract_inputs = []
+
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://www.investing.com/currencies/usd-cny",
+                        "snippet": "USD/CNY 7.18 onshore spot rate",
+                        "content": "USD/CNY 7.18 onshore spot rate",
+                        "score": 0.99,
+                    },
+                    {
+                        "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                        "snippet": "ChinaMoney USD/CNY onshore spot rate 7.12",
+                        "content": "ChinaMoney USD/CNY onshore spot rate 7.12",
+                        "score": 0.75,
+                    },
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            self.extract_inputs.append(kwargs["search_results"])
+            return {
+                "results": [
+                    {
+                        "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                        "content": "ChinaMoney USD/CNY onshore spot rate 7.12",
+                        "score": 0.75,
+                    }
+                ]
+            }
+
+    class DummyExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            assert any("chinamoney.com.cn" in (s.get("url") or "") for s in snippets)
+            return {
+                "value": 7.12,
+                "unit": "",
+                "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+                "confidence": 0.9,
+                "manual_required": False,
+                "manual_reason": None,
+            }
+
+    client = DummyClient()
+    completed, failures, _ = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            client,
+            None,
+            DummyExtractor(),
+            tmp_path / "usdcny_extract.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+        )
+    )
+
+    assert completed or failures
+    assert client.extract_inputs
+    assert all(len(items) == 1 for items in client.extract_inputs)
+    assert all("chinamoney.com.cn" in items[0]["url"] for items in client.extract_inputs)
+
+
+def test_execute_tasks_usdcny_extract_skips_when_official_filter_empty(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "forex": [{"pair": "USDCNY", "current_rate": None, "source": ""}],
+        "missing_items": [{"key": "USDCNY"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "USDCNY")
+
+    class DummyClient:
+        def __init__(self):
+            self.extract_called = False
+
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
+                        "snippet": "USD/CNY 7.1234 fake official-looking table",
+                        "content": "USD/CNY 7.1234 fake official-looking table",
+                        "score": 0.99,
+                    },
+                    {
+                        "url": "https://www.investing.com/currencies/usd-cny",
+                        "snippet": "USD/CNY market quote 7.19",
+                        "content": "USD/CNY market quote 7.19",
+                        "score": 0.88,
+                    },
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            self.extract_called = True
+            raise AssertionError("extract should not run without official snippets")
+
+    class DummyExtractor:
+        def __init__(self):
+            self.called = False
+
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.called = True
+            return {
+                "value": 7.18,
+                "unit": "",
+                "source_url": "https://fakechinamoney.com.cn/chinese/bkccpr/",
+                "confidence": 0.95,
+                "manual_required": False,
+                "manual_reason": None,
+            }
+
+    client = DummyClient()
+    extractor = DummyExtractor()
+    stats = {}
+    completed, failures, websearch_results = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            client,
+            None,
+            extractor,
+            tmp_path / "usdcny_extract_no_official.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+            stats=stats,
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert stats["regex_hits"] == 0
+    assert client.extract_called is False
+    assert extractor.called is False
+    assert websearch_results[-1]["extraction"]["value"] is None
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "usdcny_extract_no_official.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows
+    assert rows[-1]["manual_required"] is True
+    assert rows[-1]["manual_reason"] == "skipped_deepseek:official_domain_filter_empty"
+    assert rows[-1]["extraction_skipped_reason"] == "official_domain_filter_empty"
+    assert rows[-1]["extract_skipped_reason"] == "official_domain_filter_empty"
+    assert payload["forex"][0].get("current_rate") is None
+
+
+def test_execute_tasks_refreshes_value_diagnostics_after_final_snippet_filtering(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-13"},
+        "commodities": [{"symbol": "BCOM", "current_price": None, "source": ""}],
+        "missing_items": [{"key": "BCOM"}],
+    }
+    task = {
+        "task_id": "bcom-final-diagnostics",
+        "indicator_key": "BCOM",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "query": "BCOM last price level",
+        "queries": ["BCOM last price level"],
+        "unit": "points",
+        "issuer": "Bloomberg",
+        "preferred_domains": [],
+        "required_output_fields": ["current_price"],
+        "evidence_keywords": ["last price", "level", "points"],
+        "retry_count": 0,
+        "created_at": 0,
+        "trigger_reason": "missing",
+        "max_age_days": 30,
+        "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+    }
+
+    class DummyClient:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/bcom-old-quote",
+                        "title": "BCOM quote",
+                        "content": "BCOM last price was 101.25 points on 2025-01-01.",
+                        "score": 0.72,
+                    }
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/bcom-methodology",
+                        "content": (
+                            "2026-05-13 BCOM methodology calculation weights rebalance "
+                            "rulebook uses a 100 baseline."
+                        ),
+                        "score": 0.95,
+                    }
+                ]
+            }
+
+    class DummyExtractor:
+        def __init__(self):
+            self.snippets = None
+
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.snippets = snippets
+            return {
+                "value": None,
+                "unit": unit_hint,
+                "source_url": None,
+                "confidence": 0.0,
+                "manual_required": True,
+                "manual_reason": "no_value",
+                "llm_latency_ms": 0,
+            }
+
+    extractor = DummyExtractor()
+    completed, failures, websearch_results = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            extractor,
+            tmp_path / "bcom_final_diagnostics.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+            stats={},
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert extractor.snippets
+    assert [s["url"] for s in extractor.snippets] == ["https://example.com/bcom-methodology"]
+
+    final_task = websearch_results[-1]["task"]
+    assert final_task["value_evidence_score"] == 0
+    assert final_task["usage_evidence_score"] == 0
+    assert final_task["score_stats"]["score_count"] == 1
+    assert final_task["score_stats"]["score_max"] == 0.95
+    assert "value_evidence=0" in final_task["selected_reason"]
+    assert "value_evidence=8" not in final_task["selected_reason"]
+    assert "score_max=0.95" in final_task["selected_reason"]
+    assert "score_max=0.72" not in final_task["selected_reason"]
+    assert websearch_results[-1]["raw_results"][0]["url"] == "https://example.com/bcom-methodology"
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "bcom_final_diagnostics.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["value_evidence_score"] == 0
+    assert rows[-1]["usage_evidence_score"] == 0
+    assert rows[-1]["score_count"] == 1
+    assert rows[-1]["score_max"] == 0.95
+    assert "value_evidence=0" in rows[-1]["selected_reason"]
+    assert "value_evidence=8" not in rows[-1]["selected_reason"]
+    assert "score_max=0.95" in rows[-1]["selected_reason"]
+    assert "score_max=0.72" not in rows[-1]["selected_reason"]
+
+
+def test_execute_tasks_keeps_low_score_value_evidence_before_deepseek(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-13"},
+        "commodities": [{"symbol": "BCOM", "current_price": None, "source": ""}],
+        "missing_items": [{"key": "BCOM"}],
+    }
+    task = {
+        "task_id": "bcom-final-value-evidence",
+        "indicator_key": "BCOM",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "query": "BCOM last price level",
+        "queries": ["BCOM last price level"],
+        "unit": "points",
+        "issuer": "Bloomberg",
+        "preferred_domains": [],
+        "required_output_fields": ["current_price"],
+        "evidence_keywords": ["last price", "level", "points"],
+        "retry_count": 0,
+        "created_at": 0,
+        "trigger_reason": "missing",
+        "max_age_days": 30,
+        "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+    }
+
+    class DummyClient:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/bcom-search",
+                        "title": "BCOM quote search result",
+                        "content": "BCOM last price page for 2026-05-13.",
+                        "score": 0.72,
+                    },
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/bcom-quote",
+                        "content": "BCOM last price was 101.25 points on 2026-05-13.",
+                        "score": 0.28,
+                    },
+                    {
+                        "url": "https://example.com/bcom-overview",
+                        "content": "Bloomberg Commodity Index tracks diversified commodity futures markets.",
+                        "score": 0.95,
+                    },
+                ]
+            }
+
+    class DummyExtractor:
+        def __init__(self):
+            self.snippets = None
+
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.snippets = snippets
+            return {
+                "value": None,
+                "unit": unit_hint,
+                "source_url": None,
+                "confidence": 0.0,
+                "manual_required": True,
+                "manual_reason": "no_value",
+                "llm_latency_ms": 0,
+            }
+
+    extractor = DummyExtractor()
+    completed, failures, websearch_results = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            extractor,
+            tmp_path / "bcom_final_value_evidence.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+            stats={},
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert extractor.snippets
+    assert any(s["url"] == "https://example.com/bcom-quote" for s in extractor.snippets)
+
+    final_task = websearch_results[-1]["task"]
+    assert final_task["value_evidence_score"] > 0
+    assert "value_evidence=0" not in final_task["selected_reason"]
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "bcom_final_value_evidence.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["value_evidence_score"] > 0
+    assert "value_evidence=0" not in rows[-1]["selected_reason"]
+
+
 def test_execute_tasks_skip_existing_value_clears_missing_items_and_marks_result_type(tmp_path: Path):
     payload = {
         "fund_flow": {
@@ -1194,6 +1853,7 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
     }
     planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
     task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "etf")
+    stats = {}
 
     class DummyClient:
         async def search(self, query, **kwargs):
@@ -1215,7 +1875,24 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
             }
 
     class DummyExtractor:
+        def __init__(self):
+            self.calls = 0
+
         async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "value": None,
+                    "unit": "亿元",
+                    "source_url": "https://data.eastmoney.com/etf",
+                    "confidence": 0.9,
+                    "note": "primary_missing_windows",
+                    "manual_required": True,
+                    "manual_reason": "fund_flow_window_missing",
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "inflow",
+                }
             text = " ".join(str(s.get("content") or s.get("snippet") or "") for s in snippets)
             if "近120日" in text or "累计" in text:
                 return {
@@ -1254,6 +1931,7 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
             cache_ttl=10,
             disable_extract=True,
             extraction_backend="deepseek",
+            stats=stats,
         )
     )
     assert completed
@@ -1261,3 +1939,6 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
     assert payload["fund_flow"]["etf"]["recent_5d"] == pytest.approx(85.0)
     assert payload["fund_flow"]["etf"]["total_120d"] == pytest.approx(1200.0)
     assert payload["fund_flow"]["etf"]["trend"] == "流入"
+    assert stats["field_retry_count"] == 2
+    assert stats["field_retry_merged_count"] == 2
+    assert stats["field_retry_missing_fields"]["etf"] == ["recent_5d", "total_120d"]

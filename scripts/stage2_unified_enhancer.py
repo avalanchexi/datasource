@@ -561,6 +561,40 @@ def _filter_by_domain(
     return snippets if fallback_to_original else []
 
 
+def _official_extract_domains(extract_policy: Dict[str, Any]) -> List[str]:
+    if not extract_policy.get("official_domains_only"):
+        return []
+    domains = extract_policy.get("official_domains") or []
+    return [str(domain).strip().lower() for domain in domains if str(domain).strip()]
+
+
+def _host_matches_official_domain(host: str, domain: str) -> bool:
+    host = host.strip().lower().rstrip(".")
+    domain = domain.strip().lower().rstrip(".")
+    return bool(host and domain and (host == domain or host.endswith(f".{domain}")))
+
+
+def _filter_by_official_extract_domain(
+    snippets: List[Dict[str, Any]],
+    official_domains: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    if not official_domains:
+        return snippets
+    domains = [str(domain).strip().lower().rstrip(".") for domain in official_domains if str(domain).strip()]
+    if not domains:
+        return snippets
+    filtered: List[Dict[str, Any]] = []
+    for snip in snippets:
+        url = snip.get("url") or ""
+        try:
+            host = (urlparse(url).hostname or "").lower().rstrip(".")
+        except Exception:
+            continue
+        if any(_host_matches_official_domain(host, domain) for domain in domains):
+            filtered.append(snip)
+    return filtered
+
+
 def _snippet_blob(snippet: Dict[str, Any]) -> str:
     return " ".join(
         [
@@ -664,6 +698,97 @@ def _usage_evidence_score(snippet: Dict[str, Any], keywords: Optional[List[str]]
     return sum(1 for keyword in keywords or [] if str(keyword or "").strip().lower() in blob)
 
 
+def _value_evidence_score(snippet: Dict[str, Any], task: Dict[str, Any]) -> int:
+    blob = _snippet_blob(snippet).lower()
+    if not blob:
+        return 0
+    non_value_hits = sum(
+        1
+        for token in (
+            "methodology",
+            "calculation",
+            "weights",
+            "rebalance",
+            "contract specs",
+            "contract specifications",
+            "rulebook",
+            "target weights",
+            "annual rebalance",
+            "contract unit",
+            "minimum price fluctuation",
+            "fact card",
+        )
+        if token in blob
+    )
+    if non_value_hits >= 2:
+        return 0
+    unit = str(task.get("unit") or "").lower()
+    indicator = str(task.get("indicator_key") or "").lower()
+    numeric_hits = len(re.findall(r"(?<!\d)(?:\d{1,4}(?:,\d{3})*|\d+)(?:\.\d+)?(?!\d)", blob))
+    if numeric_hits == 0:
+        return 0
+    score = min(numeric_hits, 3)
+    if unit and unit.replace("$", "usd") in blob.replace("$", "usd"):
+        score += 2
+    if any(token in blob for token in ("price", "level", "last", "settle", "settlement", "收盘", "结算", "点位", "报价")):
+        score += 2
+    if non_value_hits:
+        score -= max(4, non_value_hits * 3)
+    if indicator and indicator in blob:
+        score += 1
+    return max(0, score)
+
+
+def _final_snippet_diagnostics(task: Dict[str, Any], snippets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    good_url_patterns = task.get("good_url_patterns") or []
+    bad_url_patterns = task.get("bad_url_patterns") or []
+    evidence_keywords = task.get("evidence_keywords") or []
+    usage_evidence_score = 0
+    value_evidence_score = 0
+    good_url_hit_count = 0
+    bad_url_hit_count = 0
+    for snippet in snippets:
+        url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
+        if _pattern_hits(url_blob, good_url_patterns):
+            good_url_hit_count += 1
+        if _pattern_hits(url_blob, bad_url_patterns):
+            bad_url_hit_count += 1
+        usage_evidence_score += _usage_evidence_score(snippet, evidence_keywords)
+        value_evidence_score += _value_evidence_score(snippet, task)
+    return {
+        "score_stats": _score_stats(snippets),
+        "trusted_count": len(snippets),
+        "usable_count": len(snippets),
+        "issuer_hit": _snippets_have_issuer(
+            snippets,
+            issuer_hint=task.get("issuer"),
+            issuer_aliases=task.get("issuer_aliases"),
+        ),
+        "period_hit": _snippets_have_expected_period(snippets, task.get("expected_period_tokens")),
+        "usage_evidence_score": usage_evidence_score,
+        "value_evidence_score": value_evidence_score,
+        "good_url_hit_count": good_url_hit_count,
+        "bad_url_hit_count": bad_url_hit_count,
+    }
+
+
+def _selected_reason_from_diagnostics(
+    diagnostics: Dict[str, Any],
+    unusable_reason: Optional[str] = None,
+) -> str:
+    score_stats = diagnostics.get("score_stats") or {}
+    return (
+        f"trusted={diagnostics.get('trusted_count', 0)} usable={diagnostics.get('usable_count', 0)} "
+        f"issuer_hit={diagnostics.get('issuer_hit', False)} period_hit={diagnostics.get('period_hit', False)} "
+        f"usage_evidence={diagnostics.get('usage_evidence_score', 0)} "
+        f"value_evidence={diagnostics.get('value_evidence_score', 0)} "
+        f"good_url={diagnostics.get('good_url_hit_count', 0)} "
+        f"bad_url={diagnostics.get('bad_url_hit_count', 0)} "
+        f"score_max={score_stats.get('score_max')}"
+        + (f" reason={unusable_reason}" if unusable_reason else "")
+    )
+
+
 def _candidate_query_quality(
     task: Dict[str, Any],
     candidate: Dict[str, Any],
@@ -717,32 +842,40 @@ def _candidate_query_quality(
     bad_url_patterns = candidate.get("bad_url_patterns") or task.get("bad_url_patterns") or []
     evidence_keywords = candidate.get("evidence_keywords") or task.get("evidence_keywords") or []
 
-    scored_usable: List[Dict[str, Any]] = []
-    bad_url_hit_count = 0
-    good_url_hit_count = 0
-    usage_evidence_score = 0
-    for snippet in usable:
-        url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
-        bad_hits = _pattern_hits(url_blob, bad_url_patterns)
-        good_hits = _pattern_hits(url_blob, good_url_patterns)
-        evidence_score = _usage_evidence_score(snippet, evidence_keywords)
-        bad_url_hit_count += 1 if bad_hits else 0
-        good_url_hit_count += 1 if good_hits else 0
-        usage_evidence_score += evidence_score
-        scored_usable.append(
-            {
-                "snippet": snippet,
-                "bad_hits": bad_hits,
-                "good_hits": good_hits,
-                "evidence_score": evidence_score,
-            }
-        )
+    def _score_usable(current: List[Dict[str, Any]]) -> Dict[str, Any]:
+        scored: List[Dict[str, Any]] = []
+        for snippet in current:
+            url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
+            bad_hits = _pattern_hits(url_blob, bad_url_patterns)
+            good_hits = _pattern_hits(url_blob, good_url_patterns)
+            evidence_score = _usage_evidence_score(snippet, evidence_keywords)
+            value_score = _value_evidence_score(snippet, task)
+            scored.append(
+                {
+                    "snippet": snippet,
+                    "bad_hits": bad_hits,
+                    "good_hits": good_hits,
+                    "evidence_score": evidence_score,
+                    "value_score": value_score,
+                }
+            )
+        return {
+            "scored": scored,
+            "bad_url_hit_count": sum(1 for item in scored if item["bad_hits"]),
+            "good_url_hit_count": sum(1 for item in scored if item["good_hits"]),
+            "usage_evidence_score": sum(int(item["evidence_score"]) for item in scored),
+            "value_evidence_score": sum(int(item["value_score"]) for item in scored),
+        }
+
+    usable_scores = _score_usable(usable)
+    scored_usable: List[Dict[str, Any]] = usable_scores["scored"]
+    original_bad_url_hit_count = int(usable_scores["bad_url_hit_count"])
 
     if any(item["bad_hits"] for item in scored_usable) and any(not item["bad_hits"] for item in scored_usable):
         kept = [item for item in scored_usable if not item["bad_hits"]]
         usable = [item["snippet"] for item in kept]
-        usage_evidence_score = sum(int(item["evidence_score"]) for item in kept)
-        good_url_hit_count = sum(1 for item in kept if item["good_hits"])
+        usable_scores = _score_usable(usable)
+        scored_usable = usable_scores["scored"]
 
     if usable and not unusable_reason:
         issuer_hit = _snippets_have_issuer(
@@ -754,10 +887,37 @@ def _candidate_query_quality(
         if strict_issuer_match and not issuer_hit:
             unusable_reason = "strict_issuer_miss"
             usable = []
+            usable_scores = _score_usable(usable)
 
+    requires_value_evidence = bool(task.get("required_output_fields") or task.get("evidence_keywords"))
     high_score = [s for s in usable if s.get("score") is None or s.get("score", 0) >= 0.5]
     if high_score:
-        usable = high_score
+        high_score_scores = _score_usable(high_score)
+        high_score_value = int(high_score_scores["value_evidence_score"])
+        current_value = int(usable_scores["value_evidence_score"])
+        if not requires_value_evidence or high_score_value >= current_value or current_value <= 0:
+            usable = high_score
+            usable_scores = high_score_scores
+            issuer_hit = _snippets_have_issuer(
+                usable,
+                issuer_hint=task.get("issuer"),
+                issuer_aliases=task.get("issuer_aliases"),
+            )
+            period_hit = _snippets_have_expected_period(usable, task.get("expected_period_tokens"))
+
+    usage_evidence_score = int(usable_scores["usage_evidence_score"])
+    value_evidence_score = int(usable_scores["value_evidence_score"])
+    good_url_hit_count = int(usable_scores["good_url_hit_count"])
+    bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
+
+    if usable and not unusable_reason and requires_value_evidence and value_evidence_score <= 0:
+        unusable_reason = "value_evidence_miss"
+        usable = []
+        usable_scores = _score_usable(usable)
+        usage_evidence_score = int(usable_scores["usage_evidence_score"])
+        value_evidence_score = int(usable_scores["value_evidence_score"])
+        good_url_hit_count = int(usable_scores["good_url_hit_count"])
+        bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
 
     score_stats = _score_stats(usable)
     usable_count = len(usable)
@@ -768,6 +928,7 @@ def _candidate_query_quality(
         + (15.0 if issuer_hit else 0.0)
         + ((score_stats.get("score_max") or 0.0) * 10.0)
         + usage_evidence_score * 12.0
+        + value_evidence_score * 18.0
         + good_url_hit_count * 25.0
         - bad_url_hit_count * 140.0
     )
@@ -782,16 +943,23 @@ def _candidate_query_quality(
         "score_stats": score_stats,
         "quality_score": quality_score,
         "usage_evidence_score": usage_evidence_score,
+        "value_evidence_score": value_evidence_score,
         "good_url_hit_count": good_url_hit_count,
         "bad_url_hit_count": bad_url_hit_count,
         "unusable_reason": unusable_reason,
-        "selected_reason": (
-            f"trusted={trusted_count} usable={usable_count} "
-            f"issuer_hit={issuer_hit} period_hit={period_hit} "
-            f"usage_evidence={usage_evidence_score} "
-            f"good_url={good_url_hit_count} bad_url={bad_url_hit_count} "
-            f"score_max={score_stats.get('score_max')}"
-            + (f" reason={unusable_reason}" if unusable_reason else "")
+        "selected_reason": _selected_reason_from_diagnostics(
+            {
+                "score_stats": score_stats,
+                "trusted_count": trusted_count,
+                "usable_count": usable_count,
+                "issuer_hit": issuer_hit,
+                "period_hit": period_hit,
+                "usage_evidence_score": usage_evidence_score,
+                "value_evidence_score": value_evidence_score,
+                "good_url_hit_count": good_url_hit_count,
+                "bad_url_hit_count": bad_url_hit_count,
+            },
+            unusable_reason,
         ),
     }
 
@@ -1780,7 +1948,10 @@ async def _execute_tasks(
     stats.setdefault("extract_cooldown_count", 0)
     stats.setdefault("low_score_drop", 0)
     stats.setdefault("low_score_allow", 0)
+    stats.setdefault("value_evidence_drop_count", 0)
     stats.setdefault("field_retry_count", 0)
+    stats.setdefault("field_retry_merged_count", 0)
+    stats.setdefault("field_retry_missing_fields", {})
     stats.setdefault("post_filter_query_switch_count", 0)
     stats.setdefault("exa_fallback", 0)
     stats.setdefault("exa_empty", 0)
@@ -2111,6 +2282,7 @@ async def _execute_tasks(
                     "score_max": quality.get("score_stats", {}).get("score_max"),
                     "quality_score": quality.get("quality_score"),
                     "usage_evidence_score": quality.get("usage_evidence_score"),
+                    "value_evidence_score": quality.get("value_evidence_score"),
                     "good_url_hit_count": quality.get("good_url_hit_count"),
                     "bad_url_hit_count": quality.get("bad_url_hit_count"),
                     "unusable_reason": quality.get("unusable_reason"),
@@ -2129,6 +2301,7 @@ async def _execute_tasks(
                     "issuer_hit": quality.get("issuer_hit", False),
                     "period_hit": quality.get("period_hit", False),
                     "usage_evidence_score": quality.get("usage_evidence_score", 0),
+                    "value_evidence_score": quality.get("value_evidence_score", 0),
                     "good_url_hit_count": quality.get("good_url_hit_count", 0),
                     "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
                     "unusable_reason": quality.get("unusable_reason"),
@@ -2172,6 +2345,7 @@ async def _execute_tasks(
         if not missing_fields:
             return extraction, []
 
+        stats["field_retry_missing_fields"][task["indicator_key"]] = list(missing_fields)
         field_attempts: List[Dict[str, Any]] = []
         for field_scope in missing_fields:
             candidates = _expand_query_candidates(task, field_scopes=[field_scope], include_primary=False)
@@ -2205,6 +2379,7 @@ async def _execute_tasks(
             if value is None:
                 continue
             extraction[field_scope] = value
+            stats["field_retry_merged_count"] += 1
             extraction["note"] = _append_note(
                 extraction.get("note"),
                 f"{field_scope}_field_retry:{field_task.get('query')}",
@@ -2312,6 +2487,10 @@ async def _execute_tasks(
                     "issuer_hit": task.get("issuer_hit"),
                     "period_hit": task.get("period_hit"),
                     "selected_reason": task.get("selected_reason"),
+                    "usage_evidence_score": task.get("usage_evidence_score"),
+                    "value_evidence_score": task.get("value_evidence_score"),
+                    "good_url_hit_count": task.get("good_url_hit_count"),
+                    "bad_url_hit_count": task.get("bad_url_hit_count"),
                     "score_min": (task.get("score_stats") or {}).get("score_min"),
                     "score_p50": (task.get("score_stats") or {}).get("score_p50"),
                     "score_p95": (task.get("score_stats") or {}).get("score_p95"),
@@ -2481,6 +2660,7 @@ async def _execute_tasks(
                                 "period_hit": best_payload.get("period_hit", False),
                                 "selected_reason": best_payload.get("selected_reason"),
                                 "usage_evidence_score": best_payload.get("usage_evidence_score", 0),
+                                "value_evidence_score": best_payload.get("value_evidence_score", 0),
                                 "good_url_hit_count": best_payload.get("good_url_hit_count", 0),
                                 "bad_url_hit_count": best_payload.get("bad_url_hit_count", 0),
                                 "unusable_reason": best_payload.get("unusable_reason"),
@@ -2564,6 +2744,8 @@ async def _execute_tasks(
                                 or task_for_log.get("unusable_reason")
                                 or "no_snippets"
                             )
+                            if skip_deepseek_reason == "value_evidence_miss":
+                                stats["value_evidence_drop_count"] += 1
                         score_stats = _score_stats(snippets)
                     score_low_all = False
                     effective_low_score = task.get("low_score_threshold")
@@ -2608,7 +2790,22 @@ async def _execute_tasks(
                                 if cooldown_until and time.time() < cooldown_until:
                                     extract_skipped_reason = "extract_cooldown"
                             if extract_skipped_reason is None:
-                                top_for_extract = snippets[: max(1, local_extract_topk)]
+                                extract_candidates = snippets
+                                official_domains = _official_extract_domains(extract_policy)
+                                if official_domains:
+                                    extract_candidates = _filter_by_official_extract_domain(
+                                        snippets,
+                                        official_domains,
+                                    )
+                                    if not extract_candidates:
+                                        extract_skipped_reason = "official_domain_filter_empty"
+                                        if snippets:
+                                            skip_deepseek_reason = "official_domain_filter_empty"
+                                top_for_extract = (
+                                    extract_candidates[: max(1, local_extract_topk)]
+                                    if extract_skipped_reason is None
+                                    else []
+                                )
                                 if top_for_extract:
                                     stats["tavily_extract_calls"] += 1
                                     extract_resp = await client.extract(
@@ -2712,8 +2909,16 @@ async def _execute_tasks(
                     before_score = len(snippets)
                     high_score = [s for s in snippets if s.get("score") is None or s.get("score", 0) >= 0.5]
                     if high_score:
-                        snippets = high_score
-                        stats["score_filtered_drop"] += max(0, before_score - len(snippets))
+                        requires_value_evidence = bool(
+                            task_for_log.get("required_output_fields") or task_for_log.get("evidence_keywords")
+                        )
+                        high_score_diagnostics = _final_snippet_diagnostics(task_for_log, high_score)
+                        current_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
+                        high_score_value = int(high_score_diagnostics["value_evidence_score"])
+                        current_value = int(current_diagnostics["value_evidence_score"])
+                        if not requires_value_evidence or high_score_value >= current_value or current_value <= 0:
+                            snippets = high_score
+                            stats["score_filtered_drop"] += max(0, before_score - len(snippets))
                     score_filtered_drop_local = max(0, before_score - len(snippets)) if high_score else 0
                     before = len(snippets)
                     snippets = _filter_by_domain(
@@ -2727,6 +2932,12 @@ async def _execute_tasks(
                     domain_filtered_drop_local = max(0, before - after) if before and before != after else 0
                     snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
                     snippets = _prefer_latest_report_snippets(snippets, task.get("indicator_key"))
+                    final_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
+                    score_stats = final_diagnostics["score_stats"]
+                    selected_reason = _selected_reason_from_diagnostics(
+                        final_diagnostics,
+                        task_for_log.get("unusable_reason"),
+                    )
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     task_for_log = {
                         **task,
@@ -2739,13 +2950,14 @@ async def _execute_tasks(
                         "score_low_all": score_low_all,
                         "score_low_threshold": effective_low_score,
                         "usable_count_before_extract": task_for_log.get("usable_count_before_extract", len(snippets)),
-                        "trusted_count": task_for_log.get("trusted_count", 0),
-                        "issuer_hit": task_for_log.get("issuer_hit", False),
-                        "period_hit": task_for_log.get("period_hit", False),
-                        "selected_reason": task_for_log.get("selected_reason"),
-                        "usage_evidence_score": task_for_log.get("usage_evidence_score", 0),
-                        "good_url_hit_count": task_for_log.get("good_url_hit_count", 0),
-                        "bad_url_hit_count": task_for_log.get("bad_url_hit_count", 0),
+                        "trusted_count": final_diagnostics["trusted_count"],
+                        "issuer_hit": final_diagnostics["issuer_hit"],
+                        "period_hit": final_diagnostics["period_hit"],
+                        "selected_reason": selected_reason,
+                        "usage_evidence_score": final_diagnostics["usage_evidence_score"],
+                        "value_evidence_score": final_diagnostics["value_evidence_score"],
+                        "good_url_hit_count": final_diagnostics["good_url_hit_count"],
+                        "bad_url_hit_count": final_diagnostics["bad_url_hit_count"],
                         "score_filtered_drop": score_filtered_drop_local,
                         "domain_filtered_drop": domain_filtered_drop_local,
                         "extraction_skipped_reason": skip_deepseek_reason,
@@ -2806,6 +3018,7 @@ async def _execute_tasks(
                                 "period_hit": task_for_log.get("period_hit"),
                                 "selected_reason": task_for_log.get("selected_reason"),
                                 "usage_evidence_score": task_for_log.get("usage_evidence_score"),
+                                "value_evidence_score": task_for_log.get("value_evidence_score"),
                                 "good_url_hit_count": task_for_log.get("good_url_hit_count"),
                                 "bad_url_hit_count": task_for_log.get("bad_url_hit_count"),
                                 "score_min": score_stats.get("score_min"),
@@ -2855,7 +3068,10 @@ async def _execute_tasks(
                             stats["extract_calls"] += 1
                             extraction = await _do_extract(snippets, task)
                         # regex 兜底：关键指标无值时尝试直接提取数字（低相关时跳过）
-                        if extraction.get("value") is None and skip_deepseek_reason != "low_score_all":
+                        if extraction.get("value") is None and skip_deepseek_reason not in {
+                            "low_score_all",
+                            "official_domain_filter_empty",
+                        }:
                             regex_val = _regex_fallback(snippets, task["indicator_key"])
                             if regex_val is not None:
                                 extraction["value"] = regex_val
@@ -2972,6 +3188,7 @@ async def _execute_tasks(
                             "period_hit": task_for_log.get("period_hit"),
                             "selected_reason": task_for_log.get("selected_reason"),
                             "usage_evidence_score": task_for_log.get("usage_evidence_score"),
+                            "value_evidence_score": task_for_log.get("value_evidence_score"),
                             "good_url_hit_count": task_for_log.get("good_url_hit_count"),
                             "bad_url_hit_count": task_for_log.get("bad_url_hit_count"),
                             "score_min": score_stats.get("score_min"),
@@ -3987,6 +4204,7 @@ async def main() -> int:
         "regex_hits": exec_stats.get("regex_hits", 0),
         "score_filtered_drop": exec_stats.get("score_filtered_drop", 0),
         "low_score_drop": exec_stats.get("low_score_drop", 0),
+        "value_evidence_drop_count": exec_stats.get("value_evidence_drop_count", 0),
         "timeout_count": exec_stats.get("timeout_count", 0),
         "deepseek_timeouts": exec_stats.get("deepseek_timeouts", 0),
         "retry_count": exec_stats.get("retry_count", 0),
@@ -3999,6 +4217,8 @@ async def main() -> int:
         "extract_globally_disabled": exec_stats.get("extract_globally_disabled", args.disable_extract),
         "extract_global_disable_reason": exec_stats.get("extract_global_disable_reason"),
         "field_retry_count": exec_stats.get("field_retry_count", 0),
+        "field_retry_merged_count": exec_stats.get("field_retry_merged_count", 0),
+        "field_retry_missing_fields": exec_stats.get("field_retry_missing_fields", {}),
         "post_filter_query_switch_count": exec_stats.get("post_filter_query_switch_count", 0),
         "exa_fallback": exec_stats.get("exa_fallback", 0),
         "exa_empty": exec_stats.get("exa_empty", 0),

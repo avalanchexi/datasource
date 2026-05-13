@@ -24,6 +24,27 @@ from datasource.utils.run_paths import build_run_paths_from_reference
 
 PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}
 
+DAILY_QUOTE_KEYS = {
+    "GC=F",
+    "CL=F",
+    "BZ=F",
+    "HG=F",
+    "BCOM",
+    "GSG",
+    "DXY",
+    "USDCNY",
+    "USDCNH",
+    "US10Y",
+    "CN10Y",
+    "CN10Y_CDB",
+    "bdi",
+    "000001",
+    "000016",
+    "000300",
+    "399001",
+    "399006",
+}
+
 
 class Stage2TaskPlanner:
     """扫描占位并生成 Tavily/DeepSeek 搜索任务"""
@@ -66,7 +87,7 @@ class Stage2TaskPlanner:
             dt = datetime.now()
         ref_year = dt.year
         ref_month = dt.month
-        # 宏观月度数据通常为上月发布
+        ref_day = dt.day
         if ref_month == 1:
             report_year, report_month = ref_year - 1, 12
         else:
@@ -75,7 +96,13 @@ class Stage2TaskPlanner:
             "ref_year": ref_year,
             "ref_month": ref_month,
             "ref_month2": f"{ref_month:02d}",
+            "ref_day": ref_day,
+            "ref_day2": f"{ref_day:02d}",
             "ref_ym": f"{ref_year}{ref_month:02d}",
+            "ref_date": dt.strftime("%Y-%m-%d"),
+            "ref_date_label": f"{ref_year}年{ref_month}月{ref_day}日",
+            "closing_date": dt.strftime("%Y-%m-%d"),
+            "closing_date_label": f"{ref_year}年{ref_month}月{ref_day}日",
             "report_year": report_year,
             "report_month": report_month,
             "report_month2": f"{report_month:02d}",
@@ -260,6 +287,47 @@ class Stage2TaskPlanner:
                 )
         return tasks
 
+    def _time_context_type(self, profile_key: str, indicator_key: str, expected_period: Optional[str]) -> str:
+        if expected_period:
+            return "monthly_period"
+        return "daily_quote" if profile_key in DAILY_QUOTE_KEYS or indicator_key in DAILY_QUOTE_KEYS else "monthly_period"
+
+    def _expected_period_tokens_for(
+        self,
+        time_context_type: str,
+        expected_period: Optional[str],
+        task_context: Dict[str, object],
+    ) -> List[str]:
+        if time_context_type == "daily_quote" and not expected_period:
+            return []
+        tokens = [
+            str(task_context.get("expected_period_label") or "").strip(),
+            str(task_context.get("expected_period_range_label") or "").strip(),
+            f"{task_context.get('expected_year')}年{task_context.get('expected_month2')}月",
+            f"{task_context.get('expected_year')}-{task_context.get('expected_month2')}",
+        ]
+        return [token for token in tokens if token and "None" not in token]
+
+    def _enrich_daily_quote_query_families(
+        self,
+        query_families: List[Dict[str, Any]],
+        task_context: Dict[str, object],
+    ) -> List[Dict[str, Any]]:
+        closing_date = str(task_context.get("closing_date") or "").strip()
+        closing_date_label = str(task_context.get("closing_date_label") or "").strip()
+        if not closing_date:
+            return query_families
+        enriched: List[Dict[str, Any]] = []
+        for family in query_families:
+            queries = [
+                q
+                if closing_date in q or (closing_date_label and closing_date_label in q)
+                else f"{q} {closing_date}"
+                for q in family.get("queries", [])
+            ]
+            enriched.append({**family, "queries": queries})
+        return enriched
+
     def _new_task(
         self,
         indicator_key: str,
@@ -277,13 +345,15 @@ class Stage2TaskPlanner:
         queries = [q for q in queries if q]
         query_families = self._render_query_families(profile.get("query_families"), task_context)
         field_queries = self._render_field_queries(profile.get("field_queries"), task_context)
-        expected_period_tokens = [
-            str(task_context.get("expected_period_label") or "").strip(),
-            str(task_context.get("expected_period_range_label") or "").strip(),
-            f"{task_context.get('expected_year')}年{task_context.get('expected_month2')}月",
-            f"{task_context.get('expected_year')}-{task_context.get('expected_month2')}",
-        ]
-        expected_period_tokens = [token for token in expected_period_tokens if token and "None" not in token]
+        time_context_type = self._time_context_type(profile_key, indicator_key, expected_period)
+        expected_period_tokens = self._expected_period_tokens_for(
+            time_context_type,
+            expected_period,
+            task_context,
+        )
+        if time_context_type == "daily_quote" and not expected_period:
+            query_families = self._enrich_daily_quote_query_families(query_families, task_context)
+        query_candidates_expanded = [q for family in query_families for q in family.get("queries", [])]
         return {
             "task_id": str(uuid.uuid4()),
             "stage_phase": phase,
@@ -298,7 +368,7 @@ class Stage2TaskPlanner:
             "query": query,
             "queries": queries,
             "query_families": query_families,
-            "query_candidates_expanded": [q for family in query_families for q in family.get("queries", [])],
+            "query_candidates_expanded": query_candidates_expanded,
             "field_queries": field_queries,
             "unit": profile.get("unit"),
             "issuer": profile.get("issuer"),
@@ -326,6 +396,7 @@ class Stage2TaskPlanner:
             "source_hint": source_hint,
             "trigger_reason": trigger_reason,
             "force_refresh": trigger_reason == "stale_data",
+            "time_context_type": time_context_type,
             "expected_period": expected_period,
             "expected_period_tokens": expected_period_tokens,
             "retry_count": 0,

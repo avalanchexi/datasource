@@ -39,7 +39,7 @@
    ```
    Windows activate: `.venv\Scripts\activate`。
 
-2. Required keys in `.env`: `TUSHARE_TOKEN`, `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`。DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `.env` 的 `DEEPSEEK_MODEL` 或命令行参数覆盖。Optional: `EXA_API_KEY`（默认关闭、显式 opt-in，当前不进入日常路径；若后续启用，需已安装 `exa-py`，且 Stage2 需传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`）。
+2. Required keys in `.env`: `TUSHARE_TOKEN`, `TAVILY_API_KEY`, `DEEPSEEK_API_KEY`。DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `.env` 的 `DEEPSEEK_MODEL` 或命令行参数覆盖；Stage2 抽取 JSON 输出 token 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`，可用同名环境变量调高或调低（非法值回落到 900，最低 300）。Optional: `EXA_API_KEY`（默认关闭、显式 opt-in，当前不进入日常路径；若后续启用，需已安装 `exa-py`，且 Stage2 需传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`）。
 
 3. Sanity:
    ```bash
@@ -214,16 +214,20 @@ if comp < 0.8:
 - Stage2 Unified 中 fund flow 与 forex 统一使用 `tavily`；`--fund-flow-backend` 当前仅支持 `tavily`。
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`；宏观/低时效指标用 `time_range=year/month`, `max_results<=6`, `search_depth=basic`。
 - `search_profiles` 支持 `query_families`、`queries`、`field_queries`、`exclude_domains`、`max_query_candidates`、`extract_policy`；Stage2 记录 `query_used/query_family_used/query_attempts`。
-- DeepSeek extraction 默认开启 queue：`--use-queue --queue-concurrency 3 --deepseek-max-concurrency 3`；需要串行排查时显式传 `--no-use-queue`。
-- `BCOM/GSG/USDCNY/DXY/CN10Y_CDB` 等实时报价高缺口 profile 默认 `max_query_candidates=3`，并跳过 Tavily extract，直接将 Tavily search snippets 交给 DeepSeek schema 抽取，以减少 422 冷却和 Stage2.5 补数压力。
+- Stage2 query context 区分 `daily_quote` 与 `monthly_period`：日频 quote 类任务（商品、DXY、BDI、BCOM/GSG 等）使用 `closing_date/ref_date` 模板，不继承宏观 `expected_period_tokens`；月度宏观/政策任务才使用 `expected_period/report_period` 期次 token。
+- PMI 等中文宏观指标优先使用 `site:stats.gov.cn` 与国家统计局中文 query；商品期货、BCOM/GSG、DXY、BDI 等日频 quote profile 优先使用带日期/收盘/报价语义的 query，避免纯 `latest` 或概念性页面。
+- Stage2 候选排序以报告可写值为目标：可信域名、关键词和 issuer 命中后，还要优先包含目标单位、日期/期次和可解析数字的片段；概念页、规格页、fact card、annual weights、forecast/analysis 等通过 `bad_url_patterns` 或 `value_evidence_miss` 降级或剔除。
+- DeepSeek extraction 默认开启 queue：`--use-queue --queue-concurrency 3 --deepseek-max-concurrency 3`；默认抽取输出 token 为 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`；需要串行排查时显式传 `--no-use-queue`。
+- `BCOM/GSG/DXY/CN10Y_CDB` 等实时报价高缺口 profile 默认 `max_query_candidates=3`，并跳过 Tavily extract，直接将 Tavily search snippets 交给 DeepSeek 减负 schema 抽取，以减少 422 冷却和 Stage2.5 补数压力。
+- `USDCNY` 是受控例外：可对 ChinaMoney/CFETS 官方表格页走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
 - 多 query 选优按后过滤质量，而不是原始 `score_max`：先做域名、时效、关键词、发布机构、期次过滤，再选 `usable_count` 更高的 query，并统计 `post_filter_query_switch_count`。
 - 全部结果 `score_max < low_score_threshold`（默认 0.2）则跳过抽取，标记 `manual_required`，统计 `low_score_drop`。
 - Tavily extract 422 默认回退 DeepSeek 从 snippets 抽取；同指标连续 422 可按指标冷却（`extract_cooldown_count`），不会全局停用其他指标 extract。仍不稳时用 `--disable-extract` 或 `--extract-topk 1`。
 - Tavily search/extract 遇到 quota/rate limit 后，本轮立即 fast-switch 为 `manual_required` skeleton；不新增 quota probe，不重跑当日 Tavily。排查看 summary 的 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - Exa fallback 当前默认关闭，保证 Tavily-first 命中率调优不被备用搜索源污染；需要启用时必须显式传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1`。
-- 资金流缺 `recent_5d/total_120d` 时，优先按 `field_queries` 仅补缺字段，并统计 `field_retry_count`。
-- DeepSeek 强 schema：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund flow 额外返回 `recent_5d/total_120d/trend`。`source_url` 必须来自 snippets，否则强制 `manual_required`。
-- 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时追加一次“单位+发布机构+月份”定向检索。
+- 资金流缺 `recent_5d/total_120d` 时，优先按 `field_queries` 仅补缺字段，并统计 `field_retry_count/field_retry_merged_count/field_retry_missing_fields`。
+- DeepSeek 抽取 schema 已减负，默认只要求报告写回所需字段；JSON 解析失败区分 `deepseek_json_truncated` 与 `deepseek_json_parse_error`，避免把模型输出截断误判为网页无数据。`source_url` 必须来自 snippets，否则强制 `manual_required`。
+- 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时追加一次定向检索，补充单位、发布机构以及任务已有的日期/期次上下文；`daily_quote` 不强行追加宏观月份 token。
 - LangChain 默认禁用；实验时必须显式传 `--allow-langchain` 并自备依赖。
 - 低分审计：
   ```bash
@@ -309,18 +313,21 @@ if comp < 0.8:
 | Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
 | Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 
-Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，并结合 `retrieval_diagnostics`、`manual_reason_breakdown` 判断失败来源；已有值跳过看 `task_skipped_existing`，quota/rate limit 看 `tavily_unavailable_reason=quota_or_rate_limit`。
+Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，并结合 `retrieval_diagnostics`、`manual_reason_breakdown` 判断失败来源；已有值跳过看 `task_skipped_existing`，quota/rate limit 看 `tavily_unavailable_reason=quota_or_rate_limit`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated/deepseek_json_parse_error`、`field_retry_merged_count`、`field_retry_missing_fields`。
 
 ## 12. Troubleshooting
 | 问题 | 原因 | 解决方案 |
 |------|------|----------|
 | Preflight DNS 失败 | DNS/WSL/容器网络不可达 | 修复 `/etc/resolv.conf` 或宿主网络后重跑 `bash run_preflight.sh`；不要启动 Stage2 |
 | `.venv` 目录存在但不可用 | 空目录或 Windows/Linux venv 混用 | 空 `.venv` 视同无 venv，可显式 `ALLOW_SYSTEM_PYTHON=1` fallback；非空但无可用 activate/python 时删除并重建 `.venv` |
-| Stage2 DeepSeek 持续超时 | API 响应慢或网络问题 | 默认使用 `--deepseek-timeout 30 --llm-hard-timeout 35`；仍持续超时时改用 `--extraction-backend regex --disable-extract`，或串行关键指标 |
+| Stage2 DeepSeek 持续超时 | API 响应慢、并发过高或输出预算不合适 | 默认使用 `--deepseek-timeout 30 --llm-hard-timeout 35` 与 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`；仍持续超时时改用 `--extraction-backend regex --disable-extract`，或串行关键指标 |
+| DeepSeek 返回 JSON 失败 | 输出截断或格式错误 | 看 `manual_reason`：`deepseek_json_truncated` 先适度调高 `DEEPSEEK_EXTRACT_MAX_TOKENS` 或转 Stage2.5；`deepseek_json_parse_error` 优先查 prompt/schema 与 source snippets |
 | Tavily extract 422 | API 参数/限制 | 默认回退 DeepSeek；仍不稳用 `--disable-extract` 或 `--extract-topk 1` |
+| USDCNY 官方表格未抽取 | official-only snippets 为空或 hostname 不匹配 | 看 `official_domain_filter_empty`；不要放宽到非官方 fallback，转 Stage2.5 补可信官方来源 |
 | Tavily quota/rate limit | Tavily 额度或频率限制 | 同轮 fast-switch 为 `manual_required` skeleton；不要新增 quota probe 或重跑当日 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown` 后转 Stage2.5 补数 |
 | 当日 Stage2 已失败 | Tavily 不应重复消耗 | 转 Stage2.5 manual JSON 补数并注入 |
 | 搜索相关性低 | `score_max < low_score_threshold` | 调整 `search_profiles.queries/exclude_domains`，必要时转人工补数 |
+| 搜索命中但不可写报告 | 命中概念页/规格页/预测页，或缺目标日期/单位/数值证据 | 查 `value_evidence_miss` 与 `bad_url_patterns`，补 dated quote query 或转 Stage2.5 |
 | 宏观/货币显示旧月份 | TuShare 月度表滞后，`is_stale=true` | 跑 `check_monthly_freshness.py data/runs/${DATE_NH}/market_data.json`，再 Stage2/Stage2.5 覆盖 stale 字段 |
 | Stage3 完整度 <80% | 关键字段为 null | 检查 macro/monetary/stock_indices，补数后重注入 |
 | Stage3 `block_stage3=True` 但数据已注入 | policy gate 仍有 redlist 或顶层缺口 | 检查 `missing_items`、`policy_evaluation.json`、`gap_monitor.json`，补齐后重跑 Stage2.5/Stage3 |

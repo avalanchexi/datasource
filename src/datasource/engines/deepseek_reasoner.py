@@ -33,10 +33,20 @@ class DeepSeekExtractionAgent:
         api_key: Optional[str] = None,
         model: str = "deepseek-v4-pro",
         base_url: Optional[str] = None,
+        extract_max_tokens: Optional[int] = None,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.model = model
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+        raw_tokens = (
+            extract_max_tokens
+            if extract_max_tokens is not None
+            else os.getenv("DEEPSEEK_EXTRACT_MAX_TOKENS") or 900
+        )
+        try:
+            self.extract_max_tokens = max(300, int(raw_tokens))
+        except (TypeError, ValueError):
+            self.extract_max_tokens = 900
         self._client: Optional[Any] = None
 
     async def _ensure_client(self) -> Optional[Any]:
@@ -333,6 +343,51 @@ class DeepSeekExtractionAgent:
             pass
         return fallback_url, False
 
+    @staticmethod
+    def _schema_hint(is_fund_flow: bool) -> str:
+        fields = [
+            '"value": float|null',
+            '"unit": str|null',
+            '"source_url": str|null',
+            '"as_of_date": "YYYY-MM-DD"|null',
+            '"report_period": "YYYY-MM"|null',
+            '"manual_required": bool',
+            '"manual_reason": str|null',
+        ]
+        if is_fund_flow:
+            fields.extend(
+                [
+                    '"recent_5d": float|null',
+                    '"total_120d": float|null',
+                    '"trend": "inflow"|"outflow"|"unknown"',
+                ]
+            )
+        return "{" + ", ".join(fields) + "}"
+
+    @staticmethod
+    def _json_error_reason(exc: json.JSONDecodeError) -> str:
+        text = str(exc).lower()
+        if "unterminated string" in text:
+            return "deepseek_json_truncated"
+        stripped_doc = (exc.doc or "").rstrip()
+        near_eof = bool(stripped_doc) and exc.pos >= len(stripped_doc)
+        open_container = (
+            stripped_doc.count("{") > stripped_doc.count("}")
+            or stripped_doc.count("[") > stripped_doc.count("]")
+        )
+        if "expecting value" in text and near_eof and open_container:
+            return "deepseek_json_truncated"
+        if near_eof and open_container and any(
+            marker in text
+            for marker in (
+                "expecting ',' delimiter",
+                "expecting ':' delimiter",
+                "expecting property name enclosed in double quotes",
+            )
+        ):
+            return "deepseek_json_truncated"
+        return "deepseek_json_parse_error"
+
     async def extract(
         self,
         snippets: List[Dict[str, Any]],
@@ -381,22 +436,7 @@ class DeepSeekExtractionAgent:
                 "trend": trend,
             }
 
-        schema_hint = (
-            "{"
-            "\"value\": float|null, "
-            "\"unit\": str|null, "
-            "\"source_url\": str|null, "
-            "\"as_of_date\": \"YYYY-MM-DD\"|null, "
-            "\"report_period\": \"YYYY-MM\"|null, "
-            "\"confidence\": 0~1 float, "
-            "\"manual_required\": bool, "
-            "\"manual_reason\": str|null, "
-            "\"recent_5d\": float|null, "
-            "\"total_120d\": float|null, "
-            "\"trend\": \"inflow\"|\"outflow\"|\"unknown\", "
-            "\"issuer\": str|null"
-            "}"
-        )
+        schema_hint = self._schema_hint(is_fund_flow)
         prompt = (
             "你是财经数据抽取助手。"
             "必须仅基于提供的 snippets 抽取，不得猜测或补造。"
@@ -434,11 +474,29 @@ class DeepSeekExtractionAgent:
                 model=self.model,
                 messages=messages,
                 temperature=0.0,
-                max_tokens=650,
+                max_tokens=self.extract_max_tokens,
                 response_format={"type": "json_object"},
             )
             content = completion.choices[0].message.content or "{}"
-            data = json.loads(content)
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as exc:
+                reason = self._json_error_reason(exc)
+                return {
+                    "value": None,
+                    "unit": unit_hint,
+                    "source_url": first_url,
+                    "issuer_match": False,
+                    "confidence": 0.0,
+                    "note": reason,
+                    "as_of_date": None,
+                    "report_period": None,
+                    "manual_required": True,
+                    "manual_reason": reason,
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "unknown",
+                }
             value = self._to_float(data.get("value"))
             unit_val = data.get("unit") or unit_hint
             source_url_raw = data.get("source_url") or first_url

@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 环境设置
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt && pip install -e . && pip install -e ".[dev]"
-cp .env.example .env  # 编辑填入 TUSHARE_TOKEN, TAVILY_API_KEY, DEEPSEEK_API_KEY；默认 DEEPSEEK_MODEL=deepseek-v4-pro，可覆盖
+cp .env.example .env  # 编辑填入 TUSHARE_TOKEN, TAVILY_API_KEY, DEEPSEEK_API_KEY；默认 DEEPSEEK_MODEL=deepseek-v4-pro、DEEPSEEK_EXTRACT_MAX_TOKENS=900，可覆盖
 
 # 验证安装
 python -c "from datasource import get_manager; print('OK')"
@@ -142,14 +142,17 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 ### Stage2/Stage2.5 搜索优化要点
 
-- DeepSeek 抽取采用”强 schema + 证据约束”，最少输出：`value/unit/source_url/as_of_date/report_period/confidence/manual_required/manual_reason`；fund_flow 还需 `recent_5d/total_120d/trend`。
-- DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖。
+- DeepSeek 抽取采用减负 schema + 证据约束，默认只要求报告写回所需字段；`source_url` 必须来自 snippets。
+- DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖；Stage2 抽取输出 token 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`。
 - DeepSeek extraction 默认开启 queue，默认 `--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查时显式传 `--no-use-queue`。
-- `search_profiles` 支持 `max_query_candidates` 与 `extract_policy`；`BCOM/GSG/USDCNY/DXY/CN10Y_CDB` 默认限制 3 个 query candidates，并跳过 Tavily extract 直接用 snippets 抽取，降低 422 和 Stage2.5 手工补数压力。
+- Stage2 quote 搜索看 `time_context_type`：`daily_quote` 不带宏观月度 token，`monthly_period` 才带 `expected_period_tokens`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated`、`field_retry_merged_count`。
+- `search_profiles` 支持 `max_query_candidates` 与 `extract_policy`；`BCOM/GSG/DXY/CN10Y_CDB` 默认限制 3 个 query candidates，并跳过 Tavily extract 直接用 snippets 抽取，降低 422 和 Stage2.5 手工补数压力。
+- `USDCNY` 是 quote profile 的受控例外：ChinaMoney/CFETS 官方表格页可走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
+- dated quote profiles 会用 `bad_url_patterns` 和 `value_evidence_miss` 降权/剔除概念页、规格页、annual weights、forecast 等不可写报告页面。
 - `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
 - Tavily quota/rate limit 后同轮 fast-switch 到 `manual_required` skeleton；不要新增 quota probe 或重跑 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
-- Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。失败分类需结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`tavily_unavailable_reason=quota_or_rate_limit`。
-- 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构、月份）。
+- Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。失败分类需结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`tavily_unavailable_reason=quota_or_rate_limit`、`field_retry_merged_count/field_retry_missing_fields`。
+- 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构以及任务已有的日期/期次上下文；`daily_quote` 不强行追加宏观月份）。
 - Stage2.5 在接收 Stage2 `results` 结构时，会保留 `manual_required/manual_reason` 并生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`，按 `category:indicator_key` 去重）。
 - official override 仅用于代码内 `official manual override allowlist`：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。只有可信官方 HTTPS URL evidence 才会把显式 `is_estimated=True` 正规化为 `False`，并追加 `manual_official_not_estimated`。
 - 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 BCOM/USDCNY/MLF 的 estimated allowlist。
@@ -327,6 +330,7 @@ TUSHARE_TOKEN=xxx      # Required: Stage1
 TAVILY_API_KEY=xxx     # Required: Stage2
 DEEPSEEK_API_KEY=xxx   # Required: LLM extraction
 DEEPSEEK_MODEL=deepseek-v4-pro  # Default; DEEPSEEK_MODEL or CLI args can override
+DEEPSEEK_EXTRACT_MAX_TOKENS=900  # Optional: Stage2 extraction JSON token budget
 EXA_API_KEY=xxx        # Optional, default off; requires --enable-exa-fallback / STAGE2_ENABLE_EXA_FALLBACK=1
 ```
 
@@ -334,8 +338,10 @@ EXA_API_KEY=xxx        # Optional, default off; requires --enable-exa-fallback /
 
 | 问题 | 解决方案 |
 |------|----------|
-| DeepSeek 超时 | `--extraction-backend regex --disable-extract` |
+| DeepSeek 超时 | 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`；仍不稳用 `--extraction-backend regex --disable-extract` |
+| DeepSeek JSON 失败 | `deepseek_json_truncated` 优先调 token 或转 Stage2.5；`deepseek_json_parse_error` 查 prompt/schema 与 snippets |
 | Tavily extract 422 | 自动回退 DeepSeek；仍不稳用 `--disable-extract` |
+| USDCNY 官方表格为空 | 看 `official_domain_filter_empty`；不要放宽到非官方 fallback，转 Stage2.5 补可信官方来源 |
 | Tavily 当日重复 422 | **不要重试 Stage2**；改用 Stage2.5 手工注入 |
 | 日志出现 `deepseek_no_value/no_deepseek_key` | 视为 `manual_required`，优先使用 `metadata.manual_required` 骨架补数 |
 | Stage3 `block_stage3=True` 但数据已注入 | 检查 `missing_items`、`policy_evaluation.json`、`gap_monitor.json`，补齐/修正 manual JSON 后重跑 Stage2.5/Stage3 |
