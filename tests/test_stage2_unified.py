@@ -952,6 +952,74 @@ def test_candidate_query_quality_penalizes_bad_url_patterns_and_prefers_usage_ev
     assert noisy["bad_url_hit_count"] >= 1
 
 
+def test_candidate_query_quality_prefers_value_bearing_quote_over_contract_spec():
+    task = {
+        "indicator_key": "GC=F",
+        "preferred_domains": ["cmegroup.com", "tradingeconomics.com"],
+        "required_keywords": ["gold", "comex"],
+        "exclude_keywords": ["contract specifications", "fact card"],
+        "evidence_keywords": ["settlement", "price", "$/oz", "closing"],
+        "good_url_patterns": ["tradingeconomics.com/commodity/gold"],
+        "bad_url_patterns": ["contractSpecs", "fact-card"],
+        "expected_period_tokens": [],
+        "issuer": "COMEX/CME",
+        "issuer_aliases": ["CME", "COMEX"],
+    }
+    candidate = {"query": "COMEX gold futures price 2026-05-12 closing", "preferred_domains": task["preferred_domains"]}
+    value_snippets = [
+        {
+            "url": "https://tradingeconomics.com/commodity/gold",
+            "title": "Gold futures",
+            "content": "COMEX gold futures settled at 4730.70 USD per troy ounce on 2026-05-12.",
+            "score": 0.71,
+        }
+    ]
+    spec_snippets = [
+        {
+            "url": "https://www.cmegroup.com/markets/metals/precious/gold.contractSpecs.html",
+            "title": "Gold Futures Contract Specs",
+            "content": "Contract unit is 100 troy ounces. Minimum price fluctuation is 0.10.",
+            "score": 0.92,
+        }
+    ]
+
+    value_quality = _candidate_query_quality(task, candidate, value_snippets)
+    spec_quality = _candidate_query_quality(task, candidate, spec_snippets)
+
+    assert value_quality["value_evidence_score"] > 0
+    assert spec_quality["value_evidence_score"] == 0
+    assert value_quality["quality_score"] > spec_quality["quality_score"]
+
+
+def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusable_page():
+    task = {
+        "indicator_key": "BCOM",
+        "preferred_domains": ["bloomberg.com"],
+        "required_keywords": ["BCOM", "Bloomberg Commodity Index"],
+        "exclude_keywords": ["target weights", "annual rebalance"],
+        "evidence_keywords": ["level", "last price", "points"],
+        "good_url_patterns": ["bloomberg.com/quote/BCOM:IND"],
+        "bad_url_patterns": ["target-weights", "annual-rebalance"],
+        "expected_period_tokens": [],
+        "issuer": "Bloomberg",
+        "issuer_aliases": ["Bloomberg"],
+    }
+    candidate = {"query": "Bloomberg Commodity Index BCOM level 2026-05-12", "preferred_domains": task["preferred_domains"]}
+    snippets = [
+        {
+            "url": "https://www.bloomberg.com/company/press/bloomberg-commodity-index-2026-target-weights/",
+            "title": "Bloomberg Commodity Index 2026 Target Weights",
+            "content": "Bloomberg announced target weights for the annual rebalance.",
+            "score": 0.88,
+        }
+    ]
+
+    quality = _candidate_query_quality(task, candidate, snippets)
+
+    assert quality["unusable_reason"] == "value_evidence_miss"
+    assert quality["usable_count"] == 0
+
+
 def test_candidate_query_quality_penalizes_all_bad_trusted_results_below_clean_data_page():
     task = {
         "indicator_key": "etf",
