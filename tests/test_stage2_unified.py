@@ -446,6 +446,47 @@ def test_task_planner_expands_expected_period_for_query_families(tmp_path: Path)
     assert any("2026年1-2月" in q for q in task["query_candidates_expanded"])
 
 
+def test_task_planner_does_not_attach_monthly_tokens_to_daily_quotes(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "commodities": [{"symbol": "GC=F", "current_price": None}],
+        "forex": [{"pair": "DXY", "current_rate": None}],
+        "macro_indicators": {},
+        "missing_items": [{"key": "GC=F"}, {"key": "DXY"}],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task_map = {task["indicator_key"]: task for task in planner.build_tasks(payload)}
+
+    assert task_map["GC=F"]["time_context_type"] == "daily_quote"
+    assert task_map["DXY"]["time_context_type"] == "daily_quote"
+    assert task_map["GC=F"]["expected_period_tokens"] == []
+    assert task_map["DXY"]["expected_period_tokens"] == []
+    joined = " ".join(task_map["GC=F"]["query_candidates_expanded"])
+    assert "2026-05-12" in joined or "2026年5月12日" in joined
+
+
+def test_task_planner_gives_pmi_production_official_period_profile(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-12"},
+        "macro_indicators": {
+            "pmi_production": {
+                "current_value": 50.0,
+                "is_stale": True,
+                "expected_period": "2026-04",
+            }
+        },
+        "missing_items": [],
+    }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "pmi_production")
+
+    assert task["query_template_id"] == "pmi_production"
+    assert task["time_context_type"] == "monthly_period"
+    assert "2026-04" in task["expected_period_tokens"]
+    assert task["query"] != "pmi_production"
+    assert any("生产指数" in query for query in task["query_candidates_expanded"])
+
+
 def test_task_planner_keeps_etf_field_queries(tmp_path: Path):
     payload = {
         "fund_flow": {"etf": {"recent_5d": None, "total_120d": None}},

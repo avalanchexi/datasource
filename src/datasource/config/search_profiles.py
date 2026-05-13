@@ -808,6 +808,32 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         max_age_days=35,
         **_MACRO_DEFAULTS,
     ),
+    "pmi_production": _profile(
+        query="中国PMI生产指数 最新公布 国家统计局",
+        domains=["stats.gov.cn", "eastmoney.com", "caixin.com"],
+        unit="点",
+        issuer="国家统计局",
+        issuer_aliases=["统计局", "NBS"],
+        query_families=[
+            {
+                "name": "official_nbs_pmi_production_site",
+                "queries": [
+                    "site:stats.gov.cn {expected_period_label} 制造业 PMI 生产指数",
+                    "国家统计局 {expected_period_label} 采购经理指数 生产指数",
+                    "中国制造业PMI 生产指数 {expected_period_label} 国家统计局",
+                ],
+                "preferred_domains": ["stats.gov.cn", "data.stats.gov.cn"],
+                "required_keywords": ["PMI", "生产指数", "采购经理指数"],
+            }
+        ],
+        required_keywords=["PMI", "生产指数", "采购经理指数"],
+        evidence_keywords=["PMI", "生产指数", "采购经理指数", "国家统计局"],
+        good_url_patterns=["stats.gov.cn", "data.stats.gov.cn"],
+        bad_url_patterns=["财新", "行业PMI", "地方"],
+        report_usage="Stage4 macro table requires national NBS PMI production sub-index for the expected period",
+        max_age_days=35,
+        **_MACRO_DEFAULTS,
+    ),
     "industrial": _profile(
         query="中国工业增加值 规模以上 最新同比增速 国家统计局",
         queries=[
