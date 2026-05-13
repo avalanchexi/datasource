@@ -38,7 +38,11 @@ class DeepSeekExtractionAgent:
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.model = model
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
-        raw_tokens = extract_max_tokens or os.getenv("DEEPSEEK_EXTRACT_MAX_TOKENS") or 900
+        raw_tokens = (
+            extract_max_tokens
+            if extract_max_tokens is not None
+            else os.getenv("DEEPSEEK_EXTRACT_MAX_TOKENS") or 900
+        )
         try:
             self.extract_max_tokens = max(300, int(raw_tokens))
         except (TypeError, ValueError):

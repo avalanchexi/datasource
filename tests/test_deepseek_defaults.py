@@ -61,6 +61,9 @@ def test_deepseek_agent_uses_configurable_extract_max_tokens(monkeypatch) -> Non
     agent = DeepSeekExtractionAgent(api_key="test-key")
     assert agent.extract_max_tokens == 1200
 
+    agent = DeepSeekExtractionAgent(api_key="test-key", extract_max_tokens=0)
+    assert agent.extract_max_tokens == 300
+
 
 def test_deepseek_schema_hint_keeps_non_fund_flow_core_small() -> None:
     hint = DeepSeekExtractionAgent._schema_hint(is_fund_flow=False)
