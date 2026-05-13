@@ -1,3 +1,4 @@
+import json
 import sys
 from types import SimpleNamespace
 
@@ -49,6 +50,30 @@ def test_stage2_cli_uses_parallel_deepseek_defaults(monkeypatch) -> None:
     assert args.use_queue is True
     assert args.queue_concurrency == 3
     assert args.deepseek_max_concurrency == 3
+
+
+def test_deepseek_agent_uses_configurable_extract_max_tokens(monkeypatch) -> None:
+    monkeypatch.delenv("DEEPSEEK_EXTRACT_MAX_TOKENS", raising=False)
+    agent = DeepSeekExtractionAgent(api_key="test-key")
+    assert agent.extract_max_tokens == 900
+
+    monkeypatch.setenv("DEEPSEEK_EXTRACT_MAX_TOKENS", "1200")
+    agent = DeepSeekExtractionAgent(api_key="test-key")
+    assert agent.extract_max_tokens == 1200
+
+
+def test_deepseek_schema_hint_keeps_non_fund_flow_core_small() -> None:
+    hint = DeepSeekExtractionAgent._schema_hint(is_fund_flow=False)
+    assert "recent_5d" not in hint
+    assert "total_120d" not in hint
+    assert "value" in hint
+    assert "source_url" in hint
+    assert "manual_required" in hint
+
+
+def test_deepseek_classifies_unterminated_json_as_truncated() -> None:
+    exc = json.JSONDecodeError("Unterminated string starting at", '{"value": "abc', 10)
+    assert DeepSeekExtractionAgent._json_error_reason(exc) == "deepseek_json_truncated"
 
 
 def test_stage2_cli_can_disable_queue_explicitly(monkeypatch) -> None:
