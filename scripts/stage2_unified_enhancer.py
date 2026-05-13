@@ -702,6 +702,26 @@ def _value_evidence_score(snippet: Dict[str, Any], task: Dict[str, Any]) -> int:
     blob = _snippet_blob(snippet).lower()
     if not blob:
         return 0
+    non_value_hits = sum(
+        1
+        for token in (
+            "methodology",
+            "calculation",
+            "weights",
+            "rebalance",
+            "contract specs",
+            "contract specifications",
+            "rulebook",
+            "target weights",
+            "annual rebalance",
+            "contract unit",
+            "minimum price fluctuation",
+            "fact card",
+        )
+        if token in blob
+    )
+    if non_value_hits >= 2:
+        return 0
     unit = str(task.get("unit") or "").lower()
     indicator = str(task.get("indicator_key") or "").lower()
     numeric_hits = len(re.findall(r"(?<!\d)(?:\d{1,4}(?:,\d{3})*|\d+)(?:\.\d+)?(?!\d)", blob))
@@ -712,8 +732,8 @@ def _value_evidence_score(snippet: Dict[str, Any], task: Dict[str, Any]) -> int:
         score += 2
     if any(token in blob for token in ("price", "level", "last", "settle", "settlement", "收盘", "结算", "点位", "报价")):
         score += 2
-    if any(token in blob for token in ("contract unit", "minimum price fluctuation", "contract specifications", "fact card", "target weights", "annual rebalance")):
-        score -= 4
+    if non_value_hits:
+        score -= max(4, non_value_hits * 3)
     if indicator and indicator in blob:
         score += 1
     return max(0, score)
@@ -772,37 +792,40 @@ def _candidate_query_quality(
     bad_url_patterns = candidate.get("bad_url_patterns") or task.get("bad_url_patterns") or []
     evidence_keywords = candidate.get("evidence_keywords") or task.get("evidence_keywords") or []
 
-    scored_usable: List[Dict[str, Any]] = []
-    bad_url_hit_count = 0
-    good_url_hit_count = 0
-    usage_evidence_score = 0
-    value_evidence_score = 0
-    for snippet in usable:
-        url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
-        bad_hits = _pattern_hits(url_blob, bad_url_patterns)
-        good_hits = _pattern_hits(url_blob, good_url_patterns)
-        evidence_score = _usage_evidence_score(snippet, evidence_keywords)
-        value_score = _value_evidence_score(snippet, task)
-        bad_url_hit_count += 1 if bad_hits else 0
-        good_url_hit_count += 1 if good_hits else 0
-        usage_evidence_score += evidence_score
-        value_evidence_score += value_score
-        scored_usable.append(
-            {
-                "snippet": snippet,
-                "bad_hits": bad_hits,
-                "good_hits": good_hits,
-                "evidence_score": evidence_score,
-                "value_score": value_score,
-            }
-        )
+    def _score_usable(current: List[Dict[str, Any]]) -> Dict[str, Any]:
+        scored: List[Dict[str, Any]] = []
+        for snippet in current:
+            url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
+            bad_hits = _pattern_hits(url_blob, bad_url_patterns)
+            good_hits = _pattern_hits(url_blob, good_url_patterns)
+            evidence_score = _usage_evidence_score(snippet, evidence_keywords)
+            value_score = _value_evidence_score(snippet, task)
+            scored.append(
+                {
+                    "snippet": snippet,
+                    "bad_hits": bad_hits,
+                    "good_hits": good_hits,
+                    "evidence_score": evidence_score,
+                    "value_score": value_score,
+                }
+            )
+        return {
+            "scored": scored,
+            "bad_url_hit_count": sum(1 for item in scored if item["bad_hits"]),
+            "good_url_hit_count": sum(1 for item in scored if item["good_hits"]),
+            "usage_evidence_score": sum(int(item["evidence_score"]) for item in scored),
+            "value_evidence_score": sum(int(item["value_score"]) for item in scored),
+        }
+
+    usable_scores = _score_usable(usable)
+    scored_usable: List[Dict[str, Any]] = usable_scores["scored"]
+    original_bad_url_hit_count = int(usable_scores["bad_url_hit_count"])
 
     if any(item["bad_hits"] for item in scored_usable) and any(not item["bad_hits"] for item in scored_usable):
         kept = [item for item in scored_usable if not item["bad_hits"]]
         usable = [item["snippet"] for item in kept]
-        usage_evidence_score = sum(int(item["evidence_score"]) for item in kept)
-        value_evidence_score = sum(int(item["value_score"]) for item in kept)
-        good_url_hit_count = sum(1 for item in kept if item["good_hits"])
+        usable_scores = _score_usable(usable)
+        scored_usable = usable_scores["scored"]
 
     if usable and not unusable_reason:
         issuer_hit = _snippets_have_issuer(
@@ -814,15 +837,33 @@ def _candidate_query_quality(
         if strict_issuer_match and not issuer_hit:
             unusable_reason = "strict_issuer_miss"
             usable = []
+            usable_scores = _score_usable(usable)
+
+    high_score = [s for s in usable if s.get("score") is None or s.get("score", 0) >= 0.5]
+    if high_score:
+        usable = high_score
+        usable_scores = _score_usable(usable)
+        issuer_hit = _snippets_have_issuer(
+            usable,
+            issuer_hint=task.get("issuer"),
+            issuer_aliases=task.get("issuer_aliases"),
+        )
+        period_hit = _snippets_have_expected_period(usable, task.get("expected_period_tokens"))
+
+    usage_evidence_score = int(usable_scores["usage_evidence_score"])
+    value_evidence_score = int(usable_scores["value_evidence_score"])
+    good_url_hit_count = int(usable_scores["good_url_hit_count"])
+    bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
 
     requires_value_evidence = bool(task.get("required_output_fields") or task.get("evidence_keywords"))
     if usable and not unusable_reason and requires_value_evidence and value_evidence_score <= 0:
         unusable_reason = "value_evidence_miss"
         usable = []
-
-    high_score = [s for s in usable if s.get("score") is None or s.get("score", 0) >= 0.5]
-    if high_score:
-        usable = high_score
+        usable_scores = _score_usable(usable)
+        usage_evidence_score = int(usable_scores["usage_evidence_score"])
+        value_evidence_score = int(usable_scores["value_evidence_score"])
+        good_url_hit_count = int(usable_scores["good_url_hit_count"])
+        bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
 
     score_stats = _score_stats(usable)
     usable_count = len(usable)

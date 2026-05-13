@@ -991,6 +991,36 @@ def test_candidate_query_quality_prefers_value_bearing_quote_over_contract_spec(
     assert value_quality["quality_score"] > spec_quality["quality_score"]
 
 
+def test_candidate_query_quality_rechecks_value_evidence_after_high_score_filtering():
+    task = {
+        "indicator_key": "BCOM",
+        "required_output_fields": ["current_price"],
+        "evidence_keywords": ["level", "last price", "points"],
+        "expected_period_tokens": [],
+    }
+    candidate = {"query": "Bloomberg Commodity Index BCOM level 2026-05-12"}
+    snippets = [
+        {
+            "url": "https://example.com/market-data/bcom",
+            "title": "BCOM quote",
+            "content": "BCOM last price was 101.25 points on 2026-05-12.",
+            "score": 0.28,
+        },
+        {
+            "url": "https://example.com/news/bcom-overview",
+            "title": "Bloomberg Commodity Index overview",
+            "content": "Bloomberg Commodity Index tracks diversified commodity futures markets.",
+            "score": 0.91,
+        },
+    ]
+
+    quality = _candidate_query_quality(task, candidate, snippets)
+
+    assert quality["unusable_reason"] == "value_evidence_miss"
+    assert quality["usable_count"] == 0
+    assert quality["value_evidence_score"] == 0
+
+
 def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusable_page():
     task = {
         "indicator_key": "BCOM",
@@ -1018,6 +1048,35 @@ def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusa
 
     assert quality["unusable_reason"] == "value_evidence_miss"
     assert quality["usable_count"] == 0
+
+
+def test_value_evidence_rejects_methodology_and_rebalance_number_pages():
+    task = {
+        "indicator_key": "BCOM",
+        "unit": "points",
+        "evidence_keywords": ["level", "last price", "points"],
+        "required_output_fields": ["current_price"],
+    }
+    methodology_snippet = {
+        "url": "https://assets.bbhub.io/professional/sites/10/BCOM-Methodology.pdf",
+        "title": "Bloomberg Commodity Index Methodology and Rulebook",
+        "content": (
+            "The methodology describes calculation rules, target weights, annual rebalance, "
+            "contract specs, and index level procedures. Section 4.2 uses a base level of "
+            "100 points and applies 2/3 liquidity and 1/3 production weights."
+        ),
+        "score": 0.93,
+    }
+
+    assert stage2._value_evidence_score(methodology_snippet, task) == 0
+
+    quality = _candidate_query_quality(
+        task,
+        {"query": "Bloomberg Commodity Index BCOM level methodology"},
+        [methodology_snippet],
+    )
+    assert quality["unusable_reason"] == "value_evidence_miss"
+    assert quality["value_evidence_score"] == 0
 
 
 def test_candidate_query_quality_penalizes_all_bad_trusted_results_below_clean_data_page():
