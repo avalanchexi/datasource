@@ -292,6 +292,9 @@ def test_daily_quote_profiles_include_run_date_and_value_page_filters():
     assert "target weights" in bcom_bad
     assert "annual rebalance" in bcom_bad
 
+    dxy_bad = " ".join(SEARCH_PROFILES["DXY"]["bad_url_patterns"]).lower()
+    assert "technical analysis" in dxy_bad
+
 
 def test_usdcny_extract_policy_uses_official_table_exception():
     profile = SEARCH_PROFILES["USDCNY"]

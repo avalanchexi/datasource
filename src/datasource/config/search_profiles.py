@@ -1512,7 +1512,10 @@ def _apply_report_usage_profiles() -> None:
                 "tradingeconomics.com",
                 "marketwatch.com/investing/index/dxy",
             ],
-            "bad_url_patterns": ["DXY news", "forecast", "analysis", "outlook", "opinion"],
+            "bad_url_patterns": _dedupe_preserve(
+                list(SEARCH_PROFILES["DXY"].get("bad_url_patterns") or [])
+                + ["DXY news", "forecast", "analysis", "outlook", "opinion"]
+            ),
             "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
     )
