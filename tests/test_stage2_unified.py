@@ -1751,6 +1751,7 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
     }
     planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
     task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "etf")
+    stats = {}
 
     class DummyClient:
         async def search(self, query, **kwargs):
@@ -1772,7 +1773,24 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
             }
 
     class DummyExtractor:
+        def __init__(self):
+            self.calls = 0
+
         async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "value": None,
+                    "unit": "亿元",
+                    "source_url": "https://data.eastmoney.com/etf",
+                    "confidence": 0.9,
+                    "note": "primary_missing_windows",
+                    "manual_required": True,
+                    "manual_reason": "fund_flow_window_missing",
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "inflow",
+                }
             text = " ".join(str(s.get("content") or s.get("snippet") or "") for s in snippets)
             if "近120日" in text or "累计" in text:
                 return {
@@ -1811,6 +1829,7 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
             cache_ttl=10,
             disable_extract=True,
             extraction_backend="deepseek",
+            stats=stats,
         )
     )
     assert completed
@@ -1818,3 +1837,6 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
     assert payload["fund_flow"]["etf"]["recent_5d"] == pytest.approx(85.0)
     assert payload["fund_flow"]["etf"]["total_120d"] == pytest.approx(1200.0)
     assert payload["fund_flow"]["etf"]["trend"] == "流入"
+    assert stats["field_retry_count"] == 2
+    assert stats["field_retry_merged_count"] == 2
+    assert stats["field_retry_missing_fields"]["etf"] == ["recent_5d", "total_120d"]

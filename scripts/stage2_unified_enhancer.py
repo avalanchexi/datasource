@@ -1946,6 +1946,8 @@ async def _execute_tasks(
     stats.setdefault("low_score_allow", 0)
     stats.setdefault("value_evidence_drop_count", 0)
     stats.setdefault("field_retry_count", 0)
+    stats.setdefault("field_retry_merged_count", 0)
+    stats.setdefault("field_retry_missing_fields", {})
     stats.setdefault("post_filter_query_switch_count", 0)
     stats.setdefault("exa_fallback", 0)
     stats.setdefault("exa_empty", 0)
@@ -2339,6 +2341,7 @@ async def _execute_tasks(
         if not missing_fields:
             return extraction, []
 
+        stats["field_retry_missing_fields"][task["indicator_key"]] = list(missing_fields)
         field_attempts: List[Dict[str, Any]] = []
         for field_scope in missing_fields:
             candidates = _expand_query_candidates(task, field_scopes=[field_scope], include_primary=False)
@@ -2372,6 +2375,7 @@ async def _execute_tasks(
             if value is None:
                 continue
             extraction[field_scope] = value
+            stats["field_retry_merged_count"] += 1
             extraction["note"] = _append_note(
                 extraction.get("note"),
                 f"{field_scope}_field_retry:{field_task.get('query')}",
@@ -4201,6 +4205,8 @@ async def main() -> int:
         "extract_globally_disabled": exec_stats.get("extract_globally_disabled", args.disable_extract),
         "extract_global_disable_reason": exec_stats.get("extract_global_disable_reason"),
         "field_retry_count": exec_stats.get("field_retry_count", 0),
+        "field_retry_merged_count": exec_stats.get("field_retry_merged_count", 0),
+        "field_retry_missing_fields": exec_stats.get("field_retry_missing_fields", {}),
         "post_filter_query_switch_count": exec_stats.get("post_filter_query_switch_count", 0),
         "exa_fallback": exec_stats.get("exa_fallback", 0),
         "exa_empty": exec_stats.get("exa_empty", 0),
