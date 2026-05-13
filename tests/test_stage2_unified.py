@@ -1678,6 +1678,10 @@ def test_execute_tasks_refreshes_value_diagnostics_after_final_snippet_filtering
     assert final_task["usage_evidence_score"] == 0
     assert final_task["score_stats"]["score_count"] == 1
     assert final_task["score_stats"]["score_max"] == 0.95
+    assert "value_evidence=0" in final_task["selected_reason"]
+    assert "value_evidence=8" not in final_task["selected_reason"]
+    assert "score_max=0.95" in final_task["selected_reason"]
+    assert "score_max=0.72" not in final_task["selected_reason"]
     assert websearch_results[-1]["raw_results"][0]["url"] == "https://example.com/bcom-methodology"
 
     rows = [
@@ -1688,6 +1692,10 @@ def test_execute_tasks_refreshes_value_diagnostics_after_final_snippet_filtering
     assert rows[-1]["usage_evidence_score"] == 0
     assert rows[-1]["score_count"] == 1
     assert rows[-1]["score_max"] == 0.95
+    assert "value_evidence=0" in rows[-1]["selected_reason"]
+    assert "value_evidence=8" not in rows[-1]["selected_reason"]
+    assert "score_max=0.95" in rows[-1]["selected_reason"]
+    assert "score_max=0.72" not in rows[-1]["selected_reason"]
 
 
 def test_execute_tasks_skip_existing_value_clears_missing_items_and_marks_result_type(tmp_path: Path):

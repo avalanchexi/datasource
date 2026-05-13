@@ -757,11 +757,36 @@ def _final_snippet_diagnostics(task: Dict[str, Any], snippets: List[Dict[str, An
         value_evidence_score += _value_evidence_score(snippet, task)
     return {
         "score_stats": _score_stats(snippets),
+        "trusted_count": len(snippets),
+        "usable_count": len(snippets),
+        "issuer_hit": _snippets_have_issuer(
+            snippets,
+            issuer_hint=task.get("issuer"),
+            issuer_aliases=task.get("issuer_aliases"),
+        ),
+        "period_hit": _snippets_have_expected_period(snippets, task.get("expected_period_tokens")),
         "usage_evidence_score": usage_evidence_score,
         "value_evidence_score": value_evidence_score,
         "good_url_hit_count": good_url_hit_count,
         "bad_url_hit_count": bad_url_hit_count,
     }
+
+
+def _selected_reason_from_diagnostics(
+    diagnostics: Dict[str, Any],
+    unusable_reason: Optional[str] = None,
+) -> str:
+    score_stats = diagnostics.get("score_stats") or {}
+    return (
+        f"trusted={diagnostics.get('trusted_count', 0)} usable={diagnostics.get('usable_count', 0)} "
+        f"issuer_hit={diagnostics.get('issuer_hit', False)} period_hit={diagnostics.get('period_hit', False)} "
+        f"usage_evidence={diagnostics.get('usage_evidence_score', 0)} "
+        f"value_evidence={diagnostics.get('value_evidence_score', 0)} "
+        f"good_url={diagnostics.get('good_url_hit_count', 0)} "
+        f"bad_url={diagnostics.get('bad_url_hit_count', 0)} "
+        f"score_max={score_stats.get('score_max')}"
+        + (f" reason={unusable_reason}" if unusable_reason else "")
+    )
 
 
 def _candidate_query_quality(
@@ -918,14 +943,19 @@ def _candidate_query_quality(
         "good_url_hit_count": good_url_hit_count,
         "bad_url_hit_count": bad_url_hit_count,
         "unusable_reason": unusable_reason,
-        "selected_reason": (
-            f"trusted={trusted_count} usable={usable_count} "
-            f"issuer_hit={issuer_hit} period_hit={period_hit} "
-            f"usage_evidence={usage_evidence_score} "
-            f"value_evidence={value_evidence_score} "
-            f"good_url={good_url_hit_count} bad_url={bad_url_hit_count} "
-            f"score_max={score_stats.get('score_max')}"
-            + (f" reason={unusable_reason}" if unusable_reason else "")
+        "selected_reason": _selected_reason_from_diagnostics(
+            {
+                "score_stats": score_stats,
+                "trusted_count": trusted_count,
+                "usable_count": usable_count,
+                "issuer_hit": issuer_hit,
+                "period_hit": period_hit,
+                "usage_evidence_score": usage_evidence_score,
+                "value_evidence_score": value_evidence_score,
+                "good_url_hit_count": good_url_hit_count,
+                "bad_url_hit_count": bad_url_hit_count,
+            },
+            unusable_reason,
         ),
     }
 
@@ -2888,6 +2918,10 @@ async def _execute_tasks(
                     snippets = _prefer_latest_report_snippets(snippets, task.get("indicator_key"))
                     final_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
                     score_stats = final_diagnostics["score_stats"]
+                    selected_reason = _selected_reason_from_diagnostics(
+                        final_diagnostics,
+                        task_for_log.get("unusable_reason"),
+                    )
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     task_for_log = {
                         **task,
@@ -2900,10 +2934,10 @@ async def _execute_tasks(
                         "score_low_all": score_low_all,
                         "score_low_threshold": effective_low_score,
                         "usable_count_before_extract": task_for_log.get("usable_count_before_extract", len(snippets)),
-                        "trusted_count": task_for_log.get("trusted_count", 0),
-                        "issuer_hit": task_for_log.get("issuer_hit", False),
-                        "period_hit": task_for_log.get("period_hit", False),
-                        "selected_reason": task_for_log.get("selected_reason"),
+                        "trusted_count": final_diagnostics["trusted_count"],
+                        "issuer_hit": final_diagnostics["issuer_hit"],
+                        "period_hit": final_diagnostics["period_hit"],
+                        "selected_reason": selected_reason,
                         "usage_evidence_score": final_diagnostics["usage_evidence_score"],
                         "value_evidence_score": final_diagnostics["value_evidence_score"],
                         "good_url_hit_count": final_diagnostics["good_url_hit_count"],
