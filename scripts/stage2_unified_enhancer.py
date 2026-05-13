@@ -893,9 +893,9 @@ def _candidate_query_quality(
     high_score = [s for s in usable if s.get("score") is None or s.get("score", 0) >= 0.5]
     if high_score:
         high_score_scores = _score_usable(high_score)
-        high_score_has_value = int(high_score_scores["value_evidence_score"]) > 0
-        current_has_value = int(usable_scores["value_evidence_score"]) > 0
-        if not requires_value_evidence or high_score_has_value or not current_has_value:
+        high_score_value = int(high_score_scores["value_evidence_score"])
+        current_value = int(usable_scores["value_evidence_score"])
+        if not requires_value_evidence or high_score_value >= current_value or current_value <= 0:
             usable = high_score
             usable_scores = high_score_scores
             issuer_hit = _snippets_have_issuer(
@@ -2909,8 +2909,16 @@ async def _execute_tasks(
                     before_score = len(snippets)
                     high_score = [s for s in snippets if s.get("score") is None or s.get("score", 0) >= 0.5]
                     if high_score:
-                        snippets = high_score
-                        stats["score_filtered_drop"] += max(0, before_score - len(snippets))
+                        requires_value_evidence = bool(
+                            task_for_log.get("required_output_fields") or task_for_log.get("evidence_keywords")
+                        )
+                        high_score_diagnostics = _final_snippet_diagnostics(task_for_log, high_score)
+                        current_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
+                        high_score_value = int(high_score_diagnostics["value_evidence_score"])
+                        current_value = int(current_diagnostics["value_evidence_score"])
+                        if not requires_value_evidence or high_score_value >= current_value or current_value <= 0:
+                            snippets = high_score
+                            stats["score_filtered_drop"] += max(0, before_score - len(snippets))
                     score_filtered_drop_local = max(0, before_score - len(snippets)) if high_score else 0
                     before = len(snippets)
                     snippets = _filter_by_domain(

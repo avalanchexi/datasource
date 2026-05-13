@@ -1698,6 +1698,108 @@ def test_execute_tasks_refreshes_value_diagnostics_after_final_snippet_filtering
     assert "score_max=0.72" not in rows[-1]["selected_reason"]
 
 
+def test_execute_tasks_keeps_low_score_value_evidence_before_deepseek(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-13"},
+        "commodities": [{"symbol": "BCOM", "current_price": None, "source": ""}],
+        "missing_items": [{"key": "BCOM"}],
+    }
+    task = {
+        "task_id": "bcom-final-value-evidence",
+        "indicator_key": "BCOM",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "query": "BCOM last price level",
+        "queries": ["BCOM last price level"],
+        "unit": "points",
+        "issuer": "Bloomberg",
+        "preferred_domains": [],
+        "required_output_fields": ["current_price"],
+        "evidence_keywords": ["last price", "level", "points"],
+        "retry_count": 0,
+        "created_at": 0,
+        "trigger_reason": "missing",
+        "max_age_days": 30,
+        "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+    }
+
+    class DummyClient:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/bcom-search",
+                        "title": "BCOM quote search result",
+                        "content": "BCOM last price page for 2026-05-13.",
+                        "score": 0.72,
+                    },
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/bcom-quote",
+                        "content": "BCOM last price was 101.25 points on 2026-05-13.",
+                        "score": 0.28,
+                    },
+                    {
+                        "url": "https://example.com/bcom-overview",
+                        "content": "Bloomberg Commodity Index tracks diversified commodity futures markets.",
+                        "score": 0.95,
+                    },
+                ]
+            }
+
+    class DummyExtractor:
+        def __init__(self):
+            self.snippets = None
+
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            self.snippets = snippets
+            return {
+                "value": None,
+                "unit": unit_hint,
+                "source_url": None,
+                "confidence": 0.0,
+                "manual_required": True,
+                "manual_reason": "no_value",
+                "llm_latency_ms": 0,
+            }
+
+    extractor = DummyExtractor()
+    completed, failures, websearch_results = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            extractor,
+            tmp_path / "bcom_final_value_evidence.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+            stats={},
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert extractor.snippets
+    assert any(s["url"] == "https://example.com/bcom-quote" for s in extractor.snippets)
+
+    final_task = websearch_results[-1]["task"]
+    assert final_task["value_evidence_score"] > 0
+    assert "value_evidence=0" not in final_task["selected_reason"]
+
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "bcom_final_value_evidence.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert rows[-1]["value_evidence_score"] > 0
+    assert "value_evidence=0" not in rows[-1]["selected_reason"]
+
+
 def test_execute_tasks_skip_existing_value_clears_missing_items_and_marks_result_type(tmp_path: Path):
     payload = {
         "fund_flow": {
