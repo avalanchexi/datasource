@@ -153,8 +153,10 @@ def test_stage25_outputs_are_accepted_by_unified_quality_state(
                         "recent_5d": 85.6,
                         "total_120d": 1250.0,
                         "trend": "流入",
-                        "source": "websearch_manual https://example.com/north",
-                        "source_url": "https://example.com/north",
+                        "source": "东方财富 沪深港通日频净买入序列求和",
+                        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+                        "metric_basis": "net_flow_sum",
+                        "window_evidence": "direct_daily_series",
                     }
                 },
                 "commodities": [
@@ -203,7 +205,8 @@ def test_stage25_outputs_are_accepted_by_unified_quality_state(
     assert "manual_required" in metadata
     assert metadata["manual_required"] == []
     assert output["macro_indicators"]["industrial"]["source_url"] == "https://example.com/industrial"
-    assert output["fund_flow"]["northbound"]["source_url"] == "https://example.com/north"
+    assert output["fund_flow"]["northbound"]["source_url"] == "https://data.eastmoney.com/hsgt/hsgtV2.html"
+    assert output["fund_flow"]["northbound"]["is_estimated"] is False
     assert output["commodities"][0]["source_url"] == "https://example.com/gold"
 
 
