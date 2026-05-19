@@ -364,3 +364,88 @@ def test_stage25_disable_trend_write_without_base_skips_real_trend_reads(
 
     assert output["bonds"][0]["current_yield"] == 4.2
     assert not (tmp_path / "data" / "trend_history" / "min").exists()
+
+
+def test_stage25_20260519_like_fund_flow_extrapolations_do_not_clear_gate(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260519"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    market_path.write_text(
+        json.dumps(
+            {
+                "metadata": {
+                    "date": "2026-05-19",
+                    "data_completeness": 0.9,
+                    "missing_items": {"fund_flow": [{"key": "etf"}]},
+                },
+                "missing_items": ["etf"],
+                "macro_indicators": {},
+                "monetary_policy": {},
+                "bonds": [],
+                "forex": [],
+                "commodities": [],
+                "stock_indices": [],
+                "fund_flow": {
+                    "etf": {
+                        "type": "etf",
+                        "recent_5d": None,
+                        "total_120d": None,
+                        "trend": "待WebSearch补充",
+                        "source": "placeholder",
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    manual_path.write_text(
+        json.dumps(
+            {
+                "fund_flow": {
+                    "etf": {
+                        "recent_5d": -50.0,
+                        "total_120d": -9000.0,
+                        "trend": "流出",
+                        "source": "新浪财经 ETF季度报告 2026Q1 全市场 ETF 净赎回 9211 亿元",
+                        "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+                        "metric_basis": "news_net_flow",
+                        "is_estimated": False,
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    injector.inject_websearch_data(
+        market_path,
+        manual_path,
+        output_path,
+        backfill_trend=False,
+        disable_trend_history_write=True,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    flow = output["fund_flow"]["etf"]
+    blockers = output["metadata"].get("quality_blockers", [])
+
+    assert flow["is_estimated"] is True
+    assert flow["source_tier"] == "tier3"
+    assert flow["window_evidence"] == "news_summary"
+    assert any(
+        item.get("category") == "fund_flow"
+        and item.get("key") == "etf"
+        and item.get("reason") == "estimated_not_allowed"
+        for item in blockers
+    )
+
+    gap_payload = json.loads((run_dir / "gap_monitor.json").read_text(encoding="utf-8"))
+    assert "etf" in gap_payload.get("manual_required", [])
+    policy_payload = json.loads((run_dir / "policy_evaluation.json").read_text(encoding="utf-8"))
+    assert policy_payload.get("block_stage3") is True
