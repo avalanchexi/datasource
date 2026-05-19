@@ -170,6 +170,9 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 official override 白名单。
 - official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在代码内 `official manual override allowlist`，估算仍受 gate 约束。
 - 普通 manual 来源不要因为不是官方域名就默认改成 estimated 或 blocked；是否 official override 只影响显式估算值能否被正规化。
+- fund_flow 的 `source_url` 只证明来源存在，不自动证明 5日/120日窗口真实可用。只有 Tier1/Tier2 结构化来源且 `window_evidence` 为 `direct_window`、`direct_daily_series` 或 `direct_balance_delta` 时，才允许 `is_estimated=false`。
+- fund_flow Tier1 来源包括 HKEX/SSE/SZSE 等官方或交易所结构化入口；Tier2 包括可解析目标窗口的东方财富数据页；新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
+- fund_flow 手工补数若使用 `news_net_flow`、`estimated_net_flow`、单日外推、季度/年度摘要或无法证明目标窗口，Stage2.5 会强制 `is_estimated=true` 并写入 `estimated_not_allowed` blocker；不得为了通过 gate 手工改成 `false`。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
 - 若终端显示“注入数据项: 0”，说明结果无可解析数值或文件为空，应改用手工 schema 版 `_manual.json`。
 
@@ -250,6 +253,8 @@ if comp < 0.8:
 - 北向、南向、ETF、融资融券：禁止 AKShare 直接写最终值；仅允许 TuShare 可得字段、WebSearch 实时来源或 Stage2.5 手工补数。
 - 异常检测：任一 `0/None` 或窗口值缺失，都标记 `manual_required` 并进入 Stage2.5。
 - 来源标注：`tavily+deepseek`、`待人工补数(Stage2 manual_required)`、`异常零值-需核查`。
+- `metric_basis=net_flow_sum` 仅用于目标窗口内日频净流入求和；`balance_delta` 用于余额类窗口差值；`news_net_flow` 和 `estimated_net_flow` 均不能作为真实窗口值通过 gate。
+- ETF 全市场资金流目前没有稳定官方开放入口；新闻或季度报告可作为备注和估算依据，但默认 `is_estimated=true`。
 - Stage2 资金流定向命令：
   ```bash
   bash run_clean.sh python scripts/stage2_unified_enhancer.py \
@@ -375,4 +380,3 @@ and `rg`, `Write/Edit` -> `apply_patch`, `AskUserQuestion` -> a concise question
 `$B` -> available browser/gstack tooling.
 
 If no matching `SKILL.md` exists, stop and report the missing skill path.
-

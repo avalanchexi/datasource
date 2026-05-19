@@ -182,6 +182,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 
 **`--allow-estimated` 作用范围**: 仅绕过 `estimated_items`（`is_estimated=True` 的数据进入评分），**不绕过** `compare_gaps`、`stale_redlist` 和 `policy gate`
 
+**fund_flow 估算规则**: `source_url` 不等于窗口真实值。北向/南向/ETF/融资融券只有在结构化来源直接覆盖 5日/120日窗口时才能 `is_estimated=false`；新闻、季度/年度摘要、单日外推、`news_net_flow`、`estimated_net_flow` 一律保持估算并由 gate 阻断或降级展示。
+
 **Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
 **gap_monitor 只读诊断**: 不直接手改 `gap_monitor`，也不把手工清空作为正常流程；只为诊断读取该文件，实际修复应补齐/修正源数据后重跑 Stage2.5/Stage3。
