@@ -1312,9 +1312,13 @@ def _snippet_contains_number(snippet: Dict[str, Any], value: Optional[float]) ->
     if value is None:
         return False
     text = _snippet_text(snippet)
-    for match in re.finditer(r"[+-]?\d[\d,]*(?:\.\d+)?", text):
+    for match in re.finditer(
+        r"([+-]?\d[\d,]*(?:\.\d+)?)\s*(亿港元|亿元|亿|billion|bn)",
+        text,
+        flags=re.IGNORECASE,
+    ):
         try:
-            candidate = float(match.group(0).replace(",", ""))
+            candidate = float(match.group(1).replace(",", ""))
         except ValueError:
             continue
         if abs(candidate - value) <= max(1e-6, abs(value) * 1e-9):

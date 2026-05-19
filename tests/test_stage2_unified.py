@@ -2336,3 +2336,133 @@ def test_execute_tasks_field_retry_tier3_sources_do_not_clear_fund_flow_gate(tmp
     assert northbound["field_retry_evidence"]["total_120d"]["source_tier"] == "tier3"
     assert northbound["is_estimated"] is True
     assert results[0]["manual_required"] is True
+
+
+def test_execute_tasks_field_retry_ignores_window_length_numbers_as_value_evidence(tmp_path: Path):
+    payload = {
+        "metadata": {
+            "date": "2026-03-06",
+            "missing_items": {"fund_flow": [{"key": "northbound", "reason": "estimated_not_allowed"}]},
+        },
+        "fund_flow": {"northbound": {"recent_5d": None, "total_120d": None, "is_estimated": False}},
+        "missing_items": ["northbound"],
+    }
+    task = {
+        "task_id": "fund_flow.northbound",
+        "indicator_key": "northbound",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "preferred_domains": ["data.eastmoney.com", "10jqka.com.cn"],
+        "time_range": None,
+        "query": "北向资金 沪深港通 东方财富",
+        "field_queries": {
+            "recent_5d": ["北向资金 近5日 净流入 亿元 同花顺"],
+            "total_120d": ["北向资金 近120日 累计净流入 亿元 同花顺"],
+        },
+        "required_keywords": ["北向资金"],
+        "evidence_keywords": ["北向资金", "近5日", "近120日", "净流入", "累计"],
+        "good_url_patterns": ["data.eastmoney.com", "hkex.com.hk"],
+        "bad_url_patterns": ["个股", "十大活跃股"],
+        "unit": "亿元",
+        "issuer": None,
+        "created_at": 0,
+    }
+
+    class DummyClient:
+        async def search(self, query, **kwargs):
+            if "近120日" in query:
+                return {
+                    "results": [
+                        {
+                            "url": "https://data.eastmoney.com/hsgt/",
+                            "snippet": "北向资金 东方财富沪深港通近120日净流入统计页面。",
+                            "content": "北向资金 东方财富沪深港通近120日净流入统计页面。",
+                            "score": 0.95,
+                        },
+                        {
+                            "url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                            "snippet": "北向资金近120日累计净流入120.0亿元",
+                            "content": "北向资金近120日累计净流入120.0亿元",
+                            "score": 0.9,
+                        },
+                    ]
+                }
+            if "近5日" in query:
+                return {
+                    "results": [
+                        {
+                            "url": "https://data.eastmoney.com/hsgt/",
+                            "snippet": "北向资金 东方财富沪深港通近5日净流入统计页面。",
+                            "content": "北向资金 东方财富沪深港通近5日净流入统计页面。",
+                            "score": 0.95,
+                        },
+                        {
+                            "url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                            "snippet": "北向资金近5日净流入5.0亿元",
+                            "content": "北向资金近5日净流入5.0亿元",
+                            "score": 0.9,
+                        },
+                    ]
+                }
+            snippet = "东方财富沪深港通入口，北向资金今日净流入5.0亿元，未披露近5日和近120日窗口。"
+            url = "https://data.eastmoney.com/hsgt/"
+            return {"results": [{"url": url, "snippet": snippet, "content": snippet, "score": 0.9}]}
+
+    class DummyExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            text = " ".join(str(s.get("content") or s.get("snippet") or "") for s in snippets)
+            source_url = snippets[0].get("url")
+            if "120.0亿元" in text:
+                return {
+                    "value": 120.0,
+                    "unit": "亿元",
+                    "source_url": "https://data.eastmoney.com/hsgt/",
+                    "confidence": 0.9,
+                    "total_120d": 120.0,
+                    "trend": "inflow",
+                    "note": f"field_total 流入 model_url_spoofed_from:{source_url}",
+                }
+            if "5.0亿元" in text and "未披露" not in text:
+                return {
+                    "value": 5.0,
+                    "unit": "亿元",
+                    "source_url": "https://data.eastmoney.com/hsgt/",
+                    "confidence": 0.9,
+                    "recent_5d": 5.0,
+                    "trend": "inflow",
+                    "note": f"field_recent 流入 model_url_spoofed_from:{source_url}",
+                }
+            return {
+                "value": 5.0,
+                "unit": "亿元",
+                "source_url": source_url,
+                "confidence": 0.9,
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "inflow",
+                "note": "primary_missing_windows 流入",
+            }
+
+    completed, failures, results = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            DummyExtractor(),
+            tmp_path / "field_retry_window_length_gate.jsonl",
+            cache_ttl=10,
+            disable_extract=True,
+            extraction_backend="deepseek",
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert failures[0]["manual_reason"] == "estimated_not_allowed"
+    northbound = payload["fund_flow"]["northbound"]
+    assert northbound["field_retry_evidence"]["recent_5d"]["source_tier"] == "tier3"
+    assert northbound["field_retry_evidence"]["total_120d"]["source_tier"] == "tier3"
+    assert northbound["is_estimated"] is True
+    assert results[0]["manual_required"] is True
