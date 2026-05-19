@@ -844,6 +844,46 @@ def test_augment_fund_flow_metadata_infers_direct_window_from_snippets():
     assert extraction["window_evidence"] == "direct_window"
 
 
+def test_augment_fund_flow_metadata_does_not_mix_source_url_with_tier3_amounts():
+    extraction = {
+        "value": 5.0,
+        "unit": "亿元",
+        "recent_5d": 5.0,
+        "total_120d": 120.0,
+        "trend": "inflow",
+        "source_url": "https://data.eastmoney.com/hsgt/",
+        "confidence": 0.9,
+        "note": "deepseek_structured",
+    }
+    task = {"indicator_key": "northbound", "task_id": "fund_flow.northbound"}
+    snippets = [
+        {
+            "url": "https://data.eastmoney.com/hsgt/",
+            "content": "北向资金 东方财富沪深港通近5日近120日净流入统计页面。",
+        },
+        {
+            "url": "https://data.10jqka.com.cn/hgt/hgtb/",
+            "content": "北向资金近5日净流入5.0亿元，近120日累计净流入120.0亿元。",
+        },
+    ]
+
+    _augment_extraction_metadata(extraction, task, snippets)
+
+    assert extraction["metric_basis"] == "net_flow_sum"
+    assert extraction["window_evidence"] == "unknown"
+
+    payload = {
+        "metadata": {"date": "2026-03-06"},
+        "fund_flow": {"northbound": {"recent_5d": None, "total_120d": None}},
+    }
+    assert _apply_extraction(payload, task, extraction) == "fund_flow"
+    northbound = payload["fund_flow"]["northbound"]
+    assert northbound["source_tier"] == "tier2"
+    assert northbound["window_evidence"] == "unknown"
+    assert northbound["is_estimated"] is True
+    assert stage2._post_writeback_manual_reason(payload, "northbound") == "estimated_not_allowed"
+
+
 def test_apply_extraction_etf_preserves_explicit_estimate_flag():
     payload = {
         "metadata": {"date": "2026-03-06"},

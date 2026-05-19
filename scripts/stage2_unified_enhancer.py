@@ -1268,26 +1268,37 @@ def _augment_extraction_metadata(
     if indicator_key in {"northbound", "southbound", "etf", "margin"}:
         metric_basis = _default_fund_flow_metric_basis(str(indicator_key), extraction)
         extraction.setdefault("metric_basis", metric_basis)
-        has_recent = _safe_number(extraction.get("recent_5d")) is not None
-        has_total = _safe_number(extraction.get("total_120d")) is not None
-        text_l = text.lower()
-        has_5d_token = any(token in text_l for token in ("近5日", "5日", "5-day", "5 day"))
-        has_120d_token = any(token in text_l for token in ("近120日", "120日", "120-day", "120 day"))
-        has_flow_token = any(
-            token in text_l
-            for token in ("净流入", "净流出", "资金流向", "净申购", "净赎回", "累计", "合计")
-        )
-        has_negative_context = any(token in text_l for token in ("未披露", "未显示", "没有披露", "无法披露"))
-        if has_recent and has_total and has_5d_token and has_120d_token and has_flow_token and not has_negative_context:
-            extraction.setdefault("window_evidence", "direct_window")
-        elif (
-            str(indicator_key) == "margin"
-            and has_recent
-            and has_total
-            and str(metric_basis).lower() == "balance_delta"
-            and any(token in text_l for token in ("余额", "balance", "融资融券"))
-        ):
-            extraction.setdefault("window_evidence", "direct_balance_delta")
+        recent_value = _safe_number(extraction.get("recent_5d"))
+        total_value = _safe_number(extraction.get("total_120d"))
+        if recent_value is not None and total_value is not None:
+            source_snippets = _snippets_for_source_url(snippets, extraction.get("source_url"))
+            recent_evidence = _field_retry_window_evidence(
+                "recent_5d",
+                str(indicator_key),
+                extraction,
+                source_snippets,
+                metric_basis,
+                recent_value,
+            )
+            total_evidence = _field_retry_window_evidence(
+                "total_120d",
+                str(indicator_key),
+                extraction,
+                source_snippets,
+                metric_basis,
+                total_value,
+            )
+            direct_evidence = {"direct_window", "direct_daily_series", "direct_balance_delta"}
+            if (
+                str(indicator_key) == "margin"
+                and recent_evidence == "direct_balance_delta"
+                and total_evidence == "direct_balance_delta"
+            ):
+                extraction["window_evidence"] = "direct_balance_delta"
+            elif recent_evidence in direct_evidence and total_evidence in direct_evidence:
+                extraction["window_evidence"] = "direct_window"
+            else:
+                extraction["window_evidence"] = "unknown"
     as_of_date = _infer_as_of_date(snippets)
     if as_of_date:
         extraction.setdefault("as_of_date", as_of_date)
@@ -1299,6 +1310,25 @@ def _first_snippet_url(snippets: Optional[List[Dict[str, Any]]]) -> Optional[str
         if isinstance(url, str) and url.strip():
             return url.strip()
     return None
+
+
+def _normalize_url_for_evidence(value: Any) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def _snippets_for_source_url(
+    snippets: Optional[List[Dict[str, Any]]],
+    source_url: Any,
+) -> List[Dict[str, Any]]:
+    target = _normalize_url_for_evidence(source_url)
+    if not target:
+        return []
+    return [
+        snippet
+        for snippet in (snippets or [])
+        if isinstance(snippet, dict)
+        and _normalize_url_for_evidence(snippet.get("url")) == target
+    ]
 
 
 def _snippet_text(snippet: Dict[str, Any]) -> str:

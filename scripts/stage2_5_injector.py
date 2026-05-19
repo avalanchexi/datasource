@@ -1021,10 +1021,6 @@ def _infer_fund_flow_source_tier(payload: Dict[str, Any]) -> str:
 
 
 def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_basis: str) -> str:
-    explicit = _normalize_window_evidence(payload.get("window_evidence"))
-    if explicit:
-        return explicit
-
     metric = str(metric_basis or "").strip().lower()
     if metric == "estimated_net_flow":
         return "derived"
@@ -1049,6 +1045,10 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
             if recent_trusted and total_trusted:
                 return "direct_window"
         return "unknown"
+
+    explicit = _normalize_window_evidence(payload.get("window_evidence"))
+    if explicit:
+        return explicit
 
     text = " ".join(
         str(payload.get(field) or "")
