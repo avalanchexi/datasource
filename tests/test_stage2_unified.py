@@ -737,6 +737,8 @@ def test_apply_extraction_etf_complete_writeback_clears_stale_estimate_flag():
         "total_120d": 1200.0,
         "trend": "inflow",
         "source_url": "https://data.eastmoney.com/etf",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
         "note": "stage2 verified windows",
     }
 
@@ -744,6 +746,76 @@ def test_apply_extraction_etf_complete_writeback_clears_stale_estimate_flag():
     assert payload["fund_flow"]["etf"]["recent_5d"] == pytest.approx(85.0)
     assert payload["fund_flow"]["etf"]["total_120d"] == pytest.approx(1200.0)
     assert payload["fund_flow"]["etf"]["is_estimated"] is False
+    assert payload["fund_flow"]["etf"]["source_tier"] == "tier2"
+    assert payload["fund_flow"]["etf"]["metric_basis"] == "net_flow_sum"
+    assert payload["fund_flow"]["etf"]["window_evidence"] == "direct_daily_series"
+
+
+def test_apply_extraction_etf_non_structured_source_remains_estimated():
+    payload = {
+        "metadata": {"date": "2026-03-06"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "",
+                "source": "",
+                "is_estimated": False,
+            }
+        },
+    }
+    task = {"indicator_key": "etf", "task_id": "fund_flow.etf"}
+    extraction = {
+        "value": 85.0,
+        "recent_5d": 85.0,
+        "total_120d": 1200.0,
+        "trend": "inflow",
+        "source_url": "https://fund.eastmoney.com/a/202605191234567.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "note": "news page repeats ETF window numbers",
+    }
+
+    assert _apply_extraction(payload, task, extraction) == "fund_flow"
+    etf = payload["fund_flow"]["etf"]
+    assert etf["recent_5d"] == pytest.approx(85.0)
+    assert etf["total_120d"] == pytest.approx(1200.0)
+    assert etf["source_tier"] == "unknown"
+    assert etf["window_evidence"] == "direct_daily_series"
+    assert etf["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in etf["note"]
+
+
+def test_apply_extraction_etf_structured_source_without_window_evidence_remains_estimated():
+    payload = {
+        "metadata": {"date": "2026-03-06"},
+        "fund_flow": {
+            "etf": {
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "",
+                "source": "",
+                "is_estimated": False,
+            }
+        },
+    }
+    task = {"indicator_key": "etf", "task_id": "fund_flow.etf"}
+    extraction = {
+        "value": 85.0,
+        "recent_5d": 85.0,
+        "total_120d": 1200.0,
+        "trend": "inflow",
+        "source_url": "https://data.eastmoney.com/etf/",
+        "metric_basis": "net_flow_sum",
+        "note": "stage2 extracted values without direct window proof",
+    }
+
+    assert _apply_extraction(payload, task, extraction) == "fund_flow"
+    etf = payload["fund_flow"]["etf"]
+    assert etf["source_tier"] == "tier2"
+    assert etf["window_evidence"] == "unknown"
+    assert etf["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in etf["note"]
 
 
 def test_apply_extraction_etf_preserves_explicit_estimate_flag():
@@ -921,8 +993,8 @@ def test_candidate_query_quality_strict_keywords_rejects_unrelated_snippets():
 def test_candidate_query_quality_penalizes_bad_url_patterns_and_prefers_usage_evidence():
     task = {
         "indicator_key": "etf",
-        "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com", "eastmoney.com"],
-        "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+        "preferred_domains": ["data.eastmoney.com"],
+        "good_url_patterns": ["data.eastmoney.com"],
         "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率"],
         "evidence_keywords": ["全市场", "A股ETF", "近5日", "近120日", "净流入", "累计", "合计"],
     }
@@ -1079,11 +1151,11 @@ def test_value_evidence_rejects_methodology_and_rebalance_number_pages():
     assert quality["value_evidence_score"] == 0
 
 
-def test_candidate_query_quality_penalizes_all_bad_trusted_results_below_clean_data_page():
+def test_candidate_query_quality_penalizes_bad_etf_results_below_clean_data_page():
     task = {
         "indicator_key": "etf",
-        "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com", "eastmoney.com"],
-        "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+        "preferred_domains": ["data.eastmoney.com"],
+        "good_url_patterns": ["data.eastmoney.com"],
         "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率"],
         "evidence_keywords": ["全市场", "A股ETF", "近5日", "近120日", "净流入", "累计", "合计"],
     }
@@ -1126,7 +1198,7 @@ def test_candidate_query_quality_penalizes_all_bad_trusted_results_below_clean_d
         ],
     )
 
-    assert all_bad["trusted_count"] == 4
+    assert all_bad["trusted_count"] == 0
     assert all_bad["bad_url_hit_count"] == 4
     assert clean["quality_score"] > all_bad["quality_score"]
 

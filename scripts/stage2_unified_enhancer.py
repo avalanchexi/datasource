@@ -69,6 +69,21 @@ from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
 from datasource.utils.text_markers import contains_ytd_marker
 
+try:
+    from .stage2_5_injector import (
+        _default_fund_flow_metric_basis,
+        _infer_fund_flow_source_tier,
+        _infer_fund_flow_window_evidence,
+        _normalize_fund_flow_estimation,
+    )
+except ImportError:  # pragma: no cover - 直接执行 scripts/stage2_unified_enhancer.py 时使用
+    from stage2_5_injector import (  # type: ignore
+        _default_fund_flow_metric_basis,
+        _infer_fund_flow_source_tier,
+        _infer_fund_flow_window_evidence,
+        _normalize_fund_flow_estimation,
+    )
+
 CRITICAL_EXTRACT_KEYS = {
     "industrial",
     "industrial_sales",
@@ -1347,6 +1362,11 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         flow["note"] = note
         if source_url:
             flow["source_url"] = source_url
+        metric_basis = _default_fund_flow_metric_basis(indicator_key, extraction)
+        flow["metric_basis"] = metric_basis
+        flow["source_tier"] = _infer_fund_flow_source_tier(extraction)
+        flow["window_evidence"] = _infer_fund_flow_window_evidence(indicator_key, extraction, metric_basis)
+        _normalize_fund_flow_estimation(flow, extraction)
         return "fund_flow"
 
     # forex 回写（按 pair/symbol 匹配）

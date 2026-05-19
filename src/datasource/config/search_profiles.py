@@ -717,7 +717,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
     ),
     "etf": _profile(
         query="A股ETF资金流向 今日净申购 近5日净申购 东方财富",
-        domains=["eastmoney.com", "data.eastmoney.com", "fund.eastmoney.com", "10jqka.com.cn"],
+        domains=["data.eastmoney.com"],
         unit="亿元",
         issuer="沪深交易所",
         issuer_aliases=["ETF", "交易所"],
@@ -728,7 +728,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
                     "A股ETF资金流向 近5日 净流入 东方财富",
                     "A股ETF 申购赎回 资金净流入 最新 东方财富",
                 ],
-                "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com", "eastmoney.com"],
+                "preferred_domains": ["data.eastmoney.com"],
                 "required_keywords": ["etf", "净流入", "申购"],
             },
         ],
@@ -1244,7 +1244,7 @@ def _apply_report_usage_profiles() -> None:
                         "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
                         "A股ETF 全市场 近5日 近120日 资金流向 合计",
                     ],
-                    "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com"],
+                    "preferred_domains": ["data.eastmoney.com"],
                     "required_keywords": ["etf", "全市场", "合计"],
                 }
             ],
@@ -1270,7 +1270,7 @@ def _apply_report_usage_profiles() -> None:
                 "合计",
                 "资金流向",
             ],
-            "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+            "good_url_patterns": ["data.eastmoney.com"],
             "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率", "规模创新高"],
             "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
         }
