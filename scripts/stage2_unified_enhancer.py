@@ -1293,6 +1293,56 @@ def _augment_extraction_metadata(
         extraction.setdefault("as_of_date", as_of_date)
 
 
+def _first_snippet_url(snippets: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    for snippet in snippets or []:
+        url = snippet.get("url")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+    return None
+
+
+def _field_retry_window_evidence(
+    field_scope: str,
+    indicator_key: str,
+    field_extraction: Dict[str, Any],
+    snippets: Optional[List[Dict[str, Any]]],
+    metric_basis: str,
+) -> str:
+    explicit = str(field_extraction.get("window_evidence") or "").strip().lower()
+    if explicit in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+        return explicit
+
+    text = " ".join(
+        [
+            str(s.get("title") or "")
+            + " "
+            + str(s.get("snippet") or "")
+            + " "
+            + str(s.get("content") or "")
+            for s in (snippets or [])
+        ]
+    ).lower()
+    if any(token in text for token in ("未披露", "未显示", "没有披露", "无法披露")):
+        return "unknown"
+
+    if str(indicator_key).lower() == "margin" and str(metric_basis).lower() == "balance_delta":
+        if any(token in text for token in ("余额", "balance", "融资融券")):
+            return "direct_balance_delta"
+        return "unknown"
+
+    field_tokens = {
+        "recent_5d": ("近5日", "5日", "5-day", "5 day"),
+        "total_120d": ("近120日", "120日", "120-day", "120 day"),
+    }
+    has_field_token = any(token in text for token in field_tokens.get(field_scope, ()))
+    has_flow_token = any(
+        token in text for token in ("净流入", "净流出", "资金流向", "净申购", "净赎回", "累计", "合计")
+    )
+    if has_field_token and has_flow_token:
+        return "direct_window"
+    return "unknown"
+
+
 def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extraction: Dict[str, Any]) -> str:
     value = extraction.get("value")
     if value is None:
@@ -1385,6 +1435,8 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         flow["note"] = note
         if source_url:
             flow["source_url"] = source_url
+        if isinstance(extraction.get("field_retry_evidence"), dict):
+            flow["field_retry_evidence"] = extraction["field_retry_evidence"]
         metric_basis = _default_fund_flow_metric_basis(indicator_key, extraction)
         flow["metric_basis"] = metric_basis
         flow["source_tier"] = _infer_fund_flow_source_tier(extraction)
@@ -2452,13 +2504,33 @@ async def _execute_tasks(
             if value is None:
                 continue
             extraction[field_scope] = value
+            field_source_url = _first_snippet_url(field_snippets) or field_extraction.get("source_url")
+            field_payload_for_tier = dict(field_extraction)
+            if field_source_url:
+                field_payload_for_tier["source_url"] = field_source_url
+            field_metric_basis = _default_fund_flow_metric_basis(task["indicator_key"], field_extraction)
+            field_window_evidence = _field_retry_window_evidence(
+                field_scope,
+                task["indicator_key"],
+                field_extraction,
+                field_snippets,
+                field_metric_basis,
+            )
+            field_retry_evidence = extraction.setdefault("field_retry_evidence", {})
+            if isinstance(field_retry_evidence, dict):
+                field_retry_evidence[field_scope] = {
+                    "source_url": field_source_url,
+                    "source_tier": _infer_fund_flow_source_tier(field_payload_for_tier),
+                    "window_evidence": field_window_evidence,
+                    "metric_basis": field_metric_basis,
+                }
             stats["field_retry_merged_count"] += 1
             extraction["note"] = _append_note(
                 extraction.get("note"),
                 f"{field_scope}_field_retry:{field_task.get('query')}",
             )
             if not extraction.get("source_url"):
-                extraction["source_url"] = field_extraction.get("source_url")
+                extraction["source_url"] = field_source_url
             trend = field_extraction.get("trend")
             if trend and extraction.get("trend") in {None, "unknown"}:
                 extraction["trend"] = trend

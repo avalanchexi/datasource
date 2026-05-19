@@ -209,7 +209,9 @@ async def run_tasks_lc(
             manual_required = True
 
         if is_fund_flow:
-            val_adj, unit_manual, note_append = _validate_fund_flow_extraction(extraction)
+            val_adj, unit_manual, note_append = _validate_fund_flow_extraction(
+                extraction, indicator_key=task["indicator_key"]
+            )
             extraction["value"] = val_adj
             combined_note = " ".join(s for s in [extraction.get("note", ""), hybrid_note, note_append] if s).strip()
             extraction["note"] = combined_note or None

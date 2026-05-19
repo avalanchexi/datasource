@@ -1031,6 +1031,25 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
     if metric == "news_net_flow":
         return "news_summary"
 
+    field_retry_evidence = payload.get("field_retry_evidence")
+    if isinstance(field_retry_evidence, dict):
+        recent = field_retry_evidence.get("recent_5d")
+        total = field_retry_evidence.get("total_120d")
+        if isinstance(recent, dict) and isinstance(total, dict):
+            recent_trusted = _fund_flow_has_trusted_window(
+                str(recent.get("source_tier") or "unknown"),
+                str(recent.get("window_evidence") or "unknown"),
+                str(recent.get("metric_basis") or metric_basis),
+            )
+            total_trusted = _fund_flow_has_trusted_window(
+                str(total.get("source_tier") or "unknown"),
+                str(total.get("window_evidence") or "unknown"),
+                str(total.get("metric_basis") or metric_basis),
+            )
+            if recent_trusted and total_trusted:
+                return "direct_window"
+        return "unknown"
+
     text = " ".join(
         str(payload.get(field) or "")
         for field in ("source", "note", "estimation_method", "description")
@@ -1040,7 +1059,7 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
     if key == "margin" and metric == "balance_delta" and any(token in text for token in ("余额", "balance")):
         return "direct_balance_delta"
     if "recent_5d_field_retry" in text and "total_120d_field_retry" in text:
-        return "direct_window"
+        return "unknown"
     if ("近5日" in text or "5日" in text or "5-day" in text) and ("120" in text or "一百二十" in text):
         return "direct_window"
     return "unknown"
