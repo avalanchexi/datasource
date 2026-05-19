@@ -2009,6 +2009,52 @@ def test_apply_fund_flow_entry_rejects_spoofed_source_tier_for_gate():
     assert "fund_flow_estimated_gate" in entry["note"]
 
 
+def test_apply_fund_flow_entry_rejects_non_structured_eastmoney_page_for_gate():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富财经新闻描述沪深港通资金流",
+        "source_url": "https://finance.eastmoney.com/a/202605191234567.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "unknown"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_rejects_non_structured_fund_eastmoney_page_for_gate():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 63.2,
+        "total_120d": 1500.0,
+        "trend": "流入",
+        "source": "东方财富基金资讯文章描述ETF资金流",
+        "source_url": "https://fund.eastmoney.com/a/202605191234567.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "unknown"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
 def test_apply_fund_flow_entry_normalizes_trusted_direct_window_estimated_true_to_false():
     entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
     payload = {
@@ -2030,6 +2076,32 @@ def test_apply_fund_flow_entry_normalizes_trusted_direct_window_estimated_true_t
     assert entry["metric_basis"] == "net_flow_sum"
     assert entry["is_estimated"] is False
     assert "fund_flow_estimated_gate" not in entry["note"]
+
+
+def test_apply_fund_flow_entry_clears_stale_claimed_source_tier_when_absent():
+    entry = {
+        "type": "northbound",
+        "recent_5d": None,
+        "total_120d": None,
+        "claimed_source_tier": "tier2",
+    }
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富 沪深港通日频净买入序列求和",
+        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert "claimed_source_tier" not in entry
+    assert entry["source_tier"] == "tier2"
+    assert entry["is_estimated"] is False
 
 
 def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):

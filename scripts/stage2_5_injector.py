@@ -923,11 +923,14 @@ FUND_FLOW_TIER1_DOMAINS = (
     "sse.com.cn",
     "szse.cn",
 )
-FUND_FLOW_TIER2_DOMAINS = (
-    "data.eastmoney.com",
-    "eastmoney.com",
-    "fund.eastmoney.com",
-)
+FUND_FLOW_TIER2_STRUCTURED_PATHS = {
+    "data.eastmoney.com": (
+        "/hsgt",
+        "/etf",
+        "/fund",
+        "/rzrq",
+    ),
+}
 FUND_FLOW_TIER3_DOMAINS = (
     "finance.sina.com.cn",
     "sina.com.cn",
@@ -971,12 +974,46 @@ def _domain_matches(domain: str, suffixes: Any) -> bool:
     return bool(domain) and any(domain == suffix or domain.endswith(f".{suffix}") for suffix in suffixes)
 
 
+def _parse_url_domain_path(value: Optional[str]) -> Tuple[str, str]:
+    if not value:
+        return "", ""
+    text = str(value).strip().strip("<>()[]{}\"'")
+    if not text:
+        return "", ""
+    parsed = urlparse(text)
+    if not parsed.hostname and "://" not in text and not text.startswith("//"):
+        parsed = urlparse(f"//{text}")
+    try:
+        parsed.port
+    except ValueError:
+        return "", ""
+    return (parsed.hostname or "").lower().strip(), parsed.path or "/"
+
+
+def _path_matches_prefix(path: str, prefixes: Any) -> bool:
+    normalized = path or "/"
+    return any(
+        prefix == "/"
+        or normalized == prefix
+        or normalized.startswith(f"{prefix}/")
+        for prefix in prefixes
+    )
+
+
+def _is_fund_flow_tier2_structured_source(url: Optional[str]) -> bool:
+    domain, path = _parse_url_domain_path(url)
+    prefixes = FUND_FLOW_TIER2_STRUCTURED_PATHS.get(domain)
+    if not prefixes:
+        return False
+    return _path_matches_prefix(path, prefixes)
+
+
 def _infer_fund_flow_source_tier(payload: Dict[str, Any]) -> str:
     url = _extract_source_url(payload)
     domain = _extract_domain(url)
     if _domain_matches(domain, FUND_FLOW_TIER1_DOMAINS):
         return "tier1"
-    if _domain_matches(domain, FUND_FLOW_TIER2_DOMAINS):
+    if _is_fund_flow_tier2_structured_source(url):
         return "tier2"
     if _domain_matches(domain, FUND_FLOW_TIER3_DOMAINS):
         return "tier3"
@@ -2321,6 +2358,8 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
     claimed_source_tier = _normalize_source_tier(payload.get("source_tier"))
     if claimed_source_tier:
         entry["claimed_source_tier"] = claimed_source_tier
+    else:
+        entry.pop("claimed_source_tier", None)
     entry["metric_basis"] = _default_fund_flow_metric_basis(key, payload)
     entry["source_tier"] = _infer_fund_flow_source_tier(payload)
     entry["window_evidence"] = _infer_fund_flow_window_evidence(
