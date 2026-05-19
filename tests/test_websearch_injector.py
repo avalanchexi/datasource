@@ -101,6 +101,47 @@ def test_apply_fund_flow_entry_field_retry_evidence_overrides_top_window_claim()
     assert "fund_flow_estimated_gate" in entry["note"]
 
 
+def test_apply_fund_flow_entry_recomputes_nested_retry_source_tier_from_url():
+    entry = {
+        "type": "northbound",
+        "recent_5d": None,
+        "total_120d": None,
+        "trend": "待获取",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "recent_5d": 5.0,
+        "total_120d": 120.0,
+        "trend": "流入",
+        "source": "Stage2.5 manual",
+        "source_url": "https://data.eastmoney.com/hsgt/",
+        "metric_basis": "net_flow_sum",
+        "field_retry_evidence": {
+            "recent_5d": {
+                "source_url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                "source_tier": "tier2",
+                "window_evidence": "direct_window",
+                "metric_basis": "net_flow_sum",
+            },
+            "total_120d": {
+                "source_url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                "source_tier": "tier2",
+                "window_evidence": "direct_window",
+                "metric_basis": "net_flow_sum",
+            },
+        },
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "unknown"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
 def test_apply_fund_flow_entry_marks_zero_anomaly():
     entry = {"type": "southbound", "recent_5d": None, "total_120d": None, "trend": "待获取", "source": "占位", "note": ""}
     payload = {

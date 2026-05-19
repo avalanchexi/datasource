@@ -1033,12 +1033,12 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
         total = field_retry_evidence.get("total_120d")
         if isinstance(recent, dict) and isinstance(total, dict):
             recent_trusted = _fund_flow_has_trusted_window(
-                str(recent.get("source_tier") or "unknown"),
+                _infer_fund_flow_source_tier(recent),
                 str(recent.get("window_evidence") or "unknown"),
                 str(recent.get("metric_basis") or metric_basis),
             )
             total_trusted = _fund_flow_has_trusted_window(
-                str(total.get("source_tier") or "unknown"),
+                _infer_fund_flow_source_tier(total),
                 str(total.get("window_evidence") or "unknown"),
                 str(total.get("metric_basis") or metric_basis),
             )
