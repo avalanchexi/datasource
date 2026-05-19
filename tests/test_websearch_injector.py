@@ -1763,11 +1763,15 @@ def test_manual_etf_eastmoney_estimate_stays_estimated_and_blocked(tmp_path: Pat
     entry = output["fund_flow"]["etf"]
     assert entry["is_estimated"] is True
     assert "manual_official_not_estimated" not in str(entry.get("note") or "")
-    assert {
-        "category": "fund_flow",
-        "key": "etf",
-        "reason": "estimated_not_allowed",
-    } in output["metadata"].get("quality_blockers", [])
+    blockers = output["metadata"].get("quality_blockers", [])
+    etf_blocker = next(
+        item
+        for item in blockers
+        if item.get("category") == "fund_flow"
+        and item.get("key") == "etf"
+        and item.get("reason") == "estimated_not_allowed"
+    )
+    assert etf_blocker["details"]["metric_basis"] == "estimated_net_flow"
 
 
 def test_stage25_writes_unified_quality_state_files(tmp_path: Path, monkeypatch):

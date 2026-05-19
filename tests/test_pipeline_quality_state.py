@@ -180,6 +180,40 @@ def test_pipeline_quality_state_flags_fund_flow_window_missing_for_missing_or_ze
     ]
 
 
+def test_pipeline_quality_state_blocks_estimated_fund_flow_with_diagnostics_when_allow_estimated():
+    payload = _base_payload()
+    payload["fund_flow"] = {
+        "etf": {
+            "recent_5d": -50.0,
+            "total_120d": -9000.0,
+            "trend": "流出",
+            "source": "websearch_manual",
+            "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+            "metric_basis": "news_net_flow",
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "is_estimated": True,
+        }
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    blocker = next(
+        row
+        for row in state["quality_blockers"]
+        if row["category"] == "fund_flow"
+        and row["key"] == "etf"
+        and row["reason"] == "estimated_not_allowed"
+    )
+    assert blocker["details"] == {
+        "source_tier": "tier3",
+        "window_evidence": "news_summary",
+        "metric_basis": "news_net_flow",
+    }
+    assert state["policy_evaluation"]["block_stage3"] is True
+    assert "etf" in state["gap_monitor_view"]["manual_required"]
+
+
 def test_pipeline_quality_state_blocks_missing_zero_and_placeholder_primary_values():
     payload = _base_payload()
     payload["macro_indicators"]["industrial"]["current_value"] = None

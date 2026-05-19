@@ -102,6 +102,32 @@ def test_require_data_completeness_does_not_skip_fund_flow_missing_source_url():
     assert "missing_source_url" in str(exc.value)
 
 
+def test_require_data_completeness_blocks_estimated_fund_flow_even_with_allow_estimated():
+    payload = {
+        "metadata": {"data_completeness": 0.95},
+        "missing_items": [],
+        "fund_flow": {
+            "etf": {
+                "recent_5d": -50.0,
+                "total_120d": -9000.0,
+                "trend": "流出",
+                "source": "websearch_manual",
+                "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+                "metric_basis": "news_net_flow",
+                "source_tier": "tier3",
+                "window_evidence": "news_summary",
+                "is_estimated": True,
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+
+    assert "fund_flow.etf" in str(exc.value)
+    assert "estimated_not_allowed" in str(exc.value)
+
+
 def test_require_data_completeness_fail_on_low_score():
     payload = {
         "metadata": {"data_completeness": 0.5},

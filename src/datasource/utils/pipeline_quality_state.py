@@ -17,6 +17,17 @@ _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _SOURCE_MARKERS = ("websearch", "manual", "tavily", "deepseek", "stage2_auto", "stage2_auto_extract")
 
 
+def _estimated_issue_details(category: str, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if category != "fund_flow":
+        return None
+    details: Dict[str, Any] = {}
+    for field in ("source_tier", "window_evidence", "metric_basis"):
+        value = entry.get(field)
+        if value not in (None, ""):
+            details[field] = value
+    return details or None
+
+
 def build_pipeline_quality_state(
     market_payload: Dict[str, Any],
     *,
@@ -78,7 +89,12 @@ def build_pipeline_quality_state(
         if entry.get("is_estimated") is True:
             allowed, reasons = is_estimated_allowlisted(category, key, entry, rules=rules)
             if not allowed:
-                issue = add_issue(category, key, "estimated_not_allowed")
+                issue = add_issue(
+                    category,
+                    key,
+                    "estimated_not_allowed",
+                    details=_estimated_issue_details(category, entry),
+                )
                 blocker_key = f"{category}.{key}"
                 if blocker_key not in estimated_blockers:
                     estimated_blockers.append(blocker_key)
