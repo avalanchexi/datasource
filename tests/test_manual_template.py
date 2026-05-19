@@ -6,6 +6,7 @@ from typing import Any, Iterable
 TEMPLATE = (
     Path(__file__).resolve().parents[1] / "data/runs/templates/manual_template.json"
 )
+FUND_FLOW_GUIDE = Path(__file__).resolve().parents[1] / "docs/手动更新资金流向数据指南.md"
 
 
 def _walk_values(value: Any) -> Iterable[dict]:
@@ -87,3 +88,16 @@ def test_manual_template_etf_fund_flow_is_estimate_only() -> None:
     assert etf["window_evidence"] == "news_summary"
     assert "estimate-only" in note
     assert "will not clear the gate" in note
+
+
+def test_fund_flow_manual_guide_uses_standard_run_path_contract() -> None:
+    text = FUND_FLOW_GUIDE.read_text(encoding="utf-8")
+
+    assert "DATE_NH=${DATE//-/}" in text
+    assert "data/runs/${DATE_NH}/market_data_stage2.json" in text
+    assert "data/runs/${DATE_NH}/websearch_results_manual.json" in text
+    assert "data/runs/${DATE_NH}/market_data_complete.json" in text
+    assert "data/${DATE}_market_data_stage2.json" not in text
+    assert "data/runs/${DATE}/" not in text
+    assert '"collection_date": "${DATE}"' in text
+    assert "2025-12-09" not in text

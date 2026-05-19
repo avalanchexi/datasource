@@ -19,6 +19,7 @@ from scripts.stage2_unified_enhancer import (
     _merge_missing_items,
     _validate_fund_flow_extraction,
     _execute_tasks,
+    _augment_extraction_metadata,
 )
 
 
@@ -818,6 +819,31 @@ def test_apply_extraction_etf_structured_source_without_window_evidence_remains_
     assert "fund_flow_estimated_gate" in etf["note"]
 
 
+def test_augment_fund_flow_metadata_infers_direct_window_from_snippets():
+    extraction = {
+        "value": 85.0,
+        "unit": "亿元",
+        "recent_5d": 85.0,
+        "total_120d": 1200.0,
+        "trend": "inflow",
+        "source_url": "https://data.eastmoney.com/etf/",
+        "confidence": 0.9,
+        "note": "deepseek_structured",
+    }
+    task = {"indicator_key": "etf"}
+    snippets = [
+        {
+            "url": "https://data.eastmoney.com/etf/",
+            "content": "A股ETF全市场近5日资金净流入85亿元，近120日累计净流入1200亿元。",
+        }
+    ]
+
+    _augment_extraction_metadata(extraction, task, snippets)
+
+    assert extraction["metric_basis"] == "net_flow_sum"
+    assert extraction["window_evidence"] == "direct_window"
+
+
 def test_apply_extraction_etf_preserves_explicit_estimate_flag():
     payload = {
         "metadata": {"date": "2026-03-06"},
@@ -1384,8 +1410,9 @@ def test_execute_tasks_legacy_mcp_backend_still_searches(tmp_path: Path):
             return {
                 "results": [
                     {
-                        "url": "https://example.com/northbound",
+                        "url": "https://data.eastmoney.com/hsgt/",
                         "snippet": "北向资金近5日净流入 12.3 亿元，近120日累计 456.7 亿元",
+                        "content": "北向资金近5日净流入 12.3 亿元，近120日累计 456.7 亿元",
                         "score": 0.9,
                     }
                 ]
@@ -1396,7 +1423,7 @@ def test_execute_tasks_legacy_mcp_backend_still_searches(tmp_path: Path):
             return {
                 "value": 12.3,
                 "unit": "亿元",
-                "source_url": "https://example.com/northbound",
+                "source_url": "https://data.eastmoney.com/hsgt/",
                 "confidence": 0.9,
                 "manual_required": False,
                 "recent_5d": 12.3,
@@ -1420,6 +1447,167 @@ def test_execute_tasks_legacy_mcp_backend_still_searches(tmp_path: Path):
     assert client.called == 1
     assert completed
     assert not failures
+
+
+def test_execute_tasks_keeps_fund_flow_gate_blocker_after_estimated_writeback(tmp_path: Path):
+    payload = {
+        "metadata": {
+            "date": "2026-03-06",
+            "missing_items": {"fund_flow": [{"key": "etf", "reason": "estimated_not_allowed"}]},
+        },
+        "fund_flow": {"etf": {"recent_5d": None, "total_120d": None, "is_estimated": False}},
+        "missing_items": ["etf"],
+    }
+    task = {
+        "task_id": "fund_flow.etf",
+        "indicator_key": "etf",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "preferred_domains": ["data.eastmoney.com"],
+        "time_range": None,
+        "query": "A股ETF资金流向",
+        "unit": "亿元",
+        "issuer": "沪深交易所",
+        "retry_count": 0,
+        "created_at": 0,
+    }
+
+    class DummyClient:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://data.eastmoney.com/etf/",
+                        "snippet": "A股ETF资金流向结构化入口。",
+                        "content": "A股ETF资金流向结构化入口。",
+                        "score": 0.9,
+                    }
+                ]
+            }
+
+    class DummyExtractor:
+        async def extract(self, *args, **kwargs):
+            return {
+                "value": 85.0,
+                "unit": "亿元",
+                "source_url": "https://data.eastmoney.com/etf/",
+                "confidence": 0.9,
+                "manual_required": False,
+                "manual_reason": None,
+                "recent_5d": 85.0,
+                "total_120d": 1200.0,
+                "trend": "inflow",
+                "note": "deepseek_structured 流入",
+            }
+
+    completed, failures, results = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            DummyExtractor(),
+            tmp_path / "gate_after_writeback.jsonl",
+            cache_ttl=10,
+            disable_extract=True,
+            extraction_backend="deepseek",
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert failures[0]["manual_required"] is True
+    assert failures[0]["manual_reason"] == "estimated_not_allowed"
+    assert results[0]["manual_required"] is True
+    assert results[0]["manual_reason"] == "estimated_not_allowed"
+    assert payload["fund_flow"]["etf"]["is_estimated"] is True
+    assert payload["metadata"]["missing_items"]["fund_flow"] == [
+        {"key": "etf", "reason": "estimated_not_allowed"}
+    ]
+    assert payload["missing_items"] == ["etf"]
+
+
+def test_lc_execute_tasks_keeps_fund_flow_gate_blocker_after_estimated_writeback(tmp_path: Path):
+    if stage2.run_tasks_lc is None:
+        pytest.skip("langchain pipeline unavailable")
+
+    payload = {
+        "metadata": {
+            "date": "2026-03-06",
+            "missing_items": {"fund_flow": [{"key": "etf", "reason": "estimated_not_allowed"}]},
+        },
+        "fund_flow": {"etf": {"recent_5d": None, "total_120d": None, "is_estimated": False}},
+        "missing_items": ["etf"],
+    }
+    task = {
+        "task_id": "fund_flow.etf",
+        "indicator_key": "etf",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "preferred_domains": ["data.eastmoney.com"],
+        "time_range": None,
+        "query": "A股ETF资金流向",
+        "unit": "亿元",
+        "issuer": "沪深交易所",
+        "created_at": 0,
+    }
+
+    class DummyClient:
+        async def search(self, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://data.eastmoney.com/etf/",
+                        "snippet": "A股ETF资金流向结构化入口。",
+                        "content": "A股ETF资金流向结构化入口。",
+                        "score": 0.9,
+                    }
+                ]
+            }
+
+        async def extract(self, **kwargs):
+            return {"status": 422, "results": []}
+
+    class DummyExtractor:
+        async def extract(self, *args, **kwargs):
+            return {
+                "value": 85.0,
+                "unit": "亿元",
+                "source_url": "https://data.eastmoney.com/etf/",
+                "confidence": 0.9,
+                "recent_5d": 85.0,
+                "total_120d": 1200.0,
+                "trend": "inflow",
+                "note": "deepseek_structured 流入",
+            }
+
+    completed, failures, results = asyncio.run(
+        stage2.run_tasks_lc(
+            [task],
+            payload,
+            DummyClient(),
+            DummyExtractor(),
+            tmp_path / "lc_gate_after_writeback.jsonl",
+            cache_ttl=10,
+            max_retries=1,
+            fund_flow_backend="tavily",
+            forex_backend="tavily",
+            lc_max_concurrency=1,
+            deepseek_timeout=None,
+            llm_hard_timeout=None,
+        )
+    )
+
+    assert not completed
+    assert failures
+    assert failures[0]["manual_required"] is True
+    assert failures[0]["manual_reason"] == "estimated_not_allowed"
+    assert results[0]["manual_required"] is True
+    assert results[0]["manual_reason"] == "estimated_not_allowed"
+    assert payload["fund_flow"]["etf"]["is_estimated"] is True
+    assert payload["missing_items"] == ["etf"]
 
 
 def test_execute_tasks_force_refresh_ignores_existing_value_skip(tmp_path: Path):
@@ -2011,6 +2199,8 @@ def test_execute_tasks_etf_field_retry_fills_missing_windows(tmp_path: Path):
     assert payload["fund_flow"]["etf"]["recent_5d"] == pytest.approx(85.0)
     assert payload["fund_flow"]["etf"]["total_120d"] == pytest.approx(1200.0)
     assert payload["fund_flow"]["etf"]["trend"] == "流入"
+    assert payload["fund_flow"]["etf"]["window_evidence"] == "direct_window"
+    assert payload["fund_flow"]["etf"]["is_estimated"] is False
     assert stats["field_retry_count"] == 2
     assert stats["field_retry_merged_count"] == 2
     assert stats["field_retry_missing_fields"]["etf"] == ["recent_5d", "total_120d"]

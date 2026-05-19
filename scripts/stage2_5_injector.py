@@ -1039,6 +1039,8 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
         return "news_summary"
     if key == "margin" and metric == "balance_delta" and any(token in text for token in ("余额", "balance")):
         return "direct_balance_delta"
+    if "recent_5d_field_retry" in text and "total_120d_field_retry" in text:
+        return "direct_window"
     if ("近5日" in text or "5日" in text or "5-day" in text) and ("120" in text or "一百二十" in text):
         return "direct_window"
     return "unknown"

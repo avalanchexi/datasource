@@ -57,7 +57,7 @@ from datasource.utils.observability import build_observability_log, write_observ
 from datasource.utils.coercion import is_stage2_number_placeholder
 from datasource.utils.json_io import dump_json, load_json_strict
 from datasource.utils.key_aliases import canonical_monetary_key, normalize_monetary_section
-from datasource.utils.missing_items import remove_missing_item, sync_top_level_missing_view
+from datasource.utils.missing_items import append_missing_item, remove_missing_item, sync_top_level_missing_view
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -1265,6 +1265,29 @@ def _augment_extraction_metadata(
         rrr_type = _infer_rrr_type(text)
         if rrr_type:
             extraction.setdefault("rrr_type", rrr_type)
+    if indicator_key in {"northbound", "southbound", "etf", "margin"}:
+        metric_basis = _default_fund_flow_metric_basis(str(indicator_key), extraction)
+        extraction.setdefault("metric_basis", metric_basis)
+        has_recent = _safe_number(extraction.get("recent_5d")) is not None
+        has_total = _safe_number(extraction.get("total_120d")) is not None
+        text_l = text.lower()
+        has_5d_token = any(token in text_l for token in ("近5日", "5日", "5-day", "5 day"))
+        has_120d_token = any(token in text_l for token in ("近120日", "120日", "120-day", "120 day"))
+        has_flow_token = any(
+            token in text_l
+            for token in ("净流入", "净流出", "资金流向", "净申购", "净赎回", "累计", "合计")
+        )
+        has_negative_context = any(token in text_l for token in ("未披露", "未显示", "没有披露", "无法披露"))
+        if has_recent and has_total and has_5d_token and has_120d_token and has_flow_token and not has_negative_context:
+            extraction.setdefault("window_evidence", "direct_window")
+        elif (
+            str(indicator_key) == "margin"
+            and has_recent
+            and has_total
+            and str(metric_basis).lower() == "balance_delta"
+            and any(token in text_l for token in ("余额", "balance", "融资融券"))
+        ):
+            extraction.setdefault("window_evidence", "direct_balance_delta")
     as_of_date = _infer_as_of_date(snippets)
     if as_of_date:
         extraction.setdefault("as_of_date", as_of_date)
@@ -1535,6 +1558,36 @@ def _append_note(note: Optional[str], extra: Optional[str]) -> Optional[str]:
     if tail in base:
         return base
     return f"{base} {tail}".strip()
+
+
+def _post_writeback_manual_reason(market_payload: Dict[str, Any], indicator_key: str) -> Optional[str]:
+    fund_flow = market_payload.get("fund_flow", {})
+    if indicator_key not in fund_flow:
+        return None
+    entry = fund_flow.get(indicator_key)
+    if not isinstance(entry, dict) or entry.get("is_estimated") is not True:
+        return None
+    allowed, _reasons = is_estimated_allowlisted("fund_flow", indicator_key, entry)
+    if allowed:
+        return None
+    return "estimated_not_allowed"
+
+
+def _mark_post_writeback_manual_required(
+    market_payload: Dict[str, Any],
+    task_record: Dict[str, Any],
+    extraction: Dict[str, Any],
+    indicator_key: str,
+    reason: str,
+) -> None:
+    task_record["manual_required"] = True
+    task_record["manual_reason"] = reason
+    task_record["result_type"] = "manual_required"
+    extraction["manual_required"] = True
+    extraction["manual_reason"] = reason
+    extraction["note"] = _append_note(extraction.get("note"), reason)
+    task_record["note"] = extraction.get("note")
+    append_missing_item(market_payload, "fund_flow", indicator_key, reason)
 
 
 def _is_force_refresh_task(task: Dict[str, Any]) -> bool:
@@ -2534,8 +2587,21 @@ async def _execute_tasks(
                         stats["write_back_fallback_count"] += 1
                     elif write_target == "skip_no_value":
                         stats["write_back_miss_count"] += 1
-                    _update_missing_items(market_payload, task["indicator_key"])
-                    completed.append(task_record)
+                    post_writeback_reason = _post_writeback_manual_reason(market_payload, task["indicator_key"])
+                    if post_writeback_reason:
+                        _mark_post_writeback_manual_required(
+                            market_payload,
+                            task_record,
+                            extraction,
+                            task["indicator_key"],
+                            post_writeback_reason,
+                        )
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        manual_required = True
+                    else:
+                        _update_missing_items(market_payload, task["indicator_key"])
+                        completed.append(task_record)
                 _append_task_log(task_log_path, task_record)
                 websearch_results.append(
                     {
@@ -2546,8 +2612,8 @@ async def _execute_tasks(
                         "field_attempts": field_attempts,
                         "search_backend": task.get("search_backend"),
                         "note": task.get("search_note"),
-                        "manual_required": manual_required,
-                        "manual_reason": extraction.get("manual_reason"),
+                        "manual_required": task_record.get("manual_required"),
+                        "manual_reason": task_record.get("manual_reason") or extraction.get("manual_reason"),
                     }
                 )
             except Exception as exc:
@@ -3234,8 +3300,21 @@ async def _execute_tasks(
                                 stats["write_back_fallback_count"] += 1
                             elif write_target == "skip_no_value":
                                 stats["write_back_miss_count"] += 1
-                            _update_missing_items(market_payload, task["indicator_key"])
-                            completed.append(task_record)
+                            post_writeback_reason = _post_writeback_manual_reason(market_payload, task["indicator_key"])
+                            if post_writeback_reason:
+                                _mark_post_writeback_manual_required(
+                                    market_payload,
+                                    task_record,
+                                    extraction,
+                                    task["indicator_key"],
+                                    post_writeback_reason,
+                                )
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                manual_required = True
+                            else:
+                                _update_missing_items(market_payload, task["indicator_key"])
+                                completed.append(task_record)
                         _append_task_log(task_log_path, task_record)
                         websearch_results.append(
                             {
@@ -3246,8 +3325,8 @@ async def _execute_tasks(
                                 "field_attempts": field_attempts,
                                 "search_backend": search_backend,
                                 "note": search_note,
-                                "manual_required": manual_required,
-                                "manual_reason": extraction.get("manual_reason"),
+                                "manual_required": task_record.get("manual_required"),
+                                "manual_reason": task_record.get("manual_reason") or extraction.get("manual_reason"),
                             }
                         )
                         break
