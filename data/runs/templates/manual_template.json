@@ -93,32 +93,37 @@
   ],
   "fund_flow": {
     "northbound": {
-      "_note": "Use official or trusted current flow source. Do not use AKShare direct final values. source_url is a placeholder entry point; replace it with the exact evidence URL for the copied value.",
+      "_note": "Use official or trusted structured daily-series data that directly covers the 5d/120d windows. Do not use AKShare direct final values. source_url is a placeholder entry point; replace it with the exact evidence URL for the copied value.",
       "recent_5d": 85.6,
       "total_120d": 1250.0,
       "trend": "流入",
       "source": "Stage2.5 manual",
       "source_url": "https://data.eastmoney.com/hsgt/index.html",
+      "metric_basis": "net_flow_sum",
+      "window_evidence": "direct_daily_series",
       "is_estimated": false
     },
     "southbound": {
-      "_note": "Use official or trusted current flow source. source_url is a placeholder entry point; replace it with the exact evidence URL for the copied value.",
+      "_note": "Use official or trusted structured daily-series data that directly covers the 5d/120d windows. source_url is a placeholder entry point; replace it with the exact evidence URL for the copied value.",
       "recent_5d": 42.1,
       "total_120d": 980.0,
       "trend": "流入",
       "source": "Stage2.5 manual",
       "source_url": "https://data.eastmoney.com/hsgt/index.html",
+      "metric_basis": "net_flow_sum",
+      "window_evidence": "direct_daily_series",
       "is_estimated": false
     },
     "etf": {
-      "_note": "ETF manual values must state whether they are news net-flow or TuShare total-size delta. source_url is a placeholder entry point; replace it with the exact evidence URL for the copied value.",
+      "_note": "ETF news or quarterly values are estimate-only and will not clear the gate. Use this example for notes/display only; source_url is a placeholder entry point and must be replaced with the exact evidence URL.",
       "recent_5d": 63.2,
       "total_120d": 1500.0,
       "trend": "流入",
       "source": "Stage2.5 manual",
       "source_url": "https://data.eastmoney.com/etf/",
       "metric_basis": "news_net_flow",
-      "is_estimated": false
+      "window_evidence": "news_summary",
+      "is_estimated": true
     }
   }
 }

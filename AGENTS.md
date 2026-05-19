@@ -170,7 +170,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 official override 白名单。
 - official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在代码内 `official manual override allowlist`，估算仍受 gate 约束。
 - 普通 manual 来源不要因为不是官方域名就默认改成 estimated 或 blocked；是否 official override 只影响显式估算值能否被正规化。
-- fund_flow 的 `source_url` 只证明来源存在，不自动证明 5日/120日窗口真实可用。只有 Tier1/Tier2 结构化来源且 `window_evidence` 为 `direct_window`、`direct_daily_series` 或 `direct_balance_delta` 时，才允许 `is_estimated=false`。
+- fund_flow 的 `source_url` 只证明来源存在，不自动证明 5日/120日窗口真实可用。只有 Tier1/Tier2 结构化来源、`window_evidence` 为 `direct_window`、`direct_daily_series` 或 `direct_balance_delta`，且 `metric_basis` 不是 `news_net_flow`/`estimated_net_flow` 时，才允许 `is_estimated=false`。
+- fund_flow gate 的 `source_tier` 从 `source_url` 域名推断；manual JSON 中手工填写的 `source_tier`/`claimed_source_tier` 仅可作为诊断说明，不能释放 gate。
 - fund_flow Tier1 来源包括 HKEX/SSE/SZSE 等官方或交易所结构化入口；Tier2 包括可解析目标窗口的东方财富数据页；新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
 - fund_flow 手工补数若使用 `news_net_flow`、`estimated_net_flow`、单日外推、季度/年度摘要或无法证明目标窗口，Stage2.5 会强制 `is_estimated=true` 并写入 `estimated_not_allowed` blocker；不得为了通过 gate 手工改成 `false`。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
