@@ -918,6 +918,140 @@ def _default_fund_flow_metric_basis(key: str, payload: Dict[str, Any]) -> str:
     return "net_flow_sum"
 
 
+FUND_FLOW_TIER1_DOMAINS = (
+    "hkex.com.hk",
+    "sse.com.cn",
+    "szse.cn",
+)
+FUND_FLOW_TIER2_DOMAINS = (
+    "data.eastmoney.com",
+    "eastmoney.com",
+    "fund.eastmoney.com",
+)
+FUND_FLOW_TIER3_DOMAINS = (
+    "finance.sina.com.cn",
+    "sina.com.cn",
+    "stcn.com",
+    "cs.com.cn",
+    "cls.cn",
+    "10jqka.com.cn",
+)
+FUND_FLOW_DIRECT_WINDOW_EVIDENCE = {
+    "direct_window",
+    "direct_daily_series",
+    "direct_balance_delta",
+}
+FUND_FLOW_WEAK_WINDOW_EVIDENCE = {
+    "news_summary",
+    "derived",
+    "unknown",
+}
+FUND_FLOW_ESTIMATED_METRIC_BASIS = {
+    "news_net_flow",
+    "estimated_net_flow",
+}
+
+
+def _normalize_source_tier(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    if text in {"tier1", "tier2", "tier3", "unknown"}:
+        return text
+    return None
+
+
+def _normalize_window_evidence(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    allowed = FUND_FLOW_DIRECT_WINDOW_EVIDENCE | FUND_FLOW_WEAK_WINDOW_EVIDENCE
+    if text in allowed:
+        return text
+    return None
+
+
+def _domain_matches(domain: str, suffixes: Any) -> bool:
+    return bool(domain) and any(domain == suffix or domain.endswith(f".{suffix}") for suffix in suffixes)
+
+
+def _infer_fund_flow_source_tier(payload: Dict[str, Any]) -> str:
+    explicit = _normalize_source_tier(payload.get("source_tier"))
+    if explicit:
+        return explicit
+
+    url = _extract_source_url(payload)
+    domain = _extract_domain(url)
+    if _domain_matches(domain, FUND_FLOW_TIER1_DOMAINS):
+        return "tier1"
+    if _domain_matches(domain, FUND_FLOW_TIER2_DOMAINS):
+        return "tier2"
+    if _domain_matches(domain, FUND_FLOW_TIER3_DOMAINS):
+        return "tier3"
+    return "unknown"
+
+
+def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_basis: str) -> str:
+    explicit = _normalize_window_evidence(payload.get("window_evidence"))
+    if explicit:
+        return explicit
+
+    metric = str(metric_basis or "").strip().lower()
+    if metric == "estimated_net_flow":
+        return "derived"
+    if metric == "news_net_flow":
+        return "news_summary"
+
+    text = " ".join(
+        str(payload.get(field) or "")
+        for field in ("source", "note", "estimation_method", "description")
+    ).lower()
+    if any(token in text for token in ("季度", "q1", "q2", "q3", "q4", "年内", "年度", "单日", "外推")):
+        return "news_summary"
+    if key == "margin" and metric == "balance_delta" and any(token in text for token in ("余额", "balance")):
+        return "direct_balance_delta"
+    if ("近5日" in text or "5日" in text or "5-day" in text) and ("120" in text or "一百二十" in text):
+        return "direct_window"
+    return "unknown"
+
+
+def _fund_flow_has_trusted_window(source_tier: str, window_evidence: str, metric_basis: str) -> bool:
+    metric = str(metric_basis or "").strip().lower()
+    if metric in FUND_FLOW_ESTIMATED_METRIC_BASIS:
+        return False
+    if source_tier not in {"tier1", "tier2"}:
+        return False
+    return window_evidence in FUND_FLOW_DIRECT_WINDOW_EVIDENCE
+
+
+def _append_note_once(note: str, addition: str) -> str:
+    if not addition:
+        return note
+    if addition in note:
+        return note
+    if note:
+        return f"{note}；{addition}"
+    return addition
+
+
+def _normalize_fund_flow_estimation(entry: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    source_tier = str(entry.get("source_tier") or "unknown")
+    window_evidence = str(entry.get("window_evidence") or "unknown")
+    metric_basis = str(entry.get("metric_basis") or "")
+    trusted = _fund_flow_has_trusted_window(source_tier, window_evidence, metric_basis)
+
+    if trusted:
+        if "is_estimated" not in payload:
+            entry["is_estimated"] = False
+        return
+
+    entry["is_estimated"] = True
+    entry.setdefault("estimation_method", "fund_flow_manual_window_not_direct")
+    note_addition = (
+        "fund_flow_estimated_gate:"
+        f"source_tier={source_tier},"
+        f"window_evidence={window_evidence},"
+        f"metric_basis={metric_basis or 'unknown'}"
+    )
+    entry["note"] = _append_note_once(str(entry.get("note") or ""), note_addition)
+
+
 def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     将 Stage2 Unified 的 websearch_results（results 数组，含 task/extraction）转换为
@@ -2190,6 +2324,13 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
         ("is_estimated", "estimation_method", "confidence"),
     )
     entry["metric_basis"] = _default_fund_flow_metric_basis(key, payload)
+    entry["source_tier"] = _infer_fund_flow_source_tier(payload)
+    entry["window_evidence"] = _infer_fund_flow_window_evidence(
+        key,
+        payload,
+        entry["metric_basis"],
+    )
+    _normalize_fund_flow_estimation(entry, payload)
     if existing_suspicious:
         entry['note'] = (
             f"覆盖Stage2可疑占位值；{entry['note']}" if entry.get('note') else "覆盖Stage2可疑占位值"

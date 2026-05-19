@@ -1929,6 +1929,57 @@ def test_stage25_preserves_manual_source_url_and_fund_flow_metric_basis(tmp_path
     assert output["fund_flow"]["northbound"]["metric_basis"] == "net_flow_sum"
 
 
+def test_apply_fund_flow_entry_forces_news_summary_estimated_when_marked_false():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": -50.0,
+        "total_120d": -9000.0,
+        "trend": "流出",
+        "source": "新浪财经 ETF季度报告 2026Q1 全市场 ETF 净赎回 9211 亿元",
+        "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+        "metric_basis": "news_net_flow",
+        "window_evidence": "news_summary",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload)
+
+    assert updated is True
+    assert entry["recent_5d"] == -50.0
+    assert entry["total_120d"] == -9000.0
+    assert entry["source_tier"] == "tier3"
+    assert entry["window_evidence"] == "news_summary"
+    assert entry["metric_basis"] == "news_net_flow"
+    assert entry["is_estimated"] is True
+    assert entry["estimation_method"] == "fund_flow_manual_window_not_direct"
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_keeps_structured_direct_window_not_estimated():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富 沪深港通日频净买入序列求和",
+        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["recent_5d"] == 85.6
+    assert entry["total_120d"] == 1250.0
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is False
+    assert "fund_flow_estimated_gate" not in entry["note"]
+
+
 def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):
     existing = {
         "symbol": "GC=F",
