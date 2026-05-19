@@ -972,10 +972,6 @@ def _domain_matches(domain: str, suffixes: Any) -> bool:
 
 
 def _infer_fund_flow_source_tier(payload: Dict[str, Any]) -> str:
-    explicit = _normalize_source_tier(payload.get("source_tier"))
-    if explicit:
-        return explicit
-
     url = _extract_source_url(payload)
     domain = _extract_domain(url)
     if _domain_matches(domain, FUND_FLOW_TIER1_DOMAINS):
@@ -1037,8 +1033,7 @@ def _normalize_fund_flow_estimation(entry: Dict[str, Any], payload: Dict[str, An
     trusted = _fund_flow_has_trusted_window(source_tier, window_evidence, metric_basis)
 
     if trusted:
-        if "is_estimated" not in payload:
-            entry["is_estimated"] = False
+        entry["is_estimated"] = False
         return
 
     entry["is_estimated"] = True
@@ -2323,6 +2318,9 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
         payload,
         ("is_estimated", "estimation_method", "confidence"),
     )
+    claimed_source_tier = _normalize_source_tier(payload.get("source_tier"))
+    if claimed_source_tier:
+        entry["claimed_source_tier"] = claimed_source_tier
     entry["metric_basis"] = _default_fund_flow_metric_basis(key, payload)
     entry["source_tier"] = _infer_fund_flow_source_tier(payload)
     entry["window_evidence"] = _infer_fund_flow_window_evidence(

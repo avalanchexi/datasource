@@ -1984,6 +1984,54 @@ def test_apply_fund_flow_entry_keeps_structured_direct_window_not_estimated():
     assert "fund_flow_estimated_gate" not in entry["note"]
 
 
+def test_apply_fund_flow_entry_rejects_spoofed_source_tier_for_gate():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "手工标记为东方财富日频序列",
+        "source_url": "https://example.com/fund-flow",
+        "source_tier": "tier2",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "unknown"
+    assert entry["claimed_source_tier"] == "tier2"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_normalizes_trusted_direct_window_estimated_true_to_false():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富 沪深港通日频净买入序列求和",
+        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": True,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is False
+    assert "fund_flow_estimated_gate" not in entry["note"]
+
+
 def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):
     existing = {
         "symbol": "GC=F",
