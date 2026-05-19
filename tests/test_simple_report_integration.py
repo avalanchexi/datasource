@@ -373,6 +373,46 @@ def test_quality_gate_does_not_red_flag_estimated_allowlist_items():
     assert not issues
 
 
+def test_report_shows_bdi_estimated_date_instead_of_pending_websearch(tmp_path: Path):
+    market = _base_market()
+    market["metadata"]["date"] = "2026-05-19"
+    market["macro_indicators"] = {
+        "bdi": {
+            "indicator_name": "BDI",
+            "current_value": 2017.0,
+            "previous_value": 2031.0,
+            "change_rate": -0.69,
+            "unit": "points",
+            "date": "2026-05-18",
+            "source": "websearch_manual(TradingEconomics Baltic Dry Index)",
+            "source_url": "https://tradingeconomics.com/commodity/baltic",
+            "is_estimated": True,
+        }
+    }
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.725,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| BDI | 2017.0points(估) | 2031.0points(估) | -0.7points(估) | points | 2026-05-18 |" in text
+    assert "N/A（待 WebSearch）" not in text
+
+
 def test_commodity_daily_change_spike_is_hidden_in_report(tmp_path: Path):
     market = _base_market()
     market["commodities"] = [
@@ -445,6 +485,7 @@ def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
 
     assert "估计值提醒" in text
     assert "资金流:ETF资金流" in text
+    assert "| ETF资金流 | 85.60(估) | 1250.00(估) | 流入 | fallback estimate | estimated fallback pending official source |" in text
 
 
 def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):

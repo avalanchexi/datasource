@@ -482,8 +482,6 @@ def _load_latest_event_marker(indicator_key: str) -> Optional[str]:
 def _is_placeholder_entry(entry: dict) -> bool:
     if entry.get("current_value") in (None, "N/A"):
         return True
-    if entry.get("is_estimated"):
-        return True
     source = str(entry.get("source", ""))
     return "待MCP" in source or "待 WebSearch" in source
 
@@ -1122,15 +1120,17 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     def _flow_label(key: str) -> str:
         return FLOW_LABELS.get(key, key)
 
-    def _format_flow_amount(value: Any) -> str:
+    def _format_flow_amount(value: Any, *, is_estimated: bool = False) -> str:
+        suffix = "(估)" if is_estimated else ""
         if isinstance(value, (int, float)):
-            return f"{value:.2f}"
+            return f"{value:.2f}{suffix}"
         return 'N/A'
 
     for key, flow in market_data['fund_flow'].items():
+        is_flow_estimated = bool(flow.get("is_estimated"))
         report += (
-            f"| {_flow_label(key)} | {_format_flow_amount(flow.get('recent_5d'))} | "
-            f"{_format_flow_amount(flow.get('total_120d'))} | {flow.get('trend', 'N/A')} | "
+            f"| {_flow_label(key)} | {_format_flow_amount(flow.get('recent_5d'), is_estimated=is_flow_estimated)} | "
+            f"{_format_flow_amount(flow.get('total_120d'), is_estimated=is_flow_estimated)} | {flow.get('trend', 'N/A')} | "
             f"{flow.get('source', '-')} | {flow.get('note', '-') or '-'} |\n"
         )
 
