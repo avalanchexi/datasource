@@ -72,7 +72,18 @@ def test_manual_template_official_examples_are_not_estimated() -> None:
         payload["commodities"][0],
         payload["fund_flow"]["northbound"],
         payload["fund_flow"]["southbound"],
-        payload["fund_flow"]["etf"],
     ]
     for item in official_paths:
         assert item["is_estimated"] is False
+
+
+def test_manual_template_etf_fund_flow_is_estimate_only() -> None:
+    payload = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    etf = payload["fund_flow"]["etf"]
+    note = etf["_note"].lower()
+
+    assert etf["is_estimated"] is True
+    assert etf["metric_basis"] == "news_net_flow"
+    assert etf["window_evidence"] == "news_summary"
+    assert "estimate-only" in note
+    assert "will not clear the gate" in note
