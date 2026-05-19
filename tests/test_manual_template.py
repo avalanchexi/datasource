@@ -96,11 +96,16 @@ def test_fund_flow_manual_guide_uses_standard_run_path_contract() -> None:
     text = FUND_FLOW_GUIDE.read_text(encoding="utf-8")
 
     assert "DATE_NH=${DATE//-/}" in text
+    assert "bash run_clean.sh python scripts/stage2_5_injector.py" in text
+    assert "bash run_clean.sh python scripts/stage3_pring_analyzer.py" in text
+    assert "bash run_clean.sh python scripts/stage4_report_generator.py" in text
     assert "data/runs/${DATE_NH}/market_data_stage2.json" in text
     assert "data/runs/${DATE_NH}/websearch_results_manual.json" in text
     assert "data/runs/${DATE_NH}/market_data_complete.json" in text
     assert "data/${DATE}_market_data_stage2.json" not in text
     assert "data/runs/${DATE}/" not in text
+    assert "PYTHONPATH=. python scripts/stage3_pring_analyzer.py" not in text
+    assert "PYTHONPATH=. python scripts/stage4_report_generator.py" not in text
     assert '"collection_date": "${DATE}"' in text
     assert "2025-12-09" not in text
 

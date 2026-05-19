@@ -2240,21 +2240,48 @@ def test_execute_tasks_field_retry_tier3_sources_do_not_clear_fund_flow_gate(tmp
     class DummyClient:
         async def search(self, query, **kwargs):
             if "近120日" in query:
-                snippet = "北向资金近120日累计净流入456.7亿元"
-                url = "https://data.10jqka.com.cn/hgt/hgtb/"
+                return {
+                    "results": [
+                        {
+                            "url": "https://data.eastmoney.com/hsgt/",
+                            "snippet": "东方财富沪深港通近120日净流入统计页面。",
+                            "content": "东方财富沪深港通近120日净流入统计页面。",
+                            "score": 0.95,
+                        },
+                        {
+                            "url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                            "snippet": "北向资金近120日累计净流入456.7亿元",
+                            "content": "北向资金近120日累计净流入456.7亿元",
+                            "score": 0.9,
+                        },
+                    ]
+                }
             elif "近5日" in query:
-                snippet = "北向资金近5日净流入12.3亿元"
-                url = "https://data.10jqka.com.cn/hgt/hgtb/"
-            else:
-                snippet = "东方财富沪深港通入口，北向资金今日净流入12.3亿元，未披露近5日和近120日窗口。"
-                url = "https://data.eastmoney.com/hsgt/"
+                return {
+                    "results": [
+                        {
+                            "url": "https://data.eastmoney.com/hsgt/",
+                            "snippet": "东方财富沪深港通近5日净流入统计页面。",
+                            "content": "东方财富沪深港通近5日净流入统计页面。",
+                            "score": 0.95,
+                        },
+                        {
+                            "url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                            "snippet": "北向资金近5日净流入12.3亿元",
+                            "content": "北向资金近5日净流入12.3亿元",
+                            "score": 0.9,
+                        },
+                    ]
+                }
+            snippet = "东方财富沪深港通入口，北向资金今日净流入12.3亿元，未披露近5日和近120日窗口。"
+            url = "https://data.eastmoney.com/hsgt/"
             return {"results": [{"url": url, "snippet": snippet, "content": snippet, "score": 0.9}]}
 
     class DummyExtractor:
         async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
             text = " ".join(str(s.get("content") or s.get("snippet") or "") for s in snippets)
             source_url = snippets[0].get("url")
-            if "近120日" in text and "未披露" not in text:
+            if "456.7" in text:
                 return {
                     "value": 456.7,
                     "unit": "亿元",
@@ -2264,7 +2291,7 @@ def test_execute_tasks_field_retry_tier3_sources_do_not_clear_fund_flow_gate(tmp
                     "trend": "inflow",
                     "note": f"field_total 流入 model_url_spoofed_from:{source_url}",
                 }
-            if "近5日" in text and "未披露" not in text:
+            if "12.3" in text and "未披露" not in text:
                 return {
                     "value": 12.3,
                     "unit": "亿元",

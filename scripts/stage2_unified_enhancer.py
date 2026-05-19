@@ -1301,27 +1301,78 @@ def _first_snippet_url(snippets: Optional[List[Dict[str, Any]]]) -> Optional[str
     return None
 
 
+def _snippet_text(snippet: Dict[str, Any]) -> str:
+    return " ".join(
+        str(snippet.get(field) or "")
+        for field in ("title", "snippet", "content", "raw_content")
+    )
+
+
+def _snippet_contains_number(snippet: Dict[str, Any], value: Optional[float]) -> bool:
+    if value is None:
+        return False
+    text = _snippet_text(snippet)
+    for match in re.finditer(r"[+-]?\d[\d,]*(?:\.\d+)?", text):
+        try:
+            candidate = float(match.group(0).replace(",", ""))
+        except ValueError:
+            continue
+        if abs(candidate - value) <= max(1e-6, abs(value) * 1e-9):
+            return True
+    return False
+
+
+def _resolve_field_retry_evidence_source(
+    field_extraction: Dict[str, Any],
+    snippets: Optional[List[Dict[str, Any]]],
+    value: Optional[float],
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    candidates = [snip for snip in (snippets or []) if isinstance(snip, dict)]
+    if not candidates:
+        source_url = field_extraction.get("source_url")
+        return (str(source_url).strip() if source_url else None), []
+
+    source_url_raw = field_extraction.get("source_url")
+    source_url = str(source_url_raw).strip() if isinstance(source_url_raw, str) else ""
+    source_snippets = [
+        snip for snip in candidates if str(snip.get("url") or "").strip() == source_url
+    ]
+    source_value_snippets = [
+        snip for snip in source_snippets if _snippet_contains_number(snip, value)
+    ]
+    if source_value_snippets:
+        return source_url, source_value_snippets
+
+    value_snippets = [snip for snip in candidates if _snippet_contains_number(snip, value)]
+    if value_snippets:
+        value_url = _first_snippet_url(value_snippets)
+        same_url_value_snippets = [
+            snip for snip in value_snippets if str(snip.get("url") or "").strip() == value_url
+        ]
+        return value_url, same_url_value_snippets or value_snippets
+
+    if source_snippets:
+        return source_url, source_snippets
+    first_url = _first_snippet_url(candidates)
+    return first_url, candidates[:1]
+
+
 def _field_retry_window_evidence(
     field_scope: str,
     indicator_key: str,
     field_extraction: Dict[str, Any],
     snippets: Optional[List[Dict[str, Any]]],
     metric_basis: str,
+    value: Optional[float],
 ) -> str:
+    if not any(_snippet_contains_number(snip, value) for snip in (snippets or [])):
+        return "unknown"
+
     explicit = str(field_extraction.get("window_evidence") or "").strip().lower()
     if explicit in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
         return explicit
 
-    text = " ".join(
-        [
-            str(s.get("title") or "")
-            + " "
-            + str(s.get("snippet") or "")
-            + " "
-            + str(s.get("content") or "")
-            for s in (snippets or [])
-        ]
-    ).lower()
+    text = " ".join(_snippet_text(s) for s in (snippets or [])).lower()
     if any(token in text for token in ("未披露", "未显示", "没有披露", "无法披露")):
         return "unknown"
 
@@ -2504,7 +2555,11 @@ async def _execute_tasks(
             if value is None:
                 continue
             extraction[field_scope] = value
-            field_source_url = _first_snippet_url(field_snippets) or field_extraction.get("source_url")
+            field_source_url, evidence_snippets = _resolve_field_retry_evidence_source(
+                field_extraction,
+                field_snippets,
+                value,
+            )
             field_payload_for_tier = dict(field_extraction)
             if field_source_url:
                 field_payload_for_tier["source_url"] = field_source_url
@@ -2513,8 +2568,9 @@ async def _execute_tasks(
                 field_scope,
                 task["indicator_key"],
                 field_extraction,
-                field_snippets,
+                evidence_snippets,
                 field_metric_basis,
+                value,
             )
             field_retry_evidence = extraction.setdefault("field_retry_evidence", {})
             if isinstance(field_retry_evidence, dict):
