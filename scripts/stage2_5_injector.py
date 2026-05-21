@@ -155,17 +155,42 @@ class InjectionSummary:
     def injected(self, category: str, key: str, **details: Any) -> None:
         self._record(self.injected_items, category, key, **details)
 
-    def metadata_updated(self, category: str, key: str, **details: Any) -> None:
-        self._record(self.metadata_updated_items, category, key, **details)
+    def metadata_updated(
+        self, category: str, key: str, reason: str, existing: Any, incoming: Any
+    ) -> None:
+        self._record(
+            self.metadata_updated_items,
+            category,
+            key,
+            reason=reason,
+            existing_value=existing,
+            incoming_value=incoming,
+        )
 
-    def skipped_existing(self, category: str, key: str, **details: Any) -> None:
-        self._record(self.skipped_existing_items, category, key, **details)
+    def skipped_existing(
+        self, category: str, key: str, reason: str, existing: Any, incoming: Any
+    ) -> None:
+        self._record(
+            self.skipped_existing_items,
+            category,
+            key,
+            reason=reason,
+            existing_value=existing,
+            incoming_value=incoming,
+        )
 
     def skipped_no_parseable_value(self, category: str, key: str, **details: Any) -> None:
         self._record(self.skipped_no_parseable_value_items, category, key, **details)
 
-    def forced_override(self, category: str, key: str, **details: Any) -> None:
-        self._record(self.forced_override_items, category, key, **details)
+    def forced_override(self, category: str, key: str, existing: Any, incoming: Any) -> None:
+        self._record(
+            self.forced_override_items,
+            category,
+            key,
+            reason="force_override",
+            existing_value=existing,
+            incoming_value=incoming,
+        )
 
     def fund_flow_forced_estimated(self, category: str, key: str, **details: Any) -> None:
         self._record(self.fund_flow_forced_estimated_items, category, key, **details)
@@ -2170,19 +2195,32 @@ def _apply_macro_entry(
     if not isinstance(entry, dict):
         return False
     original_current_value = entry.get("current_value")
+    incoming_current_value = _coerce_float(payload.get("current_value"))
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
     if not force_override and not existing_placeholder and not (override_stale and existing_stale):
-        if _same_numeric_value(entry.get("current_value"), payload.get("current_value")):
+        if _same_numeric_value(original_current_value, incoming_current_value):
             if _update_metadata_only(entry, payload):
                 if summary is not None:
-                    summary.metadata_updated("macro_indicators", indicator_key)
+                    summary.metadata_updated(
+                        "macro_indicators",
+                        indicator_key,
+                        "same_numeric_value_metadata_updated",
+                        original_current_value,
+                        incoming_current_value,
+                    )
                 return True
         if summary is not None:
-            if _coerce_float(payload.get("current_value")) is None:
+            if incoming_current_value is None:
                 summary.skipped_no_parseable_value("macro_indicators", indicator_key)
             else:
-                summary.skipped_existing("macro_indicators", indicator_key)
+                summary.skipped_existing(
+                    "macro_indicators",
+                    indicator_key,
+                    "existing_value_present",
+                    original_current_value,
+                    incoming_current_value,
+                )
         return False
     entry['indicator_name'] = payload.get('indicator_name', entry.get('indicator_name'))
     entry['unit'] = payload.get('unit', entry.get('unit', ''))
@@ -2329,7 +2367,12 @@ def _apply_macro_entry(
             and _coerce_float(original_current_value) is not None
             and not _same_numeric_value(original_current_value, entry.get("current_value"))
         ):
-            summary.forced_override("macro_indicators", indicator_key)
+            summary.forced_override(
+                "macro_indicators",
+                indicator_key,
+                original_current_value,
+                incoming_current_value,
+            )
         summary.injected("macro_indicators", indicator_key)
     return True
 
@@ -2392,10 +2435,11 @@ def _apply_monetary_entry(
     if not isinstance(entry, dict):
         return False
     original_current_value = entry.get("current_value")
+    incoming_current_value = _coerce_float(payload.get("current_value"))
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
     if not force_override and not existing_placeholder and not (override_stale and existing_stale):
-        if _same_numeric_value(entry.get("current_value"), payload.get("current_value")):
+        if _same_numeric_value(original_current_value, incoming_current_value):
             changed = _update_metadata_only(entry, payload)
             if is_manual:
                 before_estimated = entry.get("is_estimated")
@@ -2408,13 +2452,25 @@ def _apply_monetary_entry(
                 )
             if changed:
                 if summary is not None:
-                    summary.metadata_updated("monetary_policy", indicator_key)
+                    summary.metadata_updated(
+                        "monetary_policy",
+                        indicator_key,
+                        "same_numeric_value_metadata_updated",
+                        original_current_value,
+                        incoming_current_value,
+                    )
                 return True
         if summary is not None:
-            if _coerce_float(payload.get("current_value")) is None:
+            if incoming_current_value is None:
                 summary.skipped_no_parseable_value("monetary_policy", indicator_key)
             else:
-                summary.skipped_existing("monetary_policy", indicator_key)
+                summary.skipped_existing(
+                    "monetary_policy",
+                    indicator_key,
+                    "existing_value_present",
+                    original_current_value,
+                    incoming_current_value,
+                )
         return False
     entry['policy_name'] = payload.get('policy_name', entry.get('policy_name'))
     incoming_value = _coerce_float(payload.get('current_value'))
@@ -2496,7 +2552,12 @@ def _apply_monetary_entry(
             and _coerce_float(original_current_value) is not None
             and not _same_numeric_value(original_current_value, entry.get("current_value"))
         ):
-            summary.forced_override("monetary_policy", indicator_key)
+            summary.forced_override(
+                "monetary_policy",
+                indicator_key,
+                original_current_value,
+                incoming_current_value,
+            )
         summary.injected("monetary_policy", indicator_key)
     return True
 

@@ -819,7 +819,15 @@ def test_injection_summary_records_skipped_existing(tmp_path: Path, monkeypatch)
     output = json.loads(output_path.read_text(encoding="utf-8"))
     summary = output["metadata"]["injection_summary"]
     assert summary["counts"]["skipped_existing"] == 1
-    assert {"category": "macro_indicators", "key": "cpi"} in summary["skipped_existing"]
+    assert summary["skipped_existing"] == [
+        {
+            "category": "macro_indicators",
+            "key": "cpi",
+            "reason": "existing_value_present",
+            "existing_value": 2.1,
+            "incoming_value": 2.0,
+        }
+    ]
 
 
 def test_macro_entry_same_value_updates_metadata_without_force():
@@ -867,7 +875,65 @@ def test_macro_entry_same_value_updates_metadata_without_force():
     summary_payload = summary.to_dict()
     assert summary_payload["counts"]["metadata_updated"] == 1
     assert summary_payload["counts"]["injected"] == 0
-    assert {"category": "macro_indicators", "key": "cpi"} in summary_payload["metadata_updated"]
+    assert summary_payload["metadata_updated"] == [
+        {
+            "category": "macro_indicators",
+            "key": "cpi",
+            "reason": "same_numeric_value_metadata_updated",
+            "existing_value": 2.1,
+            "incoming_value": 2.1,
+        }
+    ]
+
+
+def test_macro_entry_force_override_records_values():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": 2.1,
+        "previous_value": 1.9,
+        "change_rate": 10.5,
+        "unit": "%",
+        "date": "2026-03",
+        "source": "Stage2 DeepSeek",
+        "is_estimated": True,
+        "is_stale": False,
+        "stale_reason": None,
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.0",
+        "previous_value": "1.8",
+        "change_rate": "11.1",
+        "unit": "%",
+        "date": "2026-04",
+        "source": "国家统计局",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/",
+        "is_estimated": False,
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_macro_entry(
+        "cpi",
+        entry,
+        payload,
+        "2026-04-28",
+        force_override=True,
+        summary=summary,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.0)
+    summary_payload = summary.to_dict()
+    assert summary_payload["forced_override"] == [
+        {
+            "category": "macro_indicators",
+            "key": "cpi",
+            "reason": "force_override",
+            "existing_value": 2.1,
+            "incoming_value": 2.0,
+        }
+    ]
 
 
 def test_apply_macro_entry_overrides_stale_and_clears_flag():
