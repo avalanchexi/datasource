@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -135,6 +136,53 @@ OFFICIAL_MANUAL_SOURCES = {
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
 
 _POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class InjectionSummary:
+    injected_items: List[Dict[str, Any]] = field(default_factory=list)
+    metadata_updated_items: List[Dict[str, Any]] = field(default_factory=list)
+    skipped_existing_items: List[Dict[str, Any]] = field(default_factory=list)
+    skipped_no_parseable_value_items: List[Dict[str, Any]] = field(default_factory=list)
+    forced_override_items: List[Dict[str, Any]] = field(default_factory=list)
+    fund_flow_forced_estimated_items: List[Dict[str, Any]] = field(default_factory=list)
+
+    def _record(self, bucket: List[Dict[str, Any]], category: str, key: str, **details: Any) -> None:
+        item = {"category": category, "key": str(key)}
+        item.update({k: v for k, v in details.items() if v is not None})
+        bucket.append(item)
+
+    def injected(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.injected_items, category, key, **details)
+
+    def metadata_updated(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.metadata_updated_items, category, key, **details)
+
+    def skipped_existing(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.skipped_existing_items, category, key, **details)
+
+    def skipped_no_parseable_value(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.skipped_no_parseable_value_items, category, key, **details)
+
+    def forced_override(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.forced_override_items, category, key, **details)
+
+    def fund_flow_forced_estimated(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.fund_flow_forced_estimated_items, category, key, **details)
+
+    def to_dict(self) -> Dict[str, Any]:
+        buckets = {
+            "injected": self.injected_items,
+            "metadata_updated": self.metadata_updated_items,
+            "skipped_existing": self.skipped_existing_items,
+            "skipped_no_parseable_value": self.skipped_no_parseable_value_items,
+            "forced_override": self.forced_override_items,
+            "fund_flow_forced_estimated": self.fund_flow_forced_estimated_items,
+        }
+        return {
+            "counts": {name: len(items) for name, items in buckets.items()},
+            **{name: list(items) for name, items in buckets.items()},
+        }
 
 
 def _policy_rules() -> Dict[str, Any]:
@@ -1527,6 +1575,7 @@ def inject_websearch_data(
             _attach_source_url(payload)
 
     inject_count = 0
+    summary = InjectionSummary()
 
     # 1. 注入宏观指标
     print("\n[STEP 1] 注入宏观指标数据...")
@@ -1536,6 +1585,7 @@ def inject_websearch_data(
         if key not in macro_section:
             # 缺失即创建占位，避免 industrial_sales 等被跳过
             macro_section[key] = _create_macro_placeholder(key, payload, metadata)
+        metadata_updated_before = len(summary.metadata_updated_items)
         updated = _apply_macro_entry(
             key,
             macro_section[key],
@@ -1545,9 +1595,11 @@ def inject_websearch_data(
             override_stale=override_stale,
             force_override=force_override,
             trend_history_base_dir=trend_base_dir,
+            summary=summary,
         )
         if updated:
-            inject_count += 1
+            if len(summary.metadata_updated_items) == metadata_updated_before:
+                inject_count += 1
             print(f"  [OK] {payload.get('indicator_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'macro_indicators', key)
             _remove_top_missing(market_data, key)
@@ -1561,6 +1613,7 @@ def inject_websearch_data(
         key = MONETARY_KEY_MAP.get(raw_key, raw_key)
         if key not in monetary_section:
             monetary_section[key] = _create_monetary_placeholder(key, payload, metadata)
+        metadata_updated_before = len(summary.metadata_updated_items)
         updated = _apply_monetary_entry(
             key,
             monetary_section[key],
@@ -1570,9 +1623,11 @@ def inject_websearch_data(
             override_stale=override_stale,
             force_override=force_override,
             trend_history_base_dir=trend_base_dir,
+            summary=summary,
         )
         if updated:
-            inject_count += 1
+            if len(summary.metadata_updated_items) == metadata_updated_before:
+                inject_count += 1
             print(f"  [OK] {payload.get('policy_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'monetary_policy', key)
             _remove_top_missing(market_data, key)
@@ -1590,12 +1645,17 @@ def inject_websearch_data(
         normalized_payload = _normalize_fund_flow_payload(raw_key, payload)
         if _apply_fund_flow_entry(market_data['fund_flow'][key], key, normalized_payload):
             inject_count += 1
+            summary.injected("fund_flow", key)
+            if "fund_flow_estimated_gate" in str(market_data['fund_flow'][key].get("note") or ""):
+                summary.fund_flow_forced_estimated("fund_flow", key)
             print(
                 f"  [OK] {key}: recent_5d={market_data['fund_flow'][key]['recent_5d']} "
                 f"total_120d={market_data['fund_flow'][key]['total_120d']} source={market_data['fund_flow'][key]['source']}"
             )
             _remove_missing_item(metadata, 'fund_flow', key)
             _remove_top_missing(market_data, key)
+        else:
+            summary.skipped_no_parseable_value("fund_flow", key)
 
     # 4. 注入外汇数据
     print("\n[STEP 4] 注入外汇数据...")
@@ -1620,6 +1680,7 @@ def inject_websearch_data(
         if not updated:
             market_forex.append(_build_forex_entry(fx, is_manual=is_manual, trend_history_base_dir=trend_base_dir))
         inject_count += 1
+        summary.injected("forex", pair)
         print(f"  [OK] {fx.get('name', pair)}: {fx.get('current_rate')} (source={fx.get('source')})")
         _remove_missing_item(metadata, 'forex', pair)
         _remove_top_missing(market_data, pair)
@@ -1636,6 +1697,7 @@ def inject_websearch_data(
         price = _coerce_float(idx_payload.get('current_price') or idx_payload.get('close') or idx_payload.get('price'))
         if price is None:
             print(f"  [WARN] {symbol} 缺少可解析价格，跳过注入")
+            summary.skipped_no_parseable_value("stock_indices", symbol)
             continue
         merged = False
         for i, existing in enumerate(stock_indices_section):
@@ -1646,6 +1708,7 @@ def inject_websearch_data(
         if not merged:
             stock_indices_section.append(_build_stock_index_entry(symbol, idx_payload))
         inject_count += 1
+        summary.injected("stock_indices", symbol)
         print(f"  [OK] {idx_payload.get('name', symbol)}: {price}")
         _remove_missing_item(metadata, 'stock_indices', symbol)
         _remove_top_missing(market_data, symbol)
@@ -1663,6 +1726,7 @@ def inject_websearch_data(
         bond_data['current_yield'] = _coerce_float(bond_data.get('current_yield'))
         if bond_data['current_yield'] is None:
             print(f"  [WARN] {symbol} 缺少 current_yield，跳过注入")
+            summary.skipped_no_parseable_value("bonds", symbol)
             continue
         # 在bonds列表中找到对应项并更新
         updated = False
@@ -1675,6 +1739,7 @@ def inject_websearch_data(
                     trend_history_base_dir=trend_base_dir,
                 )
                 inject_count += 1
+                summary.injected("bonds", symbol)
                 print(f"  [OK] {bond_data['name']}: {bond_data['current_yield']}%")
                 _remove_missing_item(metadata, 'bonds', symbol)
                 _remove_top_missing(market_data, symbol)
@@ -1689,6 +1754,7 @@ def inject_websearch_data(
             )
             market_data.setdefault('bonds', []).append(merged_entry)
             inject_count += 1
+            summary.injected("bonds", symbol)
             _remove_missing_item(metadata, 'bonds', symbol)
             _remove_top_missing(market_data, symbol)
 
@@ -1705,6 +1771,7 @@ def inject_websearch_data(
         commodity_data['current_price'] = _coerce_float(commodity_data.get('current_price'))
         if commodity_data['current_price'] is None:
             print(f"  [WARN] {symbol} 缺少 current_price，跳过注入")
+            summary.skipped_no_parseable_value("commodities", symbol)
             continue
         # 在commodities列表中找到对应项并更新
         updated = False
@@ -1728,6 +1795,7 @@ def inject_websearch_data(
                 )
             )
         inject_count += 1
+        summary.injected("commodities", symbol)
         price_val = commodity_data.get('current_price') or 0.0
         ytd_val = commodity_data.get('ytd_change') or 0.0
         print(f"  [OK] {commodity_data['name']}: {commodity_data.get('unit','')}{price_val:.2f} (YTD {ytd_val:+.2f}%)")
@@ -1812,13 +1880,19 @@ def inject_websearch_data(
     quality_state = _apply_pipeline_quality_state(market_data)
     quality_blockers = quality_state.get("quality_blockers") or []
 
+    metadata["injection_summary"] = summary.to_dict()
+
     # 保存到输出文件
     print(f"\n[INFO] 保存完整数据到: {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(market_data, f, ensure_ascii=False, indent=2)
 
+    summary_counts = metadata["injection_summary"]["counts"]
     print(f"\n[SUCCESS] 数据注入完成！")
     print(f"  - 注入数据项: {inject_count}")
+    print(f"  - 元数据更新项: {summary_counts.get('metadata_updated', 0)}")
+    print(f"  - 已有值跳过项: {summary_counts.get('skipped_existing', 0)}")
+    print(f"  - 资金流强制估算项: {summary_counts.get('fund_flow_forced_estimated', 0)}")
     print(f"  - 数据完整性: {market_data['metadata']['data_completeness']:.1%}")
     print(f"  - 输出文件: {output_path}")
     if quality_blockers:
@@ -1973,6 +2047,14 @@ def _coerce_float(value: Any) -> Optional[float]:
     return None
 
 
+def _same_numeric_value(left: Any, right: Any) -> bool:
+    left_value = _coerce_float(left)
+    right_value = _coerce_float(right)
+    if left_value is None or right_value is None:
+        return False
+    return abs(left_value - right_value) < 1e-9
+
+
 def _calc_change_rate_pct(current_value: Optional[float], previous_value: Optional[float]) -> Optional[float]:
     """按百分比口径计算变化率：(current - previous) / abs(previous) * 100。"""
     if current_value is None or previous_value is None:
@@ -2021,6 +2103,40 @@ def _format_source_label(raw_source: Optional[str]) -> str:
     return f"{DEFAULT_SOURCE_LABEL}({source_text})"
 
 
+def _update_metadata_only(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    changed = False
+
+    def set_if_changed(field: str, value: Any) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if entry.get(field) != value:
+            entry[field] = value
+            changed = True
+
+    incoming_date = payload.get("date") or payload.get("as_of_date") or payload.get("report_period")
+    if incoming_date:
+        set_if_changed("date", incoming_date)
+    if payload.get("as_of_date") or payload.get("report_period"):
+        set_if_changed("as_of_date", payload.get("as_of_date") or payload.get("report_period"))
+    if "report_period" in payload:
+        set_if_changed("report_period", payload.get("report_period"))
+    if "source" in payload:
+        set_if_changed("source", _format_source_label(payload.get("source")))
+    source_url = _extract_source_url(payload)
+    if source_url:
+        set_if_changed("source_url", source_url)
+    if "note" in payload:
+        note_val = payload.get("note")
+        set_if_changed("note", note_val if isinstance(note_val, str) else "")
+    for field_name in ("confidence", "estimation_method"):
+        if field_name in payload:
+            set_if_changed(field_name, payload.get(field_name))
+    if "is_estimated" in payload:
+        set_if_changed("is_estimated", _coerce_bool(payload.get("is_estimated")))
+    return changed
+
+
 def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -2049,12 +2165,24 @@ def _apply_macro_entry(
     override_stale: bool = True,
     force_override: bool = False,
     trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
+    summary: Optional[InjectionSummary] = None,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
+    original_current_value = entry.get("current_value")
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
     if not force_override and not existing_placeholder and not (override_stale and existing_stale):
+        if _same_numeric_value(entry.get("current_value"), payload.get("current_value")):
+            if _update_metadata_only(entry, payload):
+                if summary is not None:
+                    summary.metadata_updated("macro_indicators", indicator_key)
+                return True
+        if summary is not None:
+            if _coerce_float(payload.get("current_value")) is None:
+                summary.skipped_no_parseable_value("macro_indicators", indicator_key)
+            else:
+                summary.skipped_existing("macro_indicators", indicator_key)
         return False
     entry['indicator_name'] = payload.get('indicator_name', entry.get('indicator_name'))
     entry['unit'] = payload.get('unit', entry.get('unit', ''))
@@ -2195,6 +2323,14 @@ def _apply_macro_entry(
         raise ValueError(f"macro_indicators.{entry.get('indicator_name', 'unknown')} current_value is missing after injection")
     entry["is_stale"] = False
     entry["stale_reason"] = None
+    if summary is not None:
+        if (
+            force_override
+            and _coerce_float(original_current_value) is not None
+            and not _same_numeric_value(original_current_value, entry.get("current_value"))
+        ):
+            summary.forced_override("macro_indicators", indicator_key)
+        summary.injected("macro_indicators", indicator_key)
     return True
 
 
@@ -2251,12 +2387,34 @@ def _apply_monetary_entry(
     override_stale: bool = True,
     force_override: bool = False,
     trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
+    summary: Optional[InjectionSummary] = None,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
+    original_current_value = entry.get("current_value")
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
     if not force_override and not existing_placeholder and not (override_stale and existing_stale):
+        if _same_numeric_value(entry.get("current_value"), payload.get("current_value")):
+            changed = _update_metadata_only(entry, payload)
+            if is_manual:
+                before_estimated = entry.get("is_estimated")
+                before_note = entry.get("note")
+                _apply_manual_official_estimation_rule("monetary_policy", indicator_key, payload, entry)
+                changed = (
+                    changed
+                    or before_estimated != entry.get("is_estimated")
+                    or before_note != entry.get("note")
+                )
+            if changed:
+                if summary is not None:
+                    summary.metadata_updated("monetary_policy", indicator_key)
+                return True
+        if summary is not None:
+            if _coerce_float(payload.get("current_value")) is None:
+                summary.skipped_no_parseable_value("monetary_policy", indicator_key)
+            else:
+                summary.skipped_existing("monetary_policy", indicator_key)
         return False
     entry['policy_name'] = payload.get('policy_name', entry.get('policy_name'))
     incoming_value = _coerce_float(payload.get('current_value'))
@@ -2332,6 +2490,14 @@ def _apply_monetary_entry(
     if entry.get("current_value") is not None:
         entry["is_stale"] = False
         entry["stale_reason"] = None
+    if summary is not None:
+        if (
+            force_override
+            and _coerce_float(original_current_value) is not None
+            and not _same_numeric_value(original_current_value, entry.get("current_value"))
+        ):
+            summary.forced_override("monetary_policy", indicator_key)
+        summary.injected("monetary_policy", indicator_key)
     return True
 
 

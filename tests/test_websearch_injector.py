@@ -760,6 +760,116 @@ def test_apply_macro_entry_skips_non_stale_existing_value():
     assert entry["is_stale"] is False
 
 
+def test_injection_summary_records_skipped_existing(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {}},
+            "missing_items": [],
+            "macro_indicators": {
+                "cpi": {
+                    "indicator_name": "CPI同比",
+                    "current_value": 2.1,
+                    "previous_value": 1.9,
+                    "change_rate": 10.5,
+                    "unit": "%",
+                    "date": "2026-04",
+                    "source": "TuShare cn_cpi",
+                    "is_estimated": False,
+                    "is_stale": False,
+                    "stale_reason": None,
+                    "note": "",
+                }
+            },
+            "monetary_policy": {},
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {},
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "macro_indicators": {
+                "cpi": {
+                    "indicator_name": "CPI同比",
+                    "current_value": 2.0,
+                    "unit": "%",
+                    "date": "2026-04",
+                    "source": "国家统计局",
+                    "source_url": "https://www.stats.gov.cn/sj/zxfb/",
+                    "is_estimated": False,
+                }
+            }
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    summary = output["metadata"]["injection_summary"]
+    assert summary["counts"]["skipped_existing"] == 1
+    assert {"category": "macro_indicators", "key": "cpi"} in summary["skipped_existing"]
+
+
+def test_macro_entry_same_value_updates_metadata_without_force():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": 2.1,
+        "previous_value": 1.9,
+        "change_rate": 10.5,
+        "unit": "%",
+        "date": "2026-03",
+        "source": "Stage2 DeepSeek",
+        "source_url": "https://example.com/stage2",
+        "is_estimated": True,
+        "is_stale": False,
+        "stale_reason": None,
+        "note": "旧来源",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.10",
+        "unit": "%",
+        "date": "2026-04",
+        "source": "国家统计局",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/",
+        "is_estimated": False,
+        "note": "官方发布",
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_macro_entry(
+        "cpi",
+        entry,
+        payload,
+        "2026-04-28",
+        summary=summary,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.1)
+    assert entry["source_url"] == "https://www.stats.gov.cn/sj/zxfb/"
+    assert entry["source"] == "websearch_manual(国家统计局)"
+    assert entry["date"] == "2026-04"
+    assert entry["note"] == "官方发布"
+    assert entry["is_estimated"] is False
+    summary_payload = summary.to_dict()
+    assert summary_payload["counts"]["metadata_updated"] == 1
+    assert summary_payload["counts"]["injected"] == 0
+    assert {"category": "macro_indicators", "key": "cpi"} in summary_payload["metadata_updated"]
+
+
 def test_apply_macro_entry_overrides_stale_and_clears_flag():
     entry = {
         "indicator_name": "CPI同比",
