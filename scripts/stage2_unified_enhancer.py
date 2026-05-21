@@ -4659,6 +4659,9 @@ async def main() -> int:
         model=args.deepseek_model,
         base_url=args.deepseek_base_url,
         api_key=os.getenv("DEEPSEEK_API_KEY"),
+        trust_env=(
+            os.getenv("DATASOURCE_NETWORK_MODE", "direct").lower() == "proxy"
+        ),
     )
 
     completed_tasks: List[Dict[str, Any]] = []

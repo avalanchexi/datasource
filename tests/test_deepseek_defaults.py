@@ -1,7 +1,9 @@
+import asyncio
 import json
 import sys
 from types import SimpleNamespace
 
+from datasource.engines import deepseek_reasoner
 from datasource.engines.deepseek_reasoner import DeepSeekExtractionAgent
 from datasource.generators import simple_report
 from scripts import stage2_unified_enhancer
@@ -63,6 +65,50 @@ def test_deepseek_agent_uses_configurable_extract_max_tokens(monkeypatch) -> Non
 
     agent = DeepSeekExtractionAgent(api_key="test-key", extract_max_tokens=0)
     assert agent.extract_max_tokens == 300
+
+
+def test_deepseek_agent_disables_environment_proxy_by_default(monkeypatch) -> None:
+    created_http_clients: list[object] = []
+    created_openai_kwargs: list[dict[str, object]] = []
+
+    class FakeAsyncHttpxClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created_http_clients.append(self)
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            created_openai_kwargs.append(kwargs)
+
+    monkeypatch.setattr(deepseek_reasoner, "DefaultAsyncHttpxClient", FakeAsyncHttpxClient)
+    monkeypatch.setattr(deepseek_reasoner, "AsyncOpenAI", FakeAsyncOpenAI)
+
+    agent = DeepSeekExtractionAgent(api_key="test-key")
+    asyncio.run(agent._ensure_client())
+
+    assert created_http_clients[0].kwargs["trust_env"] is False
+    assert created_openai_kwargs[0]["http_client"] is created_http_clients[0]
+
+
+def test_deepseek_agent_allows_explicit_environment_proxy_mode(monkeypatch) -> None:
+    created_http_clients: list[object] = []
+
+    class FakeAsyncHttpxClient:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            created_http_clients.append(self)
+
+    class FakeAsyncOpenAI:
+        def __init__(self, **kwargs):
+            pass
+
+    monkeypatch.setattr(deepseek_reasoner, "DefaultAsyncHttpxClient", FakeAsyncHttpxClient)
+    monkeypatch.setattr(deepseek_reasoner, "AsyncOpenAI", FakeAsyncOpenAI)
+
+    agent = DeepSeekExtractionAgent(api_key="test-key", trust_env=True)
+    asyncio.run(agent._ensure_client())
+
+    assert created_http_clients[0].kwargs["trust_env"] is True
 
 
 def test_deepseek_schema_hint_keeps_non_fund_flow_core_small() -> None:

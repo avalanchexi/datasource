@@ -20,9 +20,10 @@ from loguru import logger
 from datasource.utils.coercion import to_float
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 except Exception:  # pragma: no cover - 环境缺省时延迟导入
     AsyncOpenAI = None  # type: ignore
+    DefaultAsyncHttpxClient = None  # type: ignore
 
 
 class DeepSeekExtractionAgent:
@@ -34,10 +35,12 @@ class DeepSeekExtractionAgent:
         model: str = "deepseek-v4-pro",
         base_url: Optional[str] = None,
         extract_max_tokens: Optional[int] = None,
+        trust_env: bool = False,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.model = model
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+        self.trust_env = trust_env
         raw_tokens = (
             extract_max_tokens
             if extract_max_tokens is not None
@@ -53,7 +56,13 @@ class DeepSeekExtractionAgent:
         if not self.api_key or AsyncOpenAI is None:
             return None
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            client_kwargs: Dict[str, Any] = {
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+            }
+            if DefaultAsyncHttpxClient is not None:
+                client_kwargs["http_client"] = DefaultAsyncHttpxClient(trust_env=self.trust_env)
+            self._client = AsyncOpenAI(**client_kwargs)
         return self._client
 
     @staticmethod
