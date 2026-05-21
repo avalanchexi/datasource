@@ -51,7 +51,8 @@
    ```bash
    bash run_preflight.sh
    ```
-   脚本会校验三个 API key 长度并清空 `http_proxy/https_proxy/HTTP_PROXY/HTTPS_PROXY`。终端重开后先重跑。
+   脚本会校验三个 API key 长度并清理主动代理变量。终端重开或 VPN 变更后先重跑。
+   默认网络模式为 `DATASOURCE_NETWORK_MODE=direct`：`run_preflight.sh`/`run_clean.sh`/`runtime_env.sh` 会清理 `http_proxy/https_proxy/HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/all_proxy`，保留 `no_proxy/NO_PROXY`。只有明确需要代理时才设置 `DATASOURCE_NETWORK_MODE=proxy`；SOCKS 代理需要 `httpx[socks]`/`socksio`，否则 preflight hard fail。
    `run_preflight.sh` 会复用 `scripts/runtime_env.sh`，统一加载 `.env`、选择 `.venv` 或显式系统 Python fallback、清理代理并设置 `PYTHONPATH=./src`。Preflight 会检查 `api.tavily.com`、`api.deepseek.com`、`api.tushare.pro` 的 DNS 与 HTTPS 基础连通性；任一失败均为运行环境 hard fail，不进入 Stage1/Stage2。默认 HTTPS 超时为 `PREFLIGHT_CONNECT_TIMEOUT=10`、`PREFLIGHT_MAX_TIME=15`，网络慢时可用环境变量覆盖。
 
 5. 推荐统一入口:
@@ -59,7 +60,7 @@
    bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
    bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
    ```
-   `run_clean.sh` 会优先激活 `.venv/bin/activate`，Windows/Git-Bash 环境再尝试 `.venv/Scripts/activate`；没有 venv 或 `.venv` 为空目录时必须显式设置 `ALLOW_SYSTEM_PYTHON=1` 才能使用系统 Python，不会静默 fallback。非空但不可用的 `.venv` 仍视为坏环境并 hard fail。fallback 仍会 source `.env`、清理代理，并设置 `PYTHONPATH=./src`（已有外部 `PYTHONPATH` 时保留并补齐 `./src`）。
+   `run_clean.sh` 会优先激活 `.venv/bin/activate`，Windows/Git-Bash 环境再尝试 `.venv/Scripts/activate`；Ubuntu/WSL 中 `.venv` 是空目录时，可设置 `DATASOURCE_AUTO_VENV=1` 让 `scripts/bootstrap_venv.sh` 一次性创建并安装依赖。没有 venv 且未启用自动 bootstrap 时，必须显式设置 `ALLOW_SYSTEM_PYTHON=1` 才能使用系统 Python，不会静默 fallback。非空但不可用的 `.venv` 仍视为坏环境并 hard fail，应删除重建。fallback 仍会 source `.env`、清理代理，并设置 `PYTHONPATH=./src`（已有外部 `PYTHONPATH` 时保留并补齐 `./src`）。
 
 6. Optional checks:
    ```bash

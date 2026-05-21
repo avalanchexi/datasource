@@ -121,7 +121,7 @@
       "trend": "流入",
       "source": "Stage2.5 manual",
       "source_url": "https://data.eastmoney.com/etf/",
-      "metric_basis": "news_net_flow",
+      "metric_basis": "estimated_net_flow",
       "window_evidence": "news_summary",
       "is_estimated": true
     }
