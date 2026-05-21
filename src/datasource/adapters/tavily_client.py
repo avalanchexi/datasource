@@ -42,6 +42,7 @@ class AsyncTavilyClient:
         default_search_depth: str = "basic",
         proxies: Optional[Dict[str, str]] = None,
         verify: Optional[Any] = True,
+        trust_env: bool = False,
     ) -> None:
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
@@ -54,6 +55,7 @@ class AsyncTavilyClient:
         self.default_search_depth = default_search_depth
         self.proxies = proxies
         self.verify = self._resolve_verify(verify)
+        self.trust_env = trust_env
         self._client: Optional[Any] = None
         self._supports_days: Optional[bool] = None
 
@@ -90,11 +92,23 @@ class AsyncTavilyClient:
             pool=None,
         )
         try:
-            self._client = httpx.AsyncClient(timeout=timeout_cfg, proxies=self.proxies, verify=self.verify)
+            self._client = httpx.AsyncClient(
+                timeout=timeout_cfg,
+                proxies=self.proxies,
+                verify=self.verify,
+                trust_env=self.trust_env,
+            )
         except TypeError:
             # 兼容老版本 httpx 无 proxies 参数
-            logger.warning("httpx 版本不支持 proxies 参数，回退使用环境变量代理")
-            self._client = httpx.AsyncClient(timeout=timeout_cfg, verify=self.verify)
+            logger.warning(
+                "httpx 版本不支持 proxies 参数，回退为不传显式代理；"
+                "仅 trust_env=True 时读取环境代理"
+            )
+            self._client = httpx.AsyncClient(
+                timeout=timeout_cfg,
+                verify=self.verify,
+                trust_env=self.trust_env,
+            )
         if self.verify is False:
             logger.warning("Tavily SSL 验证已关闭（开发环境专用），请在生产环境提供有效 CA。")
         return self
@@ -119,10 +133,22 @@ class AsyncTavilyClient:
                 pool=None,
             )
             try:
-                self._client = httpx.AsyncClient(timeout=timeout_cfg, proxies=self.proxies, verify=self.verify)
+                self._client = httpx.AsyncClient(
+                    timeout=timeout_cfg,
+                    proxies=self.proxies,
+                    verify=self.verify,
+                    trust_env=self.trust_env,
+                )
             except TypeError:
-                logger.warning("httpx 版本不支持 proxies 参数，回退使用环境变量代理")
-                self._client = httpx.AsyncClient(timeout=timeout_cfg, verify=self.verify)
+                logger.warning(
+                    "httpx 版本不支持 proxies 参数，回退为不传显式代理；"
+                    "仅 trust_env=True 时读取环境代理"
+                )
+                self._client = httpx.AsyncClient(
+                    timeout=timeout_cfg,
+                    verify=self.verify,
+                    trust_env=self.trust_env,
+                )
         return self._client
 
     async def search(

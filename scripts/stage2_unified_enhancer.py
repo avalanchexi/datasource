@@ -4216,6 +4216,9 @@ async def main() -> int:
         connect_timeout=args.connect_timeout,
         max_concurrency=4,
         proxies=proxies or None,
+        trust_env=(
+            os.getenv("DATASOURCE_NETWORK_MODE", "direct").lower() == "proxy"
+        ),
     )
     exa_client = None
     exa_enabled = _should_enable_exa_fallback(args)
