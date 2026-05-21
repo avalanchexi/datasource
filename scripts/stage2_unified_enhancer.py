@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import json
 import os
 import sys
@@ -4066,6 +4067,16 @@ def _ensure_keys(require_tavily: bool = True, require_deepseek: bool = True) -> 
     return missing
 
 
+def _callable_supports_kwarg(callable_obj: Any, kwarg: str) -> bool:
+    try:
+        params = inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+    if kwarg in params:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
     """快速探测代理可用性；不可用则返回 None 并给出提示。"""
     if not proxies:
@@ -4074,8 +4085,20 @@ def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
         logger.warning("[Stage2] httpx 未安装，无法验证代理可用性，继续按配置使用。")
         return proxies
     test_url = "https://api.tavily.com"
+    get_kwargs: Dict[str, Any] = {"timeout": 3}
+    if _callable_supports_kwarg(httpx.get, "proxies"):
+        get_kwargs["proxies"] = proxies
+    elif _callable_supports_kwarg(httpx.get, "proxy"):
+        proxy_values = [url for url in proxies.values() if url]
+        if proxy_values:
+            if len(set(proxy_values)) > 1:
+                logger.warning("[Stage2] 当前 httpx.get 仅支持单代理验证，将使用第一个代理探测。")
+            get_kwargs["proxy"] = proxy_values[0]
+    else:
+        logger.warning("[Stage2] 当前 httpx.get 不支持显式代理验证，跳过代理探测并按配置使用。")
+        return proxies
     try:
-        resp = httpx.get(test_url, timeout=3, proxies=proxies)
+        resp = httpx.get(test_url, **get_kwargs)
         if resp.status_code < 500:
             logger.info(f"[Stage2] 代理可用，继续使用: {proxies}")
             return proxies

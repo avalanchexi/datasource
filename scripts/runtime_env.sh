@@ -17,7 +17,14 @@ esac
 VENV_ACTIVATE=""
 VENV_PYTHON=""
 DATASOURCE_SELECTED_PYTHON=""
+_datasource_network_mode_is_proxy() {
+  [ "$(printf '%s' "${DATASOURCE_NETWORK_MODE:-direct}" | tr '[:upper:]' '[:lower:]')" = "proxy" ]
+}
+
 _datasource_clear_active_proxies() {
+  if _datasource_network_mode_is_proxy; then
+    return 0
+  fi
   unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 }
 
@@ -125,3 +132,4 @@ export PYTHONPATH
 unset DATASOURCE_SELECTED_PYTHON
 unset DATASOURCE_ALLEXPORT_WAS_SET
 unset -f _datasource_clear_active_proxies
+unset -f _datasource_network_mode_is_proxy

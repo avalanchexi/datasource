@@ -93,3 +93,38 @@ def test_run_clean_removes_active_proxy_vars_and_keeps_no_proxy(tmp_path: Path) 
 
     assert result.returncode == 0, result.stdout
     assert result.stdout.strip().splitlines()[-1] == "||||||localhost,127.0.0.1"
+
+
+def test_run_clean_proxy_mode_preserves_active_proxy_vars(tmp_path: Path) -> None:
+    root = _copy_runner(tmp_path)
+
+    result = _run_clean(
+        root,
+        "bash",
+        "-c",
+        (
+            "printf '%s|%s|%s|%s|%s|%s|%s\\n' "
+            "\"${http_proxy:-}\" \"${https_proxy:-}\" "
+            "\"${HTTP_PROXY:-}\" \"${HTTPS_PROXY:-}\" "
+            "\"${ALL_PROXY:-}\" \"${all_proxy:-}\" \"${NO_PROXY:-}\""
+        ),
+        env={
+            "ALLOW_SYSTEM_PYTHON": "1",
+            "DATASOURCE_NETWORK_MODE": "proxy",
+            "http_proxy": "http://proxy.local:8080",
+            "https_proxy": "http://lower-secure-proxy.local:8080",
+            "HTTP_PROXY": "http://upper-proxy.local:8080",
+            "HTTPS_PROXY": "http://secure-proxy.local:8080",
+            "ALL_PROXY": "socks5h://vpn.local:1080",
+            "all_proxy": "socks5h://lower-vpn.local:1080",
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert result.stdout.strip().splitlines()[-1] == (
+        "http://proxy.local:8080|http://lower-secure-proxy.local:8080|"
+        "http://upper-proxy.local:8080|http://secure-proxy.local:8080|"
+        "socks5h://vpn.local:1080|socks5h://lower-vpn.local:1080|"
+        "localhost,127.0.0.1"
+    )

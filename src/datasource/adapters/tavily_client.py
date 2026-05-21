@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:  # pragma: no cover - optional dependency
     import httpx
@@ -60,6 +61,98 @@ class AsyncTavilyClient:
         self._supports_days: Optional[bool] = None
 
     @staticmethod
+    def _supports_kwarg(callable_obj: Any, kwarg: str) -> bool:
+        try:
+            params = inspect.signature(callable_obj).parameters
+        except (TypeError, ValueError):
+            return False
+        if kwarg in params:
+            return True
+        return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+    def _make_timeout_config(self) -> Any:
+        return httpx.Timeout(
+            connect=self.connect_timeout or self.timeout,
+            read=self.timeout,
+            write=self.timeout,
+            pool=None,
+        )
+
+    def _build_proxy_mounts(
+        self,
+        proxy_items: List[Tuple[str, str]],
+    ) -> Optional[Dict[str, Any]]:
+        transport_cls = getattr(httpx, "AsyncHTTPTransport", None)
+        if transport_cls is None:
+            return None
+        if not self._supports_kwarg(httpx.AsyncClient, "mounts"):
+            return None
+
+        transport_kwargs_supported = {
+            key
+            for key in ("proxy", "verify", "trust_env")
+            if self._supports_kwarg(transport_cls, key)
+        }
+        if "proxy" not in transport_kwargs_supported:
+            return None
+
+        mounts: Dict[str, Any] = {}
+        for scheme, proxy_url in proxy_items:
+            transport_kwargs: Dict[str, Any] = {"proxy": proxy_url}
+            if "verify" in transport_kwargs_supported:
+                transport_kwargs["verify"] = self.verify
+            if "trust_env" in transport_kwargs_supported:
+                transport_kwargs["trust_env"] = self.trust_env
+            mounts[scheme] = transport_cls(**transport_kwargs)
+        return mounts
+
+    def _build_client_kwargs(self, timeout_cfg: Any) -> Dict[str, Any]:
+        kwargs: Dict[str, Any] = {
+            "timeout": timeout_cfg,
+            "verify": self.verify,
+            "trust_env": self.trust_env,
+        }
+        proxy_items = [
+            (scheme, proxy_url)
+            for scheme, proxy_url in (self.proxies or {}).items()
+            if proxy_url
+        ]
+        if not proxy_items:
+            return kwargs
+
+        if self._supports_kwarg(httpx.AsyncClient, "proxies"):
+            kwargs["proxies"] = dict(proxy_items)
+            return kwargs
+
+        if self._supports_kwarg(httpx.AsyncClient, "proxy"):
+            unique_proxy_urls = []
+            for _, proxy_url in proxy_items:
+                if proxy_url not in unique_proxy_urls:
+                    unique_proxy_urls.append(proxy_url)
+
+            if len(unique_proxy_urls) == 1:
+                kwargs["proxy"] = unique_proxy_urls[0]
+                return kwargs
+
+            mounts = self._build_proxy_mounts(proxy_items)
+            if mounts:
+                kwargs["mounts"] = mounts
+                return kwargs
+
+            kwargs["proxy"] = unique_proxy_urls[0]
+            logger.warning(
+                "当前 httpx 版本不支持多 scheme 显式代理挂载，"
+                "仅使用第一个显式代理。"
+            )
+            return kwargs
+
+        logger.warning(
+            "当前 httpx 版本不支持显式代理参数，已跳过代理配置；"
+            "仅 trust_env=True 时可能读取环境代理。"
+        )
+        return kwargs
+
+    @staticmethod
     def _resolve_verify(verify: Optional[Any]) -> Any:
         """
         解析 SSL 校验配置：
@@ -85,30 +178,8 @@ class AsyncTavilyClient:
     async def __aenter__(self) -> "AsyncTavilyClient":
         if httpx is None:
             raise RuntimeError("httpx 未安装，请先运行 pip install httpx")
-        timeout_cfg = httpx.Timeout(
-            connect=self.connect_timeout or self.timeout,
-            read=self.timeout,
-            write=self.timeout,
-            pool=None,
-        )
-        try:
-            self._client = httpx.AsyncClient(
-                timeout=timeout_cfg,
-                proxies=self.proxies,
-                verify=self.verify,
-                trust_env=self.trust_env,
-            )
-        except TypeError:
-            # 兼容老版本 httpx 无 proxies 参数
-            logger.warning(
-                "httpx 版本不支持 proxies 参数，回退为不传显式代理；"
-                "仅 trust_env=True 时读取环境代理"
-            )
-            self._client = httpx.AsyncClient(
-                timeout=timeout_cfg,
-                verify=self.verify,
-                trust_env=self.trust_env,
-            )
+        timeout_cfg = self._make_timeout_config()
+        self._client = httpx.AsyncClient(**self._build_client_kwargs(timeout_cfg))
         if self.verify is False:
             logger.warning("Tavily SSL 验证已关闭（开发环境专用），请在生产环境提供有效 CA。")
         return self
@@ -126,29 +197,8 @@ class AsyncTavilyClient:
         if self._client is None:
             if httpx is None:
                 raise RuntimeError("httpx 未安装，请先运行 pip install httpx")
-            timeout_cfg = httpx.Timeout(
-                connect=self.connect_timeout or self.timeout,
-                read=self.timeout,
-                write=self.timeout,
-                pool=None,
-            )
-            try:
-                self._client = httpx.AsyncClient(
-                    timeout=timeout_cfg,
-                    proxies=self.proxies,
-                    verify=self.verify,
-                    trust_env=self.trust_env,
-                )
-            except TypeError:
-                logger.warning(
-                    "httpx 版本不支持 proxies 参数，回退为不传显式代理；"
-                    "仅 trust_env=True 时读取环境代理"
-                )
-                self._client = httpx.AsyncClient(
-                    timeout=timeout_cfg,
-                    verify=self.verify,
-                    trust_env=self.trust_env,
-                )
+            timeout_cfg = self._make_timeout_config()
+            self._client = httpx.AsyncClient(**self._build_client_kwargs(timeout_cfg))
         return self._client
 
     async def search(
