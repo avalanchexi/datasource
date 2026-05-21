@@ -4077,6 +4077,21 @@ def _callable_supports_kwarg(callable_obj: Any, kwarg: str) -> bool:
     return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
+def _select_proxy_for_url(proxies: Dict[str, str], url: str) -> Optional[str]:
+    scheme = urlparse(url).scheme.lower()
+    for key in (f"{scheme}://", scheme):
+        proxy_url = proxies.get(key)
+        if proxy_url:
+            return proxy_url
+
+    proxy_values = [proxy_url for proxy_url in proxies.values() if proxy_url]
+    if len(proxy_values) == 1:
+        return proxy_values[0]
+    if proxy_values:
+        return proxy_values[0]
+    return None
+
+
 def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
     """快速探测代理可用性；不可用则返回 None 并给出提示。"""
     if not proxies:
@@ -4089,11 +4104,11 @@ def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
     if _callable_supports_kwarg(httpx.get, "proxies"):
         get_kwargs["proxies"] = proxies
     elif _callable_supports_kwarg(httpx.get, "proxy"):
-        proxy_values = [url for url in proxies.values() if url]
-        if proxy_values:
-            if len(set(proxy_values)) > 1:
-                logger.warning("[Stage2] 当前 httpx.get 仅支持单代理验证，将使用第一个代理探测。")
-            get_kwargs["proxy"] = proxy_values[0]
+        proxy_url = _select_proxy_for_url(proxies, test_url)
+        if not proxy_url:
+            logger.warning("[Stage2] 代理配置为空，已自动禁用。")
+            return None
+        get_kwargs["proxy"] = proxy_url
     else:
         logger.warning("[Stage2] 当前 httpx.get 不支持显式代理验证，跳过代理探测并按配置使用。")
         return proxies
