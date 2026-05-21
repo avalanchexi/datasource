@@ -23,7 +23,33 @@ from scripts.stage2_unified_enhancer import (
     _augment_extraction_metadata,
     _is_environment_proxy_error,
     _build_environment_proxy_error_records,
+    _DeepSeekCircuitBreaker,
 )
+
+
+def test_deepseek_circuit_breaker_triggers_on_consecutive_timeouts():
+    breaker = _DeepSeekCircuitBreaker(max_consecutive_timeouts=3)
+
+    breaker.record(timeout=True)
+    breaker.record(timeout=True)
+    breaker.record(timeout=True)
+
+    assert breaker.triggered is True
+    assert breaker.reason == "consecutive_timeouts"
+    breaker.record(timeout=False)
+    assert breaker.attempts == 3
+    assert breaker.timeouts == 3
+
+
+def test_deepseek_circuit_breaker_triggers_on_timeout_rate():
+    breaker = _DeepSeekCircuitBreaker(max_timeout_rate=0.5, min_attempts=4)
+
+    for timeout in [True, False, True, True]:
+        breaker.record(timeout=timeout)
+
+    assert breaker.triggered is True
+    assert breaker.reason == "timeout_rate"
+    assert breaker.timeout_rate == 0.75
 
 
 def test_retrieval_diagnostics_separates_search_extract_and_writeback():
@@ -125,10 +151,18 @@ def test_summary_diagnostics_persist_tavily_unavailable_reason():
         completed_tasks=[],
         failures=[],
         websearch_results=[],
-        exec_stats={"tavily_unavailable_reason": "quota_or_rate_limit"},
+        exec_stats={
+            "tavily_unavailable_reason": "quota_or_rate_limit",
+            "deepseek_circuit_breaker_triggered": True,
+            "deepseek_circuit_breaker_reason": "timeout_rate",
+            "deepseek_timeout_rate": 0.75,
+        },
     )
 
     assert summary_fields["tavily_unavailable_reason"] == "quota_or_rate_limit"
+    assert summary_fields["deepseek_circuit_breaker_triggered"] is True
+    assert summary_fields["deepseek_circuit_breaker_reason"] == "timeout_rate"
+    assert summary_fields["deepseek_timeout_rate"] == 0.75
 
 
 def test_is_environment_proxy_error_detects_missing_socksio_message():

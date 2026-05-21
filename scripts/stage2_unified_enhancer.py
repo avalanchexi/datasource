@@ -2003,17 +2003,76 @@ def _build_stage2_summary_diagnostics(
     websearch_results: List[Dict[str, Any]],
     exec_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    exec_stats = exec_stats or {}
     retrieval_diagnostics = _build_retrieval_diagnostics(
         _diagnostic_rows_for_summary(completed_tasks, failures, websearch_results)
     )
     payload = {
         "retrieval_diagnostics": retrieval_diagnostics,
         "manual_reason_breakdown": retrieval_diagnostics.get("manual_reason_breakdown", {}),
+        "deepseek_circuit_breaker_triggered": bool(
+            exec_stats.get("deepseek_circuit_breaker_triggered", False)
+        ),
+        "deepseek_circuit_breaker_reason": exec_stats.get("deepseek_circuit_breaker_reason"),
+        "deepseek_timeout_rate": exec_stats.get("deepseek_timeout_rate", 0.0),
     }
-    unavailable_reason = (exec_stats or {}).get("tavily_unavailable_reason")
+    unavailable_reason = exec_stats.get("tavily_unavailable_reason")
     if unavailable_reason:
         payload["tavily_unavailable_reason"] = unavailable_reason
     return payload
+
+
+class _DeepSeekCircuitBreaker:
+    def __init__(
+        self,
+        *,
+        max_consecutive_timeouts: int = 3,
+        max_timeout_rate: float = 0.5,
+        min_attempts: int = 4,
+    ) -> None:
+        self.max_consecutive_timeouts = max_consecutive_timeouts
+        self.max_timeout_rate = max_timeout_rate
+        self.min_attempts = min_attempts
+        self.attempts = 0
+        self.timeouts = 0
+        self.consecutive_timeouts = 0
+        self.triggered = False
+        self.reason: Optional[str] = None
+
+    @property
+    def timeout_rate(self) -> float:
+        if self.attempts <= 0:
+            return 0.0
+        return round(self.timeouts / self.attempts, 4)
+
+    def record(self, *, timeout: bool) -> None:
+        if self.triggered:
+            return
+        self.attempts += 1
+        if timeout:
+            self.timeouts += 1
+            self.consecutive_timeouts += 1
+        else:
+            self.consecutive_timeouts = 0
+            return
+        if (
+            self.max_consecutive_timeouts > 0
+            and self.consecutive_timeouts >= self.max_consecutive_timeouts
+        ):
+            self.triggered = True
+            self.reason = "consecutive_timeouts"
+            return
+        if (
+            self.min_attempts > 0
+            and self.attempts >= self.min_attempts
+            and self.timeout_rate >= self.max_timeout_rate
+        ):
+            self.triggered = True
+            self.reason = "timeout_rate"
+
+
+def _is_deepseek_timeout(exc: Exception) -> bool:
+    return isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(exc).lower()
 
 
 def _mark_stale_refresh_failure(extraction: Dict[str, Any], task: Dict[str, Any]) -> None:
@@ -2323,6 +2382,9 @@ async def _execute_tasks(
     stats.setdefault("write_back_by_category", {})
     stats.setdefault("write_back_fallback_count", 0)
     stats.setdefault("write_back_miss_count", 0)
+    stats.setdefault("deepseek_circuit_breaker_triggered", False)
+    stats.setdefault("deepseek_circuit_breaker_reason", None)
+    stats.setdefault("deepseek_timeout_rate", 0.0)
     initial_unavailable_reason = stats.get("tavily_unavailable_reason")
     tavily_unavailable_reason: Optional[str] = (
         initial_unavailable_reason
@@ -2332,9 +2394,21 @@ async def _execute_tasks(
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
+    deepseek_circuit_breaker = _DeepSeekCircuitBreaker()
     extract_globally_disabled = disable_extract
     extract_disabled_until: Dict[str, float] = {}
     extract_422_tracker: Dict[str, Dict[str, Any]] = {}
+
+    def _sync_deepseek_circuit_breaker_stats() -> None:
+        stats["deepseek_circuit_breaker_triggered"] = bool(deepseek_circuit_breaker.triggered)
+        stats["deepseek_circuit_breaker_reason"] = deepseek_circuit_breaker.reason
+        stats["deepseek_timeout_rate"] = deepseek_circuit_breaker.timeout_rate
+
+    def _deepseek_circuit_breaker_skip_reason() -> Optional[str]:
+        if not deepseek_circuit_breaker.triggered:
+            return None
+        _sync_deepseek_circuit_breaker_stats()
+        return f"deepseek_circuit_breaker:{deepseek_circuit_breaker.reason or 'triggered'}"
 
     def _mark_tavily_quota_unavailable() -> None:
         nonlocal tavily_unavailable_reason
@@ -2514,9 +2588,24 @@ async def _execute_tasks(
                 "llm_latency_ms": 0,
                 "llm_error": None,
             }
+        breaker_skip_reason = _deepseek_circuit_breaker_skip_reason()
+        if breaker_skip_reason:
+            skipped_note = f"skipped_deepseek:{breaker_skip_reason}"
+            return {
+                "value": None,
+                "unit": task.get("unit"),
+                "source_url": None,
+                "confidence": 0.0,
+                "note": skipped_note,
+                "llm_error": skipped_note,
+                "llm_timeout": False,
+                "llm_latency_ms": 0,
+                "manual_required": True,
+                "manual_reason": skipped_note,
+                "extraction_skipped_reason": breaker_skip_reason,
+            }
         start_llm = time.perf_counter()
         attempts = 0
-        last_exc: Optional[Exception] = None
         while attempts < 2:
             attempts += 1
             try:
@@ -2542,17 +2631,21 @@ async def _execute_tasks(
                             )
                         )
                 result = result or {}
+                deepseek_circuit_breaker.record(timeout=False)
                 result["llm_latency_ms"] = int((time.perf_counter() - start_llm) * 1000)
                 stats.setdefault("deepseek_latencies", []).append(result["llm_latency_ms"])
                 if attempts > 1:
                     stats["retry_count"] += 1
                 return result
             except Exception as exc:  # pragma: no cover
-                last_exc = exc
-                stats["timeout_count"] += 1
-                stats["deepseek_timeouts"] += 1
-                is_timeout = isinstance(exc, asyncio.TimeoutError) or "Timeout" in str(exc)
-                if attempts >= 2:
+                is_timeout = _is_deepseek_timeout(exc)
+                deepseek_circuit_breaker.record(timeout=is_timeout)
+                if is_timeout:
+                    stats["timeout_count"] += 1
+                    stats["deepseek_timeouts"] += 1
+                if deepseek_circuit_breaker.triggered:
+                    _sync_deepseek_circuit_breaker_stats()
+                if attempts >= 2 or deepseek_circuit_breaker.triggered:
                     logger.warning(f"DeepSeek 请求失败，将使用 regex 兜底: {exc}")
                     val, url = _call_fallback_extract(snips, task)
                     return {
@@ -2815,8 +2908,14 @@ async def _execute_tasks(
                 break
             task, snippets, attempt_idx = item
             try:
-                stats["extract_calls"] += 1
+                pre_extract_skip_reason = _deepseek_circuit_breaker_skip_reason()
+                if not pre_extract_skip_reason:
+                    stats["extract_calls"] += 1
                 extraction = await _do_extract(snippets, task)
+                extraction_skipped_reason = (
+                    extraction.get("extraction_skipped_reason")
+                    or task.get("extraction_skipped_reason")
+                )
                 # regex 兜底：关键指标无值时尝试直接提取数字
                 if extraction.get("value") is None:
                     regex_val = _regex_fallback(snippets, task["indicator_key"])
@@ -2879,7 +2978,7 @@ async def _execute_tasks(
                     "finished_at": int(datetime.now().timestamp()),
                     "manual_required": manual_required,
                     "manual_reason": extraction.get("manual_reason"),
-                    "extraction_skipped_reason": task.get("extraction_skipped_reason"),
+                    "extraction_skipped_reason": extraction_skipped_reason,
                     "extract_skipped_reason": task.get("extract_skipped_reason"),
                     "query_used": task.get("query_used"),
                     "query_family_used": task.get("query_family_used"),
@@ -2934,7 +3033,11 @@ async def _execute_tasks(
                 _append_task_log(task_log_path, task_record)
                 websearch_results.append(
                     {
-                        "task": task,
+                        "task": (
+                            {**task, "extraction_skipped_reason": extraction_skipped_reason}
+                            if extraction_skipped_reason
+                            else task
+                        ),
                         "extraction": extraction,
                         "extraction_backend": extraction_backend,
                         "raw_results": snippets[:3],
@@ -3426,6 +3529,10 @@ async def _execute_tasks(
                     }
                     if search_note:
                         task_for_log["search_note"] = search_note
+                    if skip_deepseek_reason is None:
+                        skip_deepseek_reason = _deepseek_circuit_breaker_skip_reason()
+                        if skip_deepseek_reason:
+                            task_for_log["extraction_skipped_reason"] = skip_deepseek_reason
                     if use_queue:
                         if skip_deepseek_reason:
                             extraction = {
@@ -3528,6 +3635,9 @@ async def _execute_tasks(
                         else:
                             stats["extract_calls"] += 1
                             extraction = await _do_extract(snippets, task)
+                            if skip_deepseek_reason is None and extraction.get("extraction_skipped_reason"):
+                                skip_deepseek_reason = str(extraction.get("extraction_skipped_reason"))
+                                task_for_log["extraction_skipped_reason"] = skip_deepseek_reason
                         # regex 兜底：关键指标无值时尝试直接提取数字（低相关时跳过）
                         if extraction.get("value") is None and skip_deepseek_reason not in {
                             "low_score_all",
@@ -4732,6 +4842,9 @@ async def main() -> int:
         "value_evidence_drop_count": exec_stats.get("value_evidence_drop_count", 0),
         "timeout_count": exec_stats.get("timeout_count", 0),
         "deepseek_timeouts": exec_stats.get("deepseek_timeouts", 0),
+        "deepseek_circuit_breaker_triggered": exec_stats.get("deepseek_circuit_breaker_triggered", False),
+        "deepseek_circuit_breaker_reason": exec_stats.get("deepseek_circuit_breaker_reason"),
+        "deepseek_timeout_rate": exec_stats.get("deepseek_timeout_rate", 0.0),
         "retry_count": exec_stats.get("retry_count", 0),
         "extract_calls": exec_stats.get("extract_calls", 0),
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),
