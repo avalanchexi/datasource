@@ -521,3 +521,80 @@ def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
     text = out.read_text(encoding="utf-8")
 
     assert "| 美元指数（TuShare USDOLLAR.FXCM proxy） | 105.2300 | +0.12% | +1.34% | 上行 |" in text
+
+
+def test_report_backfills_stock_indices_from_macro_compat(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["stock_indices"] = []
+    market["macro_indicators"] = {
+        "000300": {
+            "indicator_name": "沪深300",
+            "current_value": 4685.3,
+            "previous_value": 4600.0,
+            "change_rate": 1.85,
+            "unit": "点",
+            "source": "manual",
+            "source_url": "https://example.com/000300",
+        }
+    }
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| 沪深300 | 4685.30 |" in text
+
+
+def test_report_estimated_note_includes_category_and_method(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["commodities"] = [
+        {
+            "symbol": "BCOM",
+            "name": "彭博商品指数",
+            "current_price": 108.5,
+            "unit": "点",
+            "daily_change": 0.1,
+            "change_120d": 2.0,
+            "trend": "上行",
+            "is_estimated": True,
+            "estimation_method": "manual_estimated",
+        }
+    ]
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "商品:彭博商品指数(manual_estimated)" in text

@@ -44,11 +44,18 @@ QUALITY_REASON_LABELS = {
     "manual_incomplete": "补数不完整",
     "estimated_not_allowed": "估算值禁用",
 }
+STOCK_INDEX_COMPAT_KEYS = {
+    "000001": "上证指数",
+    "399001": "深证成指",
+    "399006": "创业板指",
+    "000300": "沪深300",
+    "000016": "上证50",
+}
 NON_MACRO_KEYS = {
     "GC=F", "CL=F", "BZ=F", "HG=F", "GSG", "BCOM",
     "DXY", "USDCNH", "USDCNY",
     "US10Y", "CN10Y", "CN10Y_CDB",
-    "000016",
+    "000001", "399001", "399006", "000300", "000016",
 }
 DAILY_MACRO_KEYS = {"bdi"}
 DAILY_POLICY_KEYS = {"dr007"}
@@ -644,6 +651,46 @@ def _collect_anomaly_keys(market_data: dict, *, category: str, reason: str) -> s
     return keys
 
 
+def _stock_indices_with_macro_compat(market_data: dict[str, Any], stock_indices: list) -> list:
+    rows = list(stock_indices or [])
+    existing = {str(row.get("symbol") or "") for row in rows if isinstance(row, dict)}
+    macro = market_data.get("macro_indicators", {}) or {}
+
+    for symbol, name in STOCK_INDEX_COMPAT_KEYS.items():
+        if symbol in existing:
+            continue
+        entry = macro.get(symbol)
+        if not isinstance(entry, dict):
+            continue
+        current = _to_float(entry.get("current_value"))
+        if current is None:
+            continue
+
+        change_5d = entry.get("change_5d")
+        if change_5d is None:
+            change_5d = entry.get("change_rate")
+        if change_5d is None:
+            change_5d = 0.0
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "name": entry.get("indicator_name") or name,
+                "current_price": current,
+                "change_5d": change_5d,
+                "change_120d": entry.get("change_120d") or 0.0,
+                "above_ma50": bool(entry.get("above_ma50", False)),
+                "above_ma200": bool(entry.get("above_ma200", False)),
+                "trend_label": entry.get("trend_label") or entry.get("trend") or "兼容回填",
+                "source": entry.get("source"),
+                "source_url": entry.get("source_url"),
+                "compat_source": "macro_indicators_compat_backfill",
+            }
+        )
+
+    return rows
+
+
 def _write_quality_gate_logs(report_date: str, issues: list[dict]) -> None:
     run_paths = build_run_paths(report_date)
     gap_path = run_paths.gap_monitor
@@ -703,7 +750,10 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             return list(section.values())
         return section or []
 
-    stock_indices = _as_list(market_data.get('stock_indices', []))
+    stock_indices = _stock_indices_with_macro_compat(
+        market_data,
+        _as_list(market_data.get('stock_indices', [])),
+    )
     commodities = _as_list(market_data.get('commodities', []))
     bonds = _as_list(market_data.get('bonds', []))
     forex_list = _as_list(market_data.get('forex', []))
@@ -715,18 +765,26 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
     def _collect_estimated_items() -> list[str]:
         items: list[str] = []
+        def _method_suffix(entry: dict) -> str:
+            method = entry.get("estimation_method") or entry.get("metric_basis")
+            return f"({method})" if method else ""
+
         for bond in bonds:
             if bond.get('is_estimated'):
                 name = bond.get('name') or bond.get('symbol') or '债券'
-                items.append(f"债券:{name}")
+                items.append(f"债券:{name}{_method_suffix(bond)}")
+        for comm in commodities:
+            if comm.get('is_estimated'):
+                name = comm.get('name') or comm.get('symbol') or '商品'
+                items.append(f"商品:{name}{_method_suffix(comm)}")
         for indicator in market_data.get('macro_indicators', {}).values():
             if indicator.get('is_estimated'):
                 name = indicator.get('indicator_name') or '宏观指标'
-                items.append(f"宏观:{name}")
+                items.append(f"宏观:{name}{_method_suffix(indicator)}")
         for policy in market_data.get('monetary_policy', {}).values():
             if policy.get('is_estimated'):
                 name = policy.get('policy_name') or '货币政策'
-                items.append(f"货币政策:{name}")
+                items.append(f"货币政策:{name}{_method_suffix(policy)}")
         for key, flow in market_data.get('fund_flow', {}).items():
             if isinstance(flow, dict) and flow.get('is_estimated'):
                 name = {
@@ -735,7 +793,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
                     "etf": "ETF资金流",
                     "margin": "融资融券",
                 }.get(key, key)
-                items.append(f"资金流:{name}")
+                items.append(f"资金流:{name}{_method_suffix(flow)}")
         return items
 
     estimated_items = _collect_estimated_items()
@@ -795,11 +853,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 |------|----------|-----------|-------------|----------|-----------|----------|
 """
     for idx in stock_indices:
-        above_ma50 = "向上" if idx['above_ma50'] else "向下"
-        above_ma200 = "向上" if idx['above_ma200'] else "向下"
+        current_price = _to_float(idx.get("current_price"))
+        price_text = f"{current_price:.2f}" if current_price is not None else NA_TEXT
+        above_ma50 = "向上" if idx.get('above_ma50', False) else "向下"
+        above_ma200 = "向上" if idx.get('above_ma200', False) else "向下"
         change_5d = _fmt_change_cell(idx.get("change_5d"), digits=2, suffix="%")
         change_120d = _fmt_change_cell(idx.get("change_120d"), digits=1, suffix="%")
-        report += f"| {idx['name']} | {idx['current_price']:.2f} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
+        name = idx.get("name") or idx.get("symbol") or "指数"
+        trend_label = idx.get("trend_label") or idx.get("trend") or "未知"
+        report += f"| {name} | {price_text} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {trend_label} |\n"
 
     use_commodity_120d_window = any(
         comm.get("change_120d") is not None
