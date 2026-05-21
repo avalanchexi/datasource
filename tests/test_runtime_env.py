@@ -517,18 +517,31 @@ def test_runtime_env_clears_active_proxies_and_keeps_no_proxy(tmp_path: Path) ->
 
     result = _run_source(
         root,
-        "printf '%s|%s|%s\\n' \"${http_proxy:-}\" \"${HTTPS_PROXY:-}\" \"${NO_PROXY:-}\"",
+        (
+            "printf '%s|%s|%s|%s|%s|%s|%s|%s\\n' "
+            "\"${http_proxy:-}\" \"${https_proxy:-}\" "
+            "\"${HTTP_PROXY:-}\" \"${HTTPS_PROXY:-}\" "
+            "\"${ALL_PROXY:-}\" \"${all_proxy:-}\" "
+            "\"${NO_PROXY:-}\" \"${no_proxy:-}\""
+        ),
         env={
             "ALLOW_SYSTEM_PYTHON": "1",
             "http_proxy": "http://proxy.local:8080",
+            "https_proxy": "http://lower-secure-proxy.local:8080",
+            "HTTP_PROXY": "http://upper-proxy.local:8080",
             "HTTPS_PROXY": "http://secure-proxy.local:8080",
+            "ALL_PROXY": "socks5h://vpn.local:1080",
+            "all_proxy": "socks5h://lower-vpn.local:1080",
             "NO_PROXY": "localhost,127.0.0.1",
+            "no_proxy": "internal.local",
         },
         path_prefix=str(fake_python),
     )
 
     assert result.returncode == 0, result.stdout
-    assert result.stdout.strip().splitlines()[-1] == "||localhost,127.0.0.1"
+    assert result.stdout.strip().splitlines()[-1] == (
+        "||||||localhost,127.0.0.1|internal.local"
+    )
 
 
 def test_runtime_env_exports_runtime_dir(tmp_path: Path) -> None:

@@ -18,7 +18,7 @@ VENV_ACTIVATE=""
 VENV_PYTHON=""
 DATASOURCE_SELECTED_PYTHON=""
 _datasource_clear_active_proxies() {
-  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
 }
 
 if [ -f ".venv/.datasource_bootstrap_failed" ]; then

@@ -17,5 +17,5 @@ if [ "${1:-}" = "python" ]; then
   set -- "$DATASOURCE_PYTHON" "${@:2}"
 fi
 
-exec env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
+exec env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u all_proxy \
   PYTHONPATH="$PYTHONPATH" "$@"
