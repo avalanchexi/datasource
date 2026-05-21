@@ -20,6 +20,8 @@ from scripts.stage2_unified_enhancer import (
     _validate_fund_flow_extraction,
     _execute_tasks,
     _augment_extraction_metadata,
+    _is_environment_proxy_error,
+    _build_environment_proxy_error_records,
 )
 
 
@@ -126,6 +128,39 @@ def test_summary_diagnostics_persist_tavily_unavailable_reason():
     )
 
     assert summary_fields["tavily_unavailable_reason"] == "quota_or_rate_limit"
+
+
+def test_is_environment_proxy_error_detects_missing_socksio_message():
+    exc = RuntimeError("Using SOCKS proxy, but the 'socksio' package is not installed")
+
+    assert _is_environment_proxy_error(exc) is True
+
+
+def test_environment_proxy_fast_switch_records_manual_required():
+    task = {
+        "task_id": "proxy-gold",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+    }
+    exc = RuntimeError("Using SOCKS proxy, but the 'socksio' package is not installed")
+
+    task_record, websearch_item = _build_environment_proxy_error_records(task, exc)
+
+    assert task_record["manual_required"] is True
+    assert task_record["manual_reason"] == "environment_proxy_error"
+    assert task_record["result_type"] == "manual_required"
+    assert task_record["source"] == "Stage2 manual_required"
+    assert task_record["note"].startswith("environment_proxy_error:")
+    assert websearch_item["manual_required"] is True
+    assert websearch_item["manual_reason"] == "environment_proxy_error"
+    assert websearch_item["source"] == "Stage2 manual_required"
+    assert websearch_item["extraction"]["manual_required"] is True
+    assert websearch_item["extraction"]["manual_reason"] == "environment_proxy_error"
 
 
 def test_apply_extraction_clears_stale_status_on_matching_force_refresh():

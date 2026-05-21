@@ -289,6 +289,105 @@ def _is_tavily_quota_error(exc: Exception) -> bool:
     return any(token in msg for token in ["quota", "rate limit", "payment", "402", "403", "429"])
 
 
+def _is_environment_proxy_error(exc: Exception) -> bool:
+    msg = f"{exc.__class__.__name__} {exc}".lower()
+    return any(
+        token in msg
+        for token in [
+            "using socks proxy",
+            "socksio",
+            "proxyerror",
+            "proxy error",
+            "proxyconnect",
+        ]
+    )
+
+
+def _build_environment_proxy_error_records(
+    task: Dict[str, Any],
+    exc: Exception,
+    *,
+    attempt_index: int = 0,
+    elapsed_ms: int = 0,
+    extraction_backend: str = "deepseek",
+    query_attempts: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    now_ts = int(datetime.now().timestamp())
+    query = task.get("query_used") or task.get("query") or task.get("indicator_key")
+    note = f"environment_proxy_error:{exc}"
+    source = "Stage2 manual_required"
+    category = task.get("category") or task.get("stage_phase")
+    task_payload = {
+        **task,
+        "category": category,
+        "query": query,
+        "query_used": task.get("query_used") or query,
+        "query_attempts": query_attempts or task.get("query_attempts") or [],
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "source": source,
+        "note": note,
+        "environment_proxy_fast_switch": True,
+    }
+    extraction = {
+        "value": None,
+        "unit": task.get("unit"),
+        "source_url": None,
+        "confidence": 0.0,
+        "note": note,
+        "llm_error": str(exc),
+        "llm_latency_ms": 0,
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "environment_proxy_fast_switch": True,
+    }
+    task_record = {
+        "task_id": task["task_id"],
+        "indicator_key": task["indicator_key"],
+        "category": category,
+        "stage_phase": task["stage_phase"],
+        "query": query,
+        "search_backend": task.get("search_backend", "tavily"),
+        "fund_flow_backend": task.get("fund_flow_backend"),
+        "extraction_backend": extraction_backend,
+        "source": source,
+        "source_url": None,
+        "confidence": 0.0,
+        "error": str(exc),
+        "llm_error": str(exc),
+        "llm_latency_ms": None,
+        "attempt_index": attempt_index,
+        "elapsed_ms": elapsed_ms,
+        "created_at": task.get("created_at", now_ts),
+        "finished_at": now_ts,
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "note": note,
+        "raw_results": [],
+        "environment_proxy_fast_switch": True,
+        "result_type": "manual_required",
+    }
+    websearch_item = {
+        "task_id": task["task_id"],
+        "indicator_key": task["indicator_key"],
+        "category": category,
+        "stage_phase": task["stage_phase"],
+        "query": query,
+        "task": task_payload,
+        "extraction": extraction,
+        "extraction_backend": extraction_backend,
+        "raw_results": [],
+        "search_backend": task.get("search_backend", "tavily"),
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "source": source,
+        "note": note,
+        "environment_proxy_fast_switch": True,
+        "result_type": "manual_required",
+    }
+    return task_record, websearch_item
+
+
 def _exa_search_type(indicator_key: str) -> Optional[str]:
     keyword_keys = {
         "GC=F",
@@ -2178,9 +2277,10 @@ async def _execute_tasks(
     stats.setdefault("write_back_by_category", {})
     stats.setdefault("write_back_fallback_count", 0)
     stats.setdefault("write_back_miss_count", 0)
+    initial_unavailable_reason = stats.get("tavily_unavailable_reason")
     tavily_unavailable_reason: Optional[str] = (
-        "quota_or_rate_limit"
-        if stats.get("tavily_unavailable_reason") == "quota_or_rate_limit"
+        initial_unavailable_reason
+        if initial_unavailable_reason in {"quota_or_rate_limit", "environment_proxy_error"}
         else None
     )
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
@@ -2194,6 +2294,12 @@ async def _execute_tasks(
         nonlocal tavily_unavailable_reason
         tavily_unavailable_reason = "quota_or_rate_limit"
         stats["tavily_unavailable_reason"] = "quota_or_rate_limit"
+
+    def _mark_environment_proxy_unavailable(exc: Exception) -> None:
+        nonlocal tavily_unavailable_reason
+        tavily_unavailable_reason = "environment_proxy_error"
+        stats["tavily_unavailable_reason"] = "environment_proxy_error"
+        stats["environment_proxy_error"] = str(exc)
 
     def _build_tavily_fast_switch_records(
         task: Dict[str, Any],
@@ -2279,9 +2385,16 @@ async def _execute_tasks(
         return task_record, websearch_item
 
     def _is_tavily_fast_switch_record(record: Dict[str, Any]) -> bool:
-        return bool(record.get("tavily_fast_switch")) or (
-            record.get("manual_reason") == "quota_or_rate_limit"
-            and "tavily_fast_switch" in str(record.get("note") or "")
+        return (
+            bool(record.get("tavily_fast_switch") or record.get("environment_proxy_fast_switch"))
+            or (
+                record.get("manual_reason") == "quota_or_rate_limit"
+                and "tavily_fast_switch" in str(record.get("note") or "")
+            )
+            or (
+                record.get("manual_reason") == "environment_proxy_error"
+                and "environment_proxy_error" in str(record.get("note") or "")
+            )
         )
 
     def _is_tavily_fast_switch_websearch(item: Dict[str, Any]) -> bool:
@@ -2522,7 +2635,14 @@ async def _execute_tasks(
                     best_payload = payload
             except Exception as exc:
                 last_exc = exc
-                is_quota_error = _is_tavily_quota_error(exc)
+                is_proxy_error = _is_environment_proxy_error(exc)
+                is_quota_error = False if is_proxy_error else _is_tavily_quota_error(exc)
+                manual_reason = None
+                if is_proxy_error:
+                    _mark_environment_proxy_unavailable(exc)
+                    manual_reason = "environment_proxy_error"
+                elif is_quota_error:
+                    manual_reason = "quota_or_rate_limit"
                 if is_quota_error:
                     _mark_tavily_quota_unavailable()
                 attempts.append(
@@ -2531,11 +2651,11 @@ async def _execute_tasks(
                         "family": candidate.get("family"),
                         "field_scope": candidate.get("field_scope"),
                         "error": str(exc),
-                        "manual_required": True if is_quota_error else None,
-                        "manual_reason": "quota_or_rate_limit" if is_quota_error else None,
+                        "manual_required": True if (is_proxy_error or is_quota_error) else None,
+                        "manual_reason": manual_reason,
                     }
                 )
-                if is_quota_error:
+                if is_proxy_error or is_quota_error:
                     raise exc
         if best_payload and best_payload.get("candidate_index", 0) > 0:
             stats["post_filter_query_switch_count"] += 1
@@ -2872,6 +2992,18 @@ async def _execute_tasks(
                 _append_task_log(task_log_path, task_record)
                 websearch_results.append(websearch_item)
                 continue
+            if tavily_unavailable_reason == "environment_proxy_error":
+                exc = RuntimeError(stats.get("environment_proxy_error") or "environment_proxy_error")
+                task_record, websearch_item = _build_environment_proxy_error_records(
+                    task,
+                    exc,
+                    extraction_backend=extraction_backend,
+                )
+                failures.append(task_record)
+                manual_required_keys.append(task_record["indicator_key"])
+                _append_task_log(task_log_path, task_record)
+                websearch_results.append(websearch_item)
+                continue
             directed_retry_done = False
             directed_query_override: Optional[str] = None
             for attempt in count(start=1):
@@ -2920,8 +3052,12 @@ async def _execute_tasks(
                             if last_exc:
                                 raise last_exc
                     except Exception as exc:
-                        is_quota_error = _is_tavily_quota_error(exc)
-                        if is_quota_error:
+                        is_proxy_error = _is_environment_proxy_error(exc)
+                        is_quota_error = False if is_proxy_error else _is_tavily_quota_error(exc)
+                        if is_proxy_error:
+                            _mark_environment_proxy_unavailable(exc)
+                            exa_result, exa_note = None, None
+                        elif is_quota_error:
                             _mark_tavily_quota_unavailable()
                             exa_result, exa_note = None, None
                         else:
@@ -2939,6 +3075,20 @@ async def _execute_tasks(
                             logger.warning(
                                 f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}"
                             )
+                            if is_proxy_error:
+                                task_record, websearch_item = _build_environment_proxy_error_records(
+                                    task,
+                                    exc,
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    extraction_backend=extraction_backend,
+                                    query_attempts=query_attempts,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
                             if is_quota_error:
                                 task_record, websearch_item = _build_tavily_fast_switch_records(
                                     task,
@@ -3120,6 +3270,22 @@ async def _execute_tasks(
                                                     }
                                                 )
                     except Exception as exc:  # pragma: no cover
+                        if _is_environment_proxy_error(exc):
+                            _mark_environment_proxy_unavailable(exc)
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            task_record, websearch_item = _build_environment_proxy_error_records(
+                                task_for_log,
+                                exc,
+                                attempt_index=attempt,
+                                elapsed_ms=elapsed_ms,
+                                extraction_backend=extraction_backend,
+                                query_attempts=query_attempts,
+                            )
+                            _append_task_log(task_log_path, task_record)
+                            failures.append(task_record)
+                            manual_required_keys.append(task_record["indicator_key"])
+                            websearch_results.append(websearch_item)
+                            break
                         if _is_tavily_quota_error(exc):
                             _mark_tavily_quota_unavailable()
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
@@ -3496,6 +3662,20 @@ async def _execute_tasks(
                 except Exception as exc:  # pragma: no cover - 网络错误兜底
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     logger.warning(f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}")
+                    if _is_environment_proxy_error(exc):
+                        _mark_environment_proxy_unavailable(exc)
+                        task_record, websearch_item = _build_environment_proxy_error_records(
+                            task,
+                            exc,
+                            attempt_index=attempt,
+                            elapsed_ms=elapsed_ms,
+                            extraction_backend=extraction_backend,
+                        )
+                        _append_task_log(task_log_path, task_record)
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        websearch_results.append(websearch_item)
+                        break
                     if _is_tavily_quota_error(exc):
                         _mark_tavily_quota_unavailable()
                         task_record, websearch_item = _build_tavily_fast_switch_records(
