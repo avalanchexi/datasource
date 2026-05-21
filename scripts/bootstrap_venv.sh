@@ -20,6 +20,7 @@ done
 STAMP=".venv/.datasource_bootstrapped"
 FAILED=".venv/.datasource_bootstrap_failed"
 VENV_PYTHON=".venv/bin/python"
+VENV_ACTIVATE=".venv/bin/activate"
 
 _timestamp() {
   date -u +"%Y-%m-%dT%H:%M:%SZ"
@@ -76,11 +77,13 @@ _venv_has_entries() {
 }
 
 if [ -f "$FAILED" ]; then
-  _fail "previous bootstrap failed; remove .venv or rerun after fixing the cause"
+  _fail "previous bootstrap failed; remove .venv/.datasource_bootstrap_failed after fixing the cause, or remove/recreate .venv"
 fi
 
-if [ -d ".venv" ] && _venv_has_entries && [ ! -x "$VENV_PYTHON" ]; then
-  _fail ".venv exists but is not a usable Linux virtualenv; remove .venv and recreate it"
+if [ -d ".venv" ] && _venv_has_entries; then
+  if [ ! -x "$VENV_PYTHON" ] || [ ! -r "$VENV_ACTIVATE" ]; then
+    _fail ".venv exists but is not a usable Linux virtualenv; expected executable .venv/bin/python and readable .venv/bin/activate; remove/recreate .venv"
+  fi
 fi
 
 if [ ! -x "$VENV_PYTHON" ]; then
@@ -92,8 +95,8 @@ if [ ! -x "$VENV_PYTHON" ]; then
   fi
 fi
 
-if [ ! -x "$VENV_PYTHON" ]; then
-  _fail ".venv/bin/python was not created"
+if [ ! -x "$VENV_PYTHON" ] || [ ! -r "$VENV_ACTIVATE" ]; then
+  _fail "python3 -m venv .venv did not create executable .venv/bin/python and readable .venv/bin/activate"
 fi
 
 if [ "$NO_INSTALL" != "1" ]; then

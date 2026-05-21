@@ -23,7 +23,7 @@ _datasource_clear_active_proxies() {
 
 if [ -f ".venv/.datasource_bootstrap_failed" ]; then
   echo "[ERROR] .venv has a failed bootstrap stamp: .venv/.datasource_bootstrap_failed"
-  echo "[ERROR] Remove .venv, or fix the cause and rerun: bash scripts/bootstrap_venv.sh"
+  echo "[ERROR] Fix the cause, then remove .venv/.datasource_bootstrap_failed, or remove/recreate .venv"
   return 1 2>/dev/null || exit 1
 fi
 

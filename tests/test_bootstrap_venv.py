@@ -61,6 +61,22 @@ def _write_fake_python(root: Path, *, fail_pip: bool = False) -> Path:
     return fake_bin
 
 
+def _write_existing_venv_python(root: Path) -> Path:
+    python = root / ".venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"${1:-}\" = \"--version\" ]; then\n"
+        "  printf 'Python 3.11.0\\n'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    return python
+
+
 def _run_bootstrap(
     root: Path,
     *args: str,
@@ -128,4 +144,25 @@ def test_bootstrap_failed_normal_install_writes_failed_stamp(
     failed = root / ".venv" / ".datasource_bootstrap_failed"
     assert failed.is_file()
     assert "timestamp=" in failed.read_text(encoding="utf-8")
+    assert not (root / ".venv" / ".datasource_bootstrapped").exists()
+
+
+def test_bootstrap_existing_venv_python_without_activate_hard_fails(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_bootstrap(root)
+    _write_existing_venv_python(root)
+
+    result = _run_bootstrap(root, "--no-install")
+
+    assert result.returncode != 0
+    assert "bootstrap failed" in result.stdout
+    assert "activate" in result.stdout
+    failed = root / ".venv" / ".datasource_bootstrap_failed"
+    assert failed.is_file()
+    failed_text = failed.read_text(encoding="utf-8")
+    assert "timestamp=" in failed_text
+    assert "activate" in failed_text
     assert not (root / ".venv" / ".datasource_bootstrapped").exists()

@@ -202,7 +202,9 @@ def test_runtime_env_failed_bootstrap_stamp_blocks_existing_venv(
 
     assert result.returncode != 0
     assert ".datasource_bootstrap_failed" in result.stdout
-    assert "remove .venv" in result.stdout.lower()
+    assert "remove .venv/.datasource_bootstrap_failed" in result.stdout.lower()
+    assert "remove/recreate .venv" in result.stdout.lower()
+    assert "rerun: bash scripts/bootstrap_venv.sh" not in result.stdout
     assert "should-not-run" not in result.stdout
     assert "linux" not in result.stdout
 
