@@ -2485,6 +2485,42 @@ def test_apply_fund_flow_entry_clears_stale_claimed_source_tier_when_absent():
     assert entry["is_estimated"] is False
 
 
+def test_merge_commodity_entry_recomputes_daily_change_from_previous_price():
+    payload = {
+        "symbol": "BZ=F",
+        "current_price": 65.0,
+        "previous_price": 70.0,
+        "source_url": "https://example.com/brent",
+    }
+
+    merged = injector._merge_commodity_entry(
+        {},
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(-7.1429)
+    assert merged["daily_change_base_price"] == 70.0
+    assert merged["daily_change_basis"] == "manual_previous_price"
+
+    existing = {
+        "symbol": "BZ=F",
+        "current_price": 68.0,
+        "daily_change": 3.47,
+    }
+    merged_existing = injector._merge_commodity_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged_existing["daily_change"] == pytest.approx(-7.1429)
+    assert merged_existing["daily_change_base_price"] == 70.0
+    assert merged_existing["daily_change_basis"] == "manual_previous_price"
+
+
 def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):
     existing = {
         "symbol": "GC=F",

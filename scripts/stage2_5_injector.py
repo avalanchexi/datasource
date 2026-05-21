@@ -2077,6 +2077,16 @@ def _coerce_float(value: Any) -> Optional[float]:
     return None
 
 
+def _pct_change(current: Any, previous: Any) -> Optional[float]:
+    current_value = _coerce_float(current)
+    previous_value = _coerce_float(previous)
+    if current_value is None or previous_value is None:
+        return None
+    if abs(previous_value) < 1e-9:
+        return None
+    return round((current_value - previous_value) / abs(previous_value) * 100.0, 4)
+
+
 def _same_numeric_value(left: Any, right: Any) -> bool:
     left_value = _coerce_float(left)
     right_value = _coerce_float(right)
@@ -3826,6 +3836,12 @@ def _merge_commodity_entry(
     # 从 trend_history 计算变化值
     current_price = merged.get('current_price')
     symbol = merged.get('symbol')
+    daily_change_base_price = _coerce_float(payload.get('previous_price'))
+    daily_change_basis_field = "previous_price"
+    if daily_change_base_price is None and payload.get('previous_value') is not None:
+        daily_change_base_price = _coerce_float(payload.get('previous_value'))
+        daily_change_basis_field = "previous_value"
+    payload_daily_change = _pct_change(current_price, daily_change_base_price)
     used_hist_120d = False
     payload_120d = _coerce_percent(payload.get('change_120d'))
     if payload_120d is None:
@@ -3873,6 +3889,13 @@ def _merge_commodity_entry(
             merged['ytd_change_basis'] = payload.get('ytd_change_basis') or 'year_to_date'
         if payload_120d is None:
             merged['change_120d'] = existing.get('change_120d')
+    if payload_daily_change is not None:
+        merged['daily_change'] = payload_daily_change
+        merged['daily_change_base_price'] = daily_change_base_price
+        if payload.get('previous_date'):
+            merged['daily_change_base_date'] = payload.get('previous_date')
+        basis_prefix = "manual" if is_manual else "payload"
+        merged['daily_change_basis'] = f"{basis_prefix}_{daily_change_basis_field}"
     _copy_source_url(merged, payload)
     _copy_payload_metadata_fields(
         merged,
