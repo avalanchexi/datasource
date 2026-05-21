@@ -303,10 +303,11 @@ def test_run_analysis_reports_all_blockers_once(tmp_path: Path, monkeypatch):
             )
         )
     msg = str(exc.value)
-    assert "completeness:" in msg
-    assert "unified_quality:" in msg
-    assert "gap_monitor(" in msg
-    assert "stage2:" in msg
+    assert "[completeness/unified_quality]" in msg
+    assert "- data_completeness=0.500 (<0.8)" in msg
+    assert "[gap_monitor]" in msg
+    assert "- manual_required:" in msg
+    assert "[stage2 flag]" in msg
 
 
 def test_run_analysis_does_not_block_on_stale_policy_file_when_live_state_clean(tmp_path: Path, monkeypatch):
@@ -420,7 +421,7 @@ def test_run_analysis_blocks_unresolved_policy_redlist_missing_from_payload(tmp_
         )
 
     msg = str(exc.value)
-    assert "policy:" in msg
+    assert "[policy gate]" in msg
     assert "mlf" in msg
 
 
@@ -476,7 +477,7 @@ def test_run_analysis_blocks_category_specific_policy_redlist_missing_from_paylo
         )
 
     msg = str(exc.value)
-    assert "policy:" in msg
+    assert "[policy gate]" in msg
     assert "monetary_policy.mlf" in msg
 
 
@@ -517,7 +518,8 @@ def test_run_analysis_blocks_gap_monitor_missing_item_absent_from_payload(tmp_pa
         )
 
     msg = str(exc.value)
-    assert "gap_monitor" in msg
+    assert "[gap_monitor]" in msg
+    assert "- manual_required:" in msg
     assert "mlf" in msg
 
 

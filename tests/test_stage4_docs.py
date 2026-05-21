@@ -259,7 +259,8 @@ def test_stage4_blocks_manual_websearch_commodity_without_source_url(tmp_path, m
     with pytest.raises(RuntimeError) as exc:
         stage4.main()
 
-    assert "missing_source_url" in str(exc.value)
+    assert "[unified_quality]" in str(exc.value)
+    assert "commodities.GC=F missing_source_url" in str(exc.value)
 
 
 def test_stage4_blocks_pring_date_mismatch(tmp_path, monkeypatch):

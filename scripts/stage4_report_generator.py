@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from datasource.generators.simple_report import generate_report
+from datasource.utils.gate_formatting import (
+    GateBlock,
+    format_gate_blocks,
+    format_quality_issue,
+)
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.run_paths import build_run_paths_from_reference
 
@@ -49,13 +54,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _format_quality_issue(issue: Dict[str, Any]) -> str:
-    category = str(issue.get("category") or "unknown")
-    key = str(issue.get("key") or "unknown")
-    reason = str(issue.get("reason") or "unknown")
-    return f"{category}.{key}:{reason}"
-
-
 def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
     quality_state = build_pipeline_quality_state(
         market_payload,
@@ -69,13 +67,15 @@ def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
     if not quality_blockers and not policy_blocked:
         return
 
-    details = [_format_quality_issue(issue) for issue in quality_blockers]
+    details = [format_quality_issue(issue) for issue in quality_blockers]
     if policy_blocked and not details:
-        details.append("policy_evaluation.block_stage3:true")
+        details.append("policy_evaluation.block_stage3 true")
 
     raise RuntimeError(
-        "Stage4 unified quality gate blocked report generation: "
-        f"{', '.join(details)}"
+        format_gate_blocks(
+            "Stage4 unified quality gate blocked report generation:",
+            [GateBlock("unified_quality", details)],
+        )
     )
 
 

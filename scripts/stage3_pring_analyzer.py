@@ -20,6 +20,11 @@ from typing import Any, Dict, List, Optional, Set
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
+from datasource.utils.gate_formatting import (
+    GateBlock,
+    format_gate_blocks,
+    format_quality_issue,
+)
 from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
@@ -163,12 +168,7 @@ def _issue_label(issue: Dict[str, Any], market_payload: Dict[str, Any]) -> str:
     category = str(issue.get("category") or "unknown")
     key = str(issue.get("key") or "unknown")
     reason = str(issue.get("reason") or "unknown")
-    details = issue.get("details")
-
-    parts = [f"{category}.{key}", reason]
-    if isinstance(details, dict) and details:
-        detail_text = ",".join(f"{k}={v}" for k, v in sorted(details.items()))
-        parts.append(detail_text)
+    parts = [format_quality_issue(issue)]
 
     if reason == "critical_stale":
         entry = None
@@ -187,6 +187,21 @@ def _issue_label(issue: Dict[str, Any], market_payload: Dict[str, Any]) -> str:
             )
 
     return " ".join(parts)
+
+
+def _message_items(message: str) -> List[str]:
+    items: List[str] = []
+    for raw_line in message.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("Stage3 阻断"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            continue
+        if line.startswith("- "):
+            line = line[2:].strip()
+        if line:
+            items.append(line)
+    return items
 
 
 def _filtered_quality_blockers(
@@ -283,20 +298,24 @@ def _require_data_completeness(
         skip_fund_flow_check=skip_fund_flow_check,
     )
 
-    errors: List[str] = []
+    blocks: List[GateBlock] = []
     if completeness < min_completeness:
-        msg_lines = [
-            f"data_completeness={completeness:.3f} (<{min_completeness})",
-            "run Stage2/Stage2.5 to refresh market_data_complete.json before Stage3",
-        ]
-        errors.append("completeness: " + " ".join(msg_lines))
+        blocks.append(
+            GateBlock(
+                "completeness",
+                [
+                    f"data_completeness={completeness:.3f} (<{min_completeness})",
+                    "run Stage2/Stage2.5 to refresh market_data_complete.json before Stage3",
+                ],
+            )
+        )
 
     if quality_blockers:
         issue_lines = [_issue_label(item, market_payload) for item in quality_blockers]
-        errors.append("unified_quality: " + "; ".join(issue_lines))
+        blocks.append(GateBlock("unified_quality", issue_lines))
 
-    if errors:
-        raise RuntimeError("\n".join(errors))
+    if blocks:
+        raise RuntimeError(format_gate_blocks("Stage3 阻断，以下问题需修复：", blocks))
     return
 
 
@@ -432,7 +451,10 @@ async def _run_analysis(
     with market_path.open('r', encoding='utf-8') as fp:
         market_payload = json.load(fp)
 
-    blockers: List[str] = []
+    policy_blockers: List[str] = []
+    completeness_blockers: List[str] = []
+    gap_blockers: List[str] = []
+    stage2_blockers: List[str] = []
     fallback_used = False
 
     # 1) policy gate
@@ -513,8 +535,8 @@ async def _run_analysis(
                         unresolved_stale_redlist.append(label)
 
                 if policy_payload.get("block_stage3") and (unresolved_redlist or unresolved_stale_redlist):
-                    blockers.append(
-                        f"policy: redlist={unresolved_redlist}, stale_redlist={unresolved_stale_redlist}"
+                    policy_blockers.append(
+                        f"redlist={unresolved_redlist}, stale_redlist={unresolved_stale_redlist}"
                     )
 
                 if policy_payload.get("block_stage3") and (diagnostic_redlist or diagnostic_stale_redlist):
@@ -551,9 +573,7 @@ async def _run_analysis(
             fallback_used = True
             print(f"[WARN] 数据完整性未达标，但 allow_fallback=True，继续运行。原因: {exc}")
         else:
-            blockers.extend(
-                line for line in completeness_error.splitlines() if line.strip()
-            )
+            completeness_blockers.extend(_message_items(completeness_error))
 
     # 3) gap monitor gate
     ai_websearch_flag = bool(market_payload.get("metadata", {}).get("ai_websearch_enhanced"))
@@ -627,20 +647,29 @@ async def _run_analysis(
             )
 
         if pending_blocking or manual_blocking:
-            blockers.append(
-                f"gap_monitor({gap_path}): pending={pending_blocking}, manual_required={manual_blocking}"
-            )
+            gap_blockers.append(f"path: {gap_path}")
+            if pending_blocking:
+                gap_blockers.append(f"pending: {pending_blocking}")
+            if manual_blocking:
+                gap_blockers.append(f"manual_required: {manual_blocking}")
     else:
         print(f"[WARN] 已跳过 gap_monitor 检查（调试模式），路径: {gap_path}")
     # 4) stage2 completion gate
     if not ai_websearch_flag:
-        blockers.append("stage2: 未检测到 metadata.ai_websearch_enhanced=true")
+        stage2_blockers.append("未检测到 metadata.ai_websearch_enhanced=true")
 
-    if blockers:
-        lines = ["Stage3 阻断，以下问题需一次性修复："]
-        for item in blockers:
-            lines.append(f"- {item}")
-        raise RuntimeError("\n".join(lines))
+    if policy_blockers or completeness_blockers or gap_blockers or stage2_blockers:
+        raise RuntimeError(
+            format_gate_blocks(
+                "Stage3 阻断，以下问题需修复：",
+                [
+                    GateBlock("policy gate", policy_blockers),
+                    GateBlock("completeness/unified_quality", completeness_blockers),
+                    GateBlock("gap_monitor", gap_blockers),
+                    GateBlock("stage2 flag", stage2_blockers),
+                ],
+            )
+        )
 
     contract = MarketDataContract(**market_payload)
 
