@@ -28,7 +28,24 @@ elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; the
     VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/Scripts/python"
   fi
 elif [ -d ".venv" ]; then
-  if [ -n "$(find ".venv" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+  if [ -z "$(find ".venv" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    if [ "${DATASOURCE_AUTO_VENV:-}" = "1" ]; then
+      if [ ! -x "scripts/bootstrap_venv.sh" ]; then
+        echo "[ERROR] DATASOURCE_AUTO_VENV=1 requested but scripts/bootstrap_venv.sh is not executable"
+        return 1 2>/dev/null || exit 1
+      fi
+      if ! scripts/bootstrap_venv.sh; then
+        return 1 2>/dev/null || exit 1
+      fi
+      if [ -f ".venv/bin/activate" ]; then
+        VENV_ACTIVATE=".venv/bin/activate"
+        VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/bin/python"
+      else
+        echo "[ERROR] DATASOURCE_AUTO_VENV=1 bootstrap did not create .venv/bin/activate"
+        return 1 2>/dev/null || exit 1
+      fi
+    fi
+  else
     echo "[ERROR] .venv exists but no usable activate script found"
     echo "[ERROR] Recreate it with: python -m venv .venv"
     return 1 2>/dev/null || exit 1
@@ -56,6 +73,7 @@ elif [ "${ALLOW_SYSTEM_PYTHON:-}" = "1" ]; then
   fi
 else
   echo "[ERROR] Missing virtual environment. Run: python -m venv .venv"
+  echo "[ERROR] To auto-bootstrap an empty .venv in Ubuntu/Claude Code, set DATASOURCE_AUTO_VENV=1"
   echo "[ERROR] To use current system Python explicitly, set ALLOW_SYSTEM_PYTHON=1"
   return 1 2>/dev/null || exit 1
 fi

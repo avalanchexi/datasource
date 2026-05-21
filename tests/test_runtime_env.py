@@ -61,6 +61,31 @@ def _write_fake_venv_python(root: Path, *, windows: bool = False) -> Path:
     return python_path
 
 
+def _write_fake_bootstrap(root: Path) -> Path:
+    scripts = root / "scripts"
+    scripts.mkdir(exist_ok=True)
+    log_path = root / "bootstrap.log"
+    script = (
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"printf 'called\\n' >> {shlex.quote(str(log_path))}\n"
+        "mkdir -p .venv/bin\n"
+        "cat > .venv/bin/activate <<'ACT'\n"
+        "export RUNTIME_ACTIVATE=bootstrapped\n"
+        "ACT\n"
+        "cat > .venv/bin/python <<'PY'\n"
+        "#!/usr/bin/env bash\n"
+        "printf 'fake-bootstrapped-python\\n'\n"
+        "PY\n"
+        "chmod +x .venv/bin/python\n"
+        "printf '[OK] fake bootstrap complete\\n'\n"
+    )
+    bootstrap = scripts / "bootstrap_venv.sh"
+    bootstrap.write_text(script, encoding="utf-8")
+    bootstrap.chmod(0o755)
+    return bootstrap
+
+
 def _bash_path(path: str, *, root: Optional[Path] = None) -> str:
     if root is not None:
         try:
@@ -287,6 +312,48 @@ def test_runtime_env_empty_venv_allows_explicit_system_fallback(tmp_path: Path) 
     assert result.returncode == 0, result.stdout
     assert "using current system Python because ALLOW_SYSTEM_PYTHON=1" in result.stdout
     assert result.stdout.strip().splitlines()[-1] == "python3"
+
+
+def test_runtime_env_empty_venv_auto_bootstraps_when_enabled(tmp_path: Path) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    (root / ".venv").mkdir()
+    _write_fake_bootstrap(root)
+    venv_python = root / ".venv" / "bin" / "python"
+
+    result = _run_source(
+        root,
+        "printf '%s|%s\\n' \"$RUNTIME_ACTIVATE\" \"$DATASOURCE_PYTHON\"",
+        env={"DATASOURCE_AUTO_VENV": "1"},
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "[OK] fake bootstrap complete" in result.stdout
+    assert (root / "bootstrap.log").read_text(encoding="utf-8") == "called\n"
+    assert result.stdout.strip().splitlines()[-1] == (
+        f"bootstrapped|{_bash_path(str(venv_python))}"
+    )
+
+
+def test_runtime_env_empty_venv_without_auto_still_requires_fallback(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    (root / ".venv").mkdir()
+    _write_fake_bootstrap(root)
+
+    result = _run_source(root, "printf 'should-not-run\\n'")
+
+    assert result.returncode != 0
+    assert "Missing virtual environment" in result.stdout
+    assert "DATASOURCE_AUTO_VENV=1" in result.stdout
+    assert "should-not-run" not in result.stdout
+    assert not (root / "bootstrap.log").exists()
 
 
 def test_runtime_env_venv_activate_without_python_is_hard_failure(
