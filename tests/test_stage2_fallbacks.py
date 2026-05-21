@@ -333,6 +333,29 @@ class ProxyErrorTavilyClient:
         raise AssertionError("extract should not run after proxy environment failure")
 
 
+class ExtractProxyErrorTavilyClient:
+    def __init__(self):
+        self.search_calls = 0
+        self.extract_calls = 0
+
+    async def search(self, **kwargs):
+        self.search_calls += 1
+        return {
+            "results": [
+                {
+                    "url": "https://www.cmegroup.com/markets/metals/precious/gold.html",
+                    "snippet": "COMEX gold latest futures quote 3300.0 $/oz",
+                    "content": "COMEX gold latest futures quote 3300.0 $/oz",
+                    "score": 0.92,
+                }
+            ]
+        }
+
+    async def extract(self, **kwargs):
+        self.extract_calls += 1
+        raise RuntimeError("Cannot connect to proxy http://127.0.0.1:7890")
+
+
 class NoopExtractor:
     async def extract(self, *args, **kwargs):  # pragma: no cover - should not be called
         raise AssertionError("DeepSeek should not run after Tavily quota failure")
@@ -524,6 +547,7 @@ async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_r
         assert item["extraction"]["manual_required"] is True
         assert item["extraction"]["manual_reason"] == "environment_proxy_error"
         assert "socksio" in item["extraction"]["llm_error"].lower()
+        assert "socksio" in item["extraction"]["environment_proxy_error"].lower()
         assert item["result_type"] == "manual_required"
 
     task_log_records = [
@@ -534,6 +558,81 @@ async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_r
     assert len(task_log_records) == 2
     assert all(record["manual_required"] is True for record in task_log_records)
     assert all(record["manual_reason"] == "environment_proxy_error" for record in task_log_records)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_environment_proxy_queue_fast_switch_bounds_duplicate_searches_after_marker(tmp_path):
+    client = ProxyErrorTavilyClient()
+    stats = {}
+    task_log_path = tmp_path / "task_log.jsonl"
+    tasks = [
+        {
+            "task_id": "proxy-queue-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "proxy-queue-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "proxy-queue-copper",
+            "indicator_key": "HG=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX copper latest price",
+            "unit": "$/lb",
+            "created_at": 1700000002,
+            "preferred_domains": [],
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        None,
+        NoopExtractor(),
+        task_log_path=task_log_path,
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=True,
+        queue_concurrency=2,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert client.calls <= 2
+    assert stats["tavily_unavailable_reason"] == "environment_proxy_error"
+    assert len(failures) == 3
+    assert len(websearch_results) == 3
+    assert all(record["manual_required"] is True for record in failures)
+    assert all(record["manual_reason"] == "environment_proxy_error" for record in failures)
+    assert all(item["manual_reason"] == "environment_proxy_error" for item in websearch_results)
 
 
 @pytest.mark.anyio("asyncio")
@@ -603,6 +702,73 @@ async def test_tavily_quota_fast_switch_preserves_manual_reason_for_force_refres
         item["extraction"]["manual_reason"] == "quota_or_rate_limit"
         for item in websearch_results
     )
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_extract_environment_proxy_fast_switches_remaining_tasks(tmp_path):
+    client = ExtractProxyErrorTavilyClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "extract-proxy-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+        {
+            "task_id": "extract-proxy-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        None,
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert client.search_calls == 1
+    assert client.extract_calls == 1
+    assert stats["tavily_unavailable_reason"] == "environment_proxy_error"
+    assert len(failures) == 2
+    assert len(websearch_results) == 2
+    assert all(record["manual_required"] is True for record in failures)
+    assert all(record["manual_reason"] == "environment_proxy_error" for record in failures)
+    assert all(item["manual_required"] is True for item in websearch_results)
+    assert all(item["manual_reason"] == "environment_proxy_error" for item in websearch_results)
 
 
 @pytest.mark.anyio("asyncio")

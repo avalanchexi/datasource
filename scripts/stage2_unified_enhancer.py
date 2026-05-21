@@ -291,16 +291,38 @@ def _is_tavily_quota_error(exc: Exception) -> bool:
 
 def _is_environment_proxy_error(exc: Exception) -> bool:
     msg = f"{exc.__class__.__name__} {exc}".lower()
-    return any(
-        token in msg
-        for token in [
-            "using socks proxy",
-            "socksio",
-            "proxyerror",
-            "proxy error",
-            "proxyconnect",
-        ]
-    )
+    strong_markers = [
+        "using socks proxy",
+        "socksio",
+        "proxyconnect",
+        "failed to connect to proxy",
+        "cannot connect to proxy",
+        "can't connect to proxy",
+        "could not connect to proxy",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+    ]
+    if any(token in msg for token in strong_markers):
+        return True
+    if "socks" in msg and "proxy" in msg and re.search(r"socks[45]?h?://", msg):
+        return True
+    if "proxy error" not in msg and "proxyerror" not in msg:
+        return False
+    local_context = [
+        "connect",
+        "connection",
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "socks",
+        "environment",
+        "env",
+        "proxy_url",
+        "proxies",
+    ]
+    return any(token in msg for token in local_context)
 
 
 def _build_environment_proxy_error_records(
@@ -336,6 +358,7 @@ def _build_environment_proxy_error_records(
         "confidence": 0.0,
         "note": note,
         "llm_error": str(exc),
+        "environment_proxy_error": str(exc),
         "llm_latency_ms": 0,
         "manual_required": True,
         "manual_reason": "environment_proxy_error",
@@ -355,6 +378,7 @@ def _build_environment_proxy_error_records(
         "confidence": 0.0,
         "error": str(exc),
         "llm_error": str(exc),
+        "environment_proxy_error": str(exc),
         "llm_latency_ms": None,
         "attempt_index": attempt_index,
         "elapsed_ms": elapsed_ms,

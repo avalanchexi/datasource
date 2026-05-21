@@ -136,6 +136,12 @@ def test_is_environment_proxy_error_detects_missing_socksio_message():
     assert _is_environment_proxy_error(exc) is True
 
 
+def test_environment_proxy_error_ignores_ambiguous_upstream_proxy_text():
+    exc = RuntimeError("502 Proxy Error from upstream")
+
+    assert _is_environment_proxy_error(exc) is False
+
+
 def test_environment_proxy_fast_switch_records_manual_required():
     task = {
         "task_id": "proxy-gold",
@@ -161,6 +167,7 @@ def test_environment_proxy_fast_switch_records_manual_required():
     assert websearch_item["source"] == "Stage2 manual_required"
     assert websearch_item["extraction"]["manual_required"] is True
     assert websearch_item["extraction"]["manual_reason"] == "environment_proxy_error"
+    assert "socksio" in websearch_item["extraction"]["environment_proxy_error"].lower()
 
 
 def test_apply_extraction_clears_stale_status_on_matching_force_refresh():
