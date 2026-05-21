@@ -3830,15 +3830,24 @@ def _merge_commodity_entry(
     merged = dict(existing)
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
     merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
-    merged['current_price'] = _coerce_float(payload.get('current_price')) or existing.get('current_price')
+    payload_current_price = _coerce_float(payload.get('current_price'))
+    if payload_current_price is not None:
+        merged['current_price'] = payload_current_price
+    else:
+        merged['current_price'] = existing.get('current_price')
     merged['unit'] = payload.get('unit', existing.get('unit', ''))
 
     # 从 trend_history 计算变化值
     current_price = merged.get('current_price')
     symbol = merged.get('symbol')
+    explicit_daily_change = _coerce_percent(payload.get('daily_change'))
     daily_change_base_price = _coerce_float(payload.get('previous_price'))
     daily_change_basis_field = "previous_price"
-    if daily_change_base_price is None and payload.get('previous_value') is not None:
+    if (
+        daily_change_base_price is None
+        and explicit_daily_change is None
+        and payload.get('previous_value') is not None
+    ):
         daily_change_base_price = _coerce_float(payload.get('previous_value'))
         daily_change_basis_field = "previous_value"
     payload_daily_change = _pct_change(current_price, daily_change_base_price)
@@ -3856,7 +3865,7 @@ def _merge_commodity_entry(
             current_price,
             base_dir=trend_history_base_dir,
         )
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        merged['daily_change'] = explicit_daily_change
         if merged['daily_change'] is None:
             merged['daily_change'] = existing.get('daily_change')
         merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))
@@ -3879,7 +3888,7 @@ def _merge_commodity_entry(
         if confidence_reason:
             _append_note(merged, confidence_reason)
     else:
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        merged['daily_change'] = explicit_daily_change
         if merged['daily_change'] is None:
             merged['daily_change'] = existing.get('daily_change')
         merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))

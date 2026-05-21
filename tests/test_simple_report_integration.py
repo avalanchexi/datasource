@@ -561,6 +561,88 @@ def test_report_backfills_stock_indices_from_macro_compat(tmp_path: Path):
     assert "| 沪深300 | 4685.30 |" in text
 
 
+def test_report_deduplicates_stock_indices_with_exchange_suffix(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["stock_indices"] = [
+        {
+            "symbol": "000001.SH",
+            "name": "上证指数",
+            "current_price": 3200.0,
+            "change_5d": 0.5,
+            "change_120d": 3.2,
+            "above_ma50": True,
+            "above_ma200": True,
+            "trend_label": "上行",
+        }
+    ]
+    market["macro_indicators"] = {
+        "000001": {
+            "indicator_name": "上证指数",
+            "current_value": 4000.0,
+            "change_rate": 9.9,
+            "unit": "点",
+        }
+    }
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| 上证指数 | 3200.00 |" in text
+    assert "| 上证指数 | 4000.00 |" not in text
+
+
+def test_report_filters_suffixed_index_keys_from_macro_table(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["macro_indicators"] = {
+        "000300.SH": {
+            "indicator_name": "沪深300",
+            "current_value": 4685.3,
+            "previous_value": 4600.0,
+            "change_rate": 1.85,
+            "unit": "点",
+        }
+    }
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert text.count("| 沪深300 |") == 1
+
+
 def test_report_estimated_note_includes_category_and_method(tmp_path: Path):
     market = _base_market()
     market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}

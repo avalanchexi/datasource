@@ -2521,6 +2521,47 @@ def test_merge_commodity_entry_recomputes_daily_change_from_previous_price():
     assert merged_existing["daily_change_basis"] == "manual_previous_price"
 
 
+def test_merge_commodity_entry_respects_daily_change_over_previous_value():
+    payload = {
+        "symbol": "BZ=F",
+        "current_price": 65.0,
+        "previous_value": 70.0,
+        "daily_change": -5.0,
+        "source_url": "https://example.com/brent",
+    }
+
+    merged = injector._merge_commodity_entry(
+        {"symbol": "BZ=F", "current_price": 68.0, "daily_change": 3.47},
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["current_price"] == pytest.approx(65.0)
+    assert merged["daily_change"] == pytest.approx(-5.0)
+    assert "daily_change_base_price" not in merged
+
+
+def test_merge_commodity_entry_zero_current_price_does_not_fallback_to_existing():
+    payload = {
+        "symbol": "BZ=F",
+        "current_price": 0.0,
+        "previous_price": 70.0,
+        "source_url": "https://example.com/brent",
+    }
+
+    merged = injector._merge_commodity_entry(
+        {"symbol": "BZ=F", "current_price": 68.0, "daily_change": 3.47},
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["current_price"] == pytest.approx(0.0)
+    assert merged["daily_change"] == pytest.approx(-100.0)
+    assert merged["daily_change_base_price"] == 70.0
+
+
 def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):
     existing = {
         "symbol": "GC=F",

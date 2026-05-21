@@ -66,6 +66,21 @@ def _to_float(value: Any) -> Optional[float]:
     return to_float(value)
 
 
+def _stock_index_compat_symbol(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    base = text.split(".", 1)[0]
+    if base in STOCK_INDEX_COMPAT_KEYS:
+        return base
+    return text
+
+
+def _is_non_macro_key(key: Any) -> bool:
+    text = str(key or "")
+    return text in NON_MACRO_KEYS or _stock_index_compat_symbol(text) in STOCK_INDEX_COMPAT_KEYS
+
+
 def _normalize_trend(trend: Any) -> Optional[str]:
     if trend is None:
         return None
@@ -609,7 +624,7 @@ def _collect_quality_issues(market_data: dict, policy_rules: Optional[dict] = No
 
     # Macro indicators: previous_value / change_rate
     for key, indicator in (market_data.get("macro_indicators", {}) or {}).items():
-        if key in NON_MACRO_KEYS:
+        if _is_non_macro_key(key):
             continue
         curr = indicator.get("current_value")
         if curr in (None, "N/A"):
@@ -653,13 +668,27 @@ def _collect_anomaly_keys(market_data: dict, *, category: str, reason: str) -> s
 
 def _stock_indices_with_macro_compat(market_data: dict[str, Any], stock_indices: list) -> list:
     rows = list(stock_indices or [])
-    existing = {str(row.get("symbol") or "") for row in rows if isinstance(row, dict)}
+    existing = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field in ("symbol", "ts_code", "code"):
+            existing.add(_stock_index_compat_symbol(row.get(field)))
     macro = market_data.get("macro_indicators", {}) or {}
 
     for symbol, name in STOCK_INDEX_COMPAT_KEYS.items():
         if symbol in existing:
             continue
         entry = macro.get(symbol)
+        if not isinstance(entry, dict):
+            entry = next(
+                (
+                    candidate
+                    for raw_key, candidate in macro.items()
+                    if _stock_index_compat_symbol(raw_key) == symbol and isinstance(candidate, dict)
+                ),
+                None,
+            )
         if not isinstance(entry, dict):
             continue
         current = _to_float(entry.get("current_value"))
@@ -770,18 +799,26 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             return f"({method})" if method else ""
 
         for bond in bonds:
+            if not isinstance(bond, dict):
+                continue
             if bond.get('is_estimated'):
                 name = bond.get('name') or bond.get('symbol') or '债券'
                 items.append(f"债券:{name}{_method_suffix(bond)}")
         for comm in commodities:
+            if not isinstance(comm, dict):
+                continue
             if comm.get('is_estimated'):
                 name = comm.get('name') or comm.get('symbol') or '商品'
                 items.append(f"商品:{name}{_method_suffix(comm)}")
         for indicator in market_data.get('macro_indicators', {}).values():
+            if not isinstance(indicator, dict):
+                continue
             if indicator.get('is_estimated'):
                 name = indicator.get('indicator_name') or '宏观指标'
                 items.append(f"宏观:{name}{_method_suffix(indicator)}")
         for policy in market_data.get('monetary_policy', {}).values():
+            if not isinstance(policy, dict):
+                continue
             if policy.get('is_estimated'):
                 name = policy.get('policy_name') or '货币政策'
                 items.append(f"货币政策:{name}{_method_suffix(policy)}")
@@ -1002,7 +1039,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
     # 仅展示真正的宏观指标；滤除误写入宏观区的商品/外汇/债券/指数键
     for key, indicator in market_data['macro_indicators'].items():
-        if key in NON_MACRO_KEYS:
+        if _is_non_macro_key(key):
             continue
         curr = indicator.get('current_value', 'N/A')
         prev = indicator.get('previous_value', 'N/A')
