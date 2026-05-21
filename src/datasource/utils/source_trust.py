@@ -190,7 +190,7 @@ def _extraction_period_values(extraction: Dict[str, Any]) -> List[Any]:
     ]
 
 
-def _unit_matches(unit_hint: Any, extraction_unit: Any) -> bool:
+def units_compatible(unit_hint: Any, extraction_unit: Any) -> bool:
     hint = str(unit_hint or "").strip().lower().replace("％", "%")
     unit = str(extraction_unit or "").strip().lower().replace("％", "%")
     if not hint:
@@ -247,7 +247,7 @@ def should_mark_official_non_estimated(
     if not any(_period_matches(expected, candidate) for expected in expected_values for candidate in extraction_values):
         return OfficialSourceDecision(False, "period_mismatch")
 
-    if not _unit_matches(task.get("unit"), extraction.get("unit")):
+    if not units_compatible(task.get("unit"), extraction.get("unit")):
         return OfficialSourceDecision(False, "unit_mismatch")
 
     return OfficialSourceDecision(True, "official_source_period_unit_match")

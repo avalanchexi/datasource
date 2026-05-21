@@ -18,6 +18,7 @@ from scripts.stage2_unified_enhancer import (
     _gap_monitor,
     _merge_missing_items,
     _validate_fund_flow_extraction,
+    _validate_general_extraction,
     _execute_tasks,
     _augment_extraction_metadata,
     _is_environment_proxy_error,
@@ -302,6 +303,42 @@ def test_apply_extraction_marks_official_macro_source_not_estimated_with_runtime
     assert section == "macro_indicators"
     assert entry["is_estimated"] is False
     assert "official_source_period_unit_match" in entry["note"]
+
+
+def test_validate_general_extraction_accepts_canonical_percent_unit():
+    extraction = {
+        "value": 0.2,
+        "unit": "百分比",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260509.html",
+    }
+    task = {
+        "indicator_key": "cpi",
+        "unit": "%",
+    }
+
+    value, manual_required, note = _validate_general_extraction(extraction, task, snippets=[])
+
+    assert value == 0.2
+    assert manual_required is False
+    assert "单位不匹配" not in note
+
+
+def test_validate_general_extraction_rejects_point_percentage_point_mismatch():
+    extraction = {
+        "value": 51.5,
+        "unit": "百分点",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260509.html",
+    }
+    task = {
+        "indicator_key": "pmi_production",
+        "unit": "点",
+    }
+
+    value, manual_required, note = _validate_general_extraction(extraction, task, snippets=[])
+
+    assert value == 51.5
+    assert manual_required is True
+    assert "单位不匹配" in note
 
 
 def test_task_planner_uses_rrr_profile_for_reserve_ratio_alias(tmp_path: Path):

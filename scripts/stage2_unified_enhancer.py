@@ -68,7 +68,7 @@ from datasource.utils.policy_rules import (
 from datasource.utils.run_paths import build_run_paths_from_reference
 from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
-from datasource.utils.source_trust import should_mark_official_non_estimated
+from datasource.utils.source_trust import should_mark_official_non_estimated, units_compatible
 from datasource.utils.text_markers import contains_ytd_marker
 
 try:
@@ -3988,13 +3988,10 @@ def _validate_general_extraction(
         manual = True
         note_append = (note_append + " no_value").strip()
 
-    # unit 校验（允许点/points 互通）
+    # unit 校验使用与官方来源信任一致的 canonical unit 规则。
     if unit_hint:
         unit_val = extraction.get("unit") or ""
-        # 点的宽松匹配
-        if unit_hint in {"点", "points"} and any(tok in unit_val for tok in ["点", "points"]):
-            pass
-        elif unit_hint not in unit_val:
+        if not units_compatible(unit_hint, unit_val):
             manual = True
             note_append = (note_append + f" 单位不匹配(需含{unit_hint})").strip()
 
