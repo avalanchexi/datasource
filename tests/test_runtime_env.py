@@ -61,7 +61,7 @@ def _write_fake_venv_python(root: Path, *, windows: bool = False) -> Path:
     return python_path
 
 
-def _write_fake_bootstrap(root: Path) -> Path:
+def _write_fake_bootstrap(root: Path, *, executable: bool = True) -> Path:
     scripts = root / "scripts"
     scripts.mkdir(exist_ok=True)
     log_path = root / "bootstrap.log"
@@ -69,6 +69,10 @@ def _write_fake_bootstrap(root: Path) -> Path:
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         f"printf 'called\\n' >> {shlex.quote(str(log_path))}\n"
+        "if [ -n \"${http_proxy:-}\" ] || [ -n \"${https_proxy:-}\" ] || "
+        "[ -n \"${HTTP_PROXY:-}\" ] || [ -n \"${HTTPS_PROXY:-}\" ]; then\n"
+        f"  printf 'proxy-polluted\\n' >> {shlex.quote(str(log_path))}\n"
+        "fi\n"
         "mkdir -p .venv/bin\n"
         "cat > .venv/bin/activate <<'ACT'\n"
         "export RUNTIME_ACTIVATE=bootstrapped\n"
@@ -82,7 +86,7 @@ def _write_fake_bootstrap(root: Path) -> Path:
     )
     bootstrap = scripts / "bootstrap_venv.sh"
     bootstrap.write_text(script, encoding="utf-8")
-    bootstrap.chmod(0o755)
+    bootstrap.chmod(0o755 if executable else 0o644)
     return bootstrap
 
 
@@ -170,6 +174,37 @@ def test_runtime_env_uses_linux_venv_first(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout
     assert result.stdout.strip().splitlines()[-1] == "linux"
+
+
+def test_runtime_env_failed_bootstrap_stamp_blocks_existing_venv(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    bin_dir = root / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "activate").write_text(
+        "export RUNTIME_ACTIVATE=linux\n",
+        encoding="utf-8",
+    )
+    _write_fake_venv_python(root)
+    (root / ".venv" / ".datasource_bootstrap_failed").write_text(
+        "timestamp=2026-05-21T00:00:00Z\nreason=pip failed\n",
+        encoding="utf-8",
+    )
+
+    result = _run_source(
+        root,
+        "printf 'should-not-run:%s\\n' \"${RUNTIME_ACTIVATE:-unset}\"",
+    )
+
+    assert result.returncode != 0
+    assert ".datasource_bootstrap_failed" in result.stdout
+    assert "remove .venv" in result.stdout.lower()
+    assert "should-not-run" not in result.stdout
+    assert "linux" not in result.stdout
 
 
 def test_runtime_env_venv_python_ignores_env_file_override(tmp_path: Path) -> None:
@@ -334,6 +369,36 @@ def test_runtime_env_empty_venv_auto_bootstraps_when_enabled(tmp_path: Path) -> 
     assert (root / "bootstrap.log").read_text(encoding="utf-8") == "called\n"
     assert result.stdout.strip().splitlines()[-1] == (
         f"bootstrapped|{_bash_path(str(venv_python))}"
+    )
+
+
+def test_runtime_env_auto_bootstrap_uses_bash_for_readable_script(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"
+    root.mkdir()
+    _write_runtime(root)
+    _write_env(root)
+    (root / ".venv").mkdir()
+    _write_fake_bootstrap(root, executable=False)
+    venv_python = root / ".venv" / "bin" / "python"
+
+    result = _run_source(
+        root,
+        "printf '%s|%s|%s\\n' \"$RUNTIME_ACTIVATE\" \"$DATASOURCE_PYTHON\" \"${NO_PROXY:-}\"",
+        env={
+            "DATASOURCE_AUTO_VENV": "1",
+            "http_proxy": "http://proxy.local:8080",
+            "HTTPS_PROXY": "http://secure-proxy.local:8080",
+            "NO_PROXY": "localhost,127.0.0.1",
+        },
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert "[OK] fake bootstrap complete" in result.stdout
+    assert (root / "bootstrap.log").read_text(encoding="utf-8") == "called\n"
+    assert result.stdout.strip().splitlines()[-1] == (
+        f"bootstrapped|{_bash_path(str(venv_python))}|localhost,127.0.0.1"
     )
 
 

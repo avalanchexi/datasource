@@ -17,6 +17,16 @@ esac
 VENV_ACTIVATE=""
 VENV_PYTHON=""
 DATASOURCE_SELECTED_PYTHON=""
+_datasource_clear_active_proxies() {
+  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+}
+
+if [ -f ".venv/.datasource_bootstrap_failed" ]; then
+  echo "[ERROR] .venv has a failed bootstrap stamp: .venv/.datasource_bootstrap_failed"
+  echo "[ERROR] Remove .venv, or fix the cause and rerun: bash scripts/bootstrap_venv.sh"
+  return 1 2>/dev/null || exit 1
+fi
+
 if [ -f ".venv/bin/activate" ]; then
   VENV_ACTIVATE=".venv/bin/activate"
   VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/bin/python"
@@ -30,11 +40,12 @@ elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; the
 elif [ -d ".venv" ]; then
   if [ -z "$(find ".venv" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
     if [ "${DATASOURCE_AUTO_VENV:-}" = "1" ]; then
-      if [ ! -x "scripts/bootstrap_venv.sh" ]; then
-        echo "[ERROR] DATASOURCE_AUTO_VENV=1 requested but scripts/bootstrap_venv.sh is not executable"
+      if [ ! -r "scripts/bootstrap_venv.sh" ]; then
+        echo "[ERROR] DATASOURCE_AUTO_VENV=1 requested but scripts/bootstrap_venv.sh is not readable"
         return 1 2>/dev/null || exit 1
       fi
-      if ! scripts/bootstrap_venv.sh; then
+      _datasource_clear_active_proxies
+      if ! bash scripts/bootstrap_venv.sh; then
         return 1 2>/dev/null || exit 1
       fi
       if [ -f ".venv/bin/activate" ]; then
@@ -95,7 +106,7 @@ fi
 DATASOURCE_PYTHON="$DATASOURCE_SELECTED_PYTHON"
 
 # Keep no_proxy/NO_PROXY, clear active proxy variables for direct connectivity.
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+_datasource_clear_active_proxies
 
 EXISTING_PY_PATH="${PYTHONPATH:-}"
 if [ -n "$EXISTING_PY_PATH" ]; then
@@ -113,3 +124,4 @@ export PYTHONPATH
 
 unset DATASOURCE_SELECTED_PYTHON
 unset DATASOURCE_ALLEXPORT_WAS_SET
+unset -f _datasource_clear_active_proxies
