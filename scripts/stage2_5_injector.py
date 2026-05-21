@@ -1471,6 +1471,13 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 "source": source,
                 "note": extraction.get("note"),
                 "source_url": src,
+                "is_estimated": extraction.get("is_estimated"),
+                "estimation_method": extraction.get("estimation_method"),
+                "confidence": extraction.get("confidence"),
+                "metric_basis": extraction.get("metric_basis"),
+                "window_evidence": extraction.get("window_evidence"),
+                "source_tier": extraction.get("source_tier"),
+                "field_retry_evidence": extraction.get("field_retry_evidence"),
             }
         elif cat == "macro_indicators":
             schema["macro_indicators"][key] = {
@@ -1668,11 +1675,9 @@ def inject_websearch_data(
         if key not in market_data.get('fund_flow', {}):
             continue
         normalized_payload = _normalize_fund_flow_payload(raw_key, payload)
-        if _apply_fund_flow_entry(market_data['fund_flow'][key], key, normalized_payload):
+        if _apply_fund_flow_entry(market_data['fund_flow'][key], key, normalized_payload, summary=summary):
             inject_count += 1
             summary.injected("fund_flow", key)
-            if "fund_flow_estimated_gate" in str(market_data['fund_flow'][key].get("note") or ""):
-                summary.fund_flow_forced_estimated("fund_flow", key)
             print(
                 f"  [OK] {key}: recent_5d={market_data['fund_flow'][key]['recent_5d']} "
                 f"total_120d={market_data['fund_flow'][key]['total_120d']} source={market_data['fund_flow'][key]['source']}"
@@ -2562,10 +2567,17 @@ def _apply_monetary_entry(
     return True
 
 
-def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, Any]) -> bool:
+def _apply_fund_flow_entry(
+    entry: Dict[str, Any],
+    key: str,
+    payload: Dict[str, Any],
+    *,
+    summary: Optional[InjectionSummary] = None,
+) -> bool:
     existing_recent = _coerce_float(entry.get("recent_5d"))
     existing_total = _coerce_float(entry.get("total_120d"))
     existing_suspicious = _is_suspicious_fund_flow_pair(key, existing_recent, existing_total)
+    payload_requested_estimated = _coerce_bool(payload.get("is_estimated"))
     recent_value = FundFlowData._parse_amount(payload.get('recent_5d'))
     total_value = FundFlowData._parse_amount(payload.get('total_120d'))
     current_value = FundFlowData._parse_amount(
@@ -2616,6 +2628,15 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
         entry["metric_basis"],
     )
     _normalize_fund_flow_estimation(entry, payload)
+    if summary is not None and not payload_requested_estimated and entry.get("is_estimated") is True:
+        summary.fund_flow_forced_estimated(
+            "fund_flow",
+            key,
+            source_tier=entry.get("source_tier"),
+            window_evidence=entry.get("window_evidence"),
+            metric_basis=entry.get("metric_basis") or "unknown",
+            reason="fund_flow_estimated_gate",
+        )
     if existing_suspicious:
         entry['note'] = (
             f"覆盖Stage2可疑占位值；{entry['note']}" if entry.get('note') else "覆盖Stage2可疑占位值"

@@ -2218,6 +2218,128 @@ def test_apply_fund_flow_entry_forces_news_summary_estimated_when_marked_false()
     assert "fund_flow_estimated_gate" in entry["note"]
 
 
+def test_fund_flow_forced_estimated_records_summary_details():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": -50.0,
+        "total_120d": -9000.0,
+        "trend": "流出",
+        "source": "新浪财经 ETF 单日新闻外推全市场资金流",
+        "source_url": "https://finance.sina.com.cn/news.html",
+        "metric_basis": "news_net_flow",
+        "is_estimated": False,
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
+
+    assert updated is True
+    assert entry["is_estimated"] is True
+    item = summary.to_dict()["fund_flow_forced_estimated"][0]
+    assert item["category"] == "fund_flow"
+    assert item["key"] == "etf"
+    assert item["source_tier"] == "tier3"
+    assert item["window_evidence"] == "news_summary"
+    assert item["metric_basis"] == "news_net_flow"
+    assert item["reason"] == "fund_flow_estimated_gate"
+
+
+def test_fund_flow_forced_estimated_records_summary_when_estimate_flag_missing():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": -50.0,
+        "total_120d": -9000.0,
+        "trend": "流出",
+        "source": "新浪财经 ETF 单日新闻外推全市场资金流",
+        "source_url": "https://finance.sina.com.cn/news.html",
+        "metric_basis": "news_net_flow",
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
+
+    assert updated is True
+    assert entry["is_estimated"] is True
+    item = summary.to_dict()["fund_flow_forced_estimated"][0]
+    assert item["key"] == "etf"
+    assert item["source_tier"] == "tier3"
+    assert item["window_evidence"] == "news_summary"
+    assert item["metric_basis"] == "news_net_flow"
+
+
+def test_stage2_results_fund_flow_forced_estimated_summary_details(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260521"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    websearch_path = run_dir / "websearch_results_auto.json"
+    output_path = run_dir / "market_data_complete.json"
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-05-21", "missing_items": {}},
+            "missing_items": [],
+            "macro_indicators": {},
+            "monetary_policy": {},
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {
+                "etf": {
+                    "type": "etf",
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "待获取",
+                    "source": "placeholder",
+                }
+            },
+        },
+    )
+    _write_json(
+        websearch_path,
+        {
+            "results": [
+                {
+                    "task": {"indicator_key": "etf"},
+                    "extraction": {
+                        "recent_5d": -50.0,
+                        "total_120d": -9000.0,
+                        "trend": "outflow",
+                        "source_url": "https://finance.sina.com.cn/news.html",
+                        "note": "ETF 单日新闻外推全市场资金流",
+                        "is_estimated": False,
+                        "metric_basis": "news_net_flow",
+                        "window_evidence": "news_summary",
+                    },
+                    "raw_results": [{"url": "https://finance.sina.com.cn/news.html"}],
+                }
+            ]
+        },
+    )
+
+    injector.inject_websearch_data(
+        market_path,
+        websearch_path,
+        output_path,
+        backfill_trend=False,
+        disable_trend_history_write=True,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    forced = output["metadata"]["injection_summary"]["fund_flow_forced_estimated"]
+    assert forced == [
+        {
+            "category": "fund_flow",
+            "key": "etf",
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "metric_basis": "news_net_flow",
+            "reason": "fund_flow_estimated_gate",
+        }
+    ]
+
+
 def test_apply_fund_flow_entry_keeps_structured_direct_window_not_estimated():
     entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
     payload = {
