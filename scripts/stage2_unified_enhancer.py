@@ -27,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from loguru import logger
 try:  # pragma: no cover - 可选依赖
@@ -1553,7 +1553,12 @@ def _field_retry_window_evidence(
     return "unknown"
 
 
-def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extraction: Dict[str, Any]) -> str:
+def _apply_extraction(
+    market_payload: Dict[str, Any],
+    task: Dict[str, Any],
+    extraction: Dict[str, Any],
+    snippets: Optional[Iterable[Any]] = None,
+) -> str:
     value = extraction.get("value")
     if value is None:
         return "skip_no_value"
@@ -1597,9 +1602,13 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         if source_url:
             entry["source_url"] = source_url
 
-    def _mark_official_non_estimated(entry: Dict[str, Any]) -> None:
-        snippets = extraction.get("snippets") or task.get("snippets") or []
-        decision = should_mark_official_non_estimated(task, extraction, snippets)
+    def _mark_official_non_estimated(entry: Dict[str, Any], category: str) -> None:
+        evidence_snippets = snippets if snippets is not None else extraction.get("snippets") or task.get("snippets") or []
+        decision = should_mark_official_non_estimated(
+            {**task, "category": category},
+            extraction,
+            evidence_snippets,
+        )
         if not decision.allowed:
             return
         entry["is_estimated"] = False
@@ -1619,7 +1628,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
             elif reasons:
                 marker = "estimated_keep:" + "|".join(reasons)
                 entry["note"] = ((entry.get("note") or "") + " " + marker).strip()
-        _mark_official_non_estimated(entry)
+        _mark_official_non_estimated(entry, "macro_indicators")
         return "macro_indicators"
 
     monetary = market_payload.setdefault("monetary_policy", {})
@@ -1628,7 +1637,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         entry = monetary[monetary_key]
         _write_common_fields(entry, "current_value")
         _write_period_fields(entry)
-        _mark_official_non_estimated(entry)
+        _mark_official_non_estimated(entry, "monetary_policy")
         return "monetary_policy"
 
     # fund_flow 回写（简化：将抽取值写 recent_5d，total_120d 同值）
@@ -2899,7 +2908,7 @@ async def _execute_tasks(
                     if extraction.get("value") is None:
                         manual_required_keys.append(task_record["indicator_key"])
                 else:
-                    write_target = _apply_extraction(market_payload, task, extraction)
+                    write_target = _apply_extraction(market_payload, task, extraction, snippets=snippets)
                     write_stats = stats.setdefault("write_back_by_category", {})
                     if isinstance(write_stats, dict):
                         write_stats[write_target] = write_stats.get(write_target, 0) + 1
@@ -3658,7 +3667,7 @@ async def _execute_tasks(
                             if extraction.get("value") is None:
                                 manual_required_keys.append(task_record["indicator_key"])
                         else:
-                            write_target = _apply_extraction(market_payload, task, extraction)
+                            write_target = _apply_extraction(market_payload, task, extraction, snippets=snippets)
                             write_stats = stats.setdefault("write_back_by_category", {})
                             if isinstance(write_stats, dict):
                                 write_stats[write_target] = write_stats.get(write_target, 0) + 1

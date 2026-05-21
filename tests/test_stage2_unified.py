@@ -259,6 +259,51 @@ def test_apply_extraction_marks_official_macro_source_not_estimated():
     assert "official_source_period_unit_match" in entry["note"]
 
 
+def test_apply_extraction_marks_official_macro_source_not_estimated_with_runtime_snippets():
+    market_payload = {
+        "metadata": {"date": "2026-05-21"},
+        "macro_indicators": {
+            "cpi": {
+                "indicator_name": "CPI",
+                "current_value": None,
+                "unit": "%",
+                "date": "",
+                "is_estimated": True,
+                "source": "Stage2 manual_required",
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+    }
+    task = {
+        "task_id": "macro.cpi",
+        "category": "macro_indicators",
+        "indicator_key": "cpi",
+        "expected_period": "2026-04",
+        "unit": "%",
+    }
+    extraction = {
+        "value": 0.2,
+        "unit": "%",
+        "report_period": "2026-04",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260509.html",
+        "note": "deepseek_structured",
+    }
+    snippets = [
+        {
+            "url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260509.html?utm_source=tavily",
+            "snippet": "2026年4月份居民消费价格同比上涨0.2%",
+        }
+    ]
+
+    section = _apply_extraction(market_payload, task, extraction, snippets=snippets)
+
+    entry = market_payload["macro_indicators"]["cpi"]
+    assert section == "macro_indicators"
+    assert entry["is_estimated"] is False
+    assert "official_source_period_unit_match" in entry["note"]
+
+
 def test_task_planner_uses_rrr_profile_for_reserve_ratio_alias(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-04-28"},
