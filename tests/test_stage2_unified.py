@@ -52,6 +52,23 @@ def test_deepseek_circuit_breaker_triggers_on_timeout_rate():
     assert breaker.timeout_rate == 0.75
 
 
+def test_deepseek_circuit_breaker_can_disable_triggers():
+    breaker = _DeepSeekCircuitBreaker(
+        max_consecutive_timeouts=0,
+        max_timeout_rate=0,
+        min_attempts=0,
+    )
+
+    for _ in range(10):
+        breaker.record(timeout=True)
+
+    assert breaker.triggered is False
+    assert breaker.reason is None
+    assert breaker.attempts == 10
+    assert breaker.timeouts == 10
+    assert breaker.timeout_rate == 1.0
+
+
 def test_retrieval_diagnostics_separates_search_extract_and_writeback():
     rows = [
         {
@@ -156,6 +173,8 @@ def test_summary_diagnostics_persist_tavily_unavailable_reason():
             "deepseek_circuit_breaker_triggered": True,
             "deepseek_circuit_breaker_reason": "timeout_rate",
             "deepseek_timeout_rate": 0.75,
+            "deepseek_breaker_attempts": 4,
+            "deepseek_breaker_timeouts": 3,
         },
     )
 
@@ -163,6 +182,8 @@ def test_summary_diagnostics_persist_tavily_unavailable_reason():
     assert summary_fields["deepseek_circuit_breaker_triggered"] is True
     assert summary_fields["deepseek_circuit_breaker_reason"] == "timeout_rate"
     assert summary_fields["deepseek_timeout_rate"] == 0.75
+    assert summary_fields["deepseek_breaker_attempts"] == 4
+    assert summary_fields["deepseek_breaker_timeouts"] == 3
 
 
 def test_is_environment_proxy_error_detects_missing_socksio_message():
@@ -699,6 +720,45 @@ def test_stage2_exa_fallback_can_be_enabled_explicitly(monkeypatch):
 
     assert args.enable_exa_fallback is True
     assert stage2._should_enable_exa_fallback(args) is True
+
+
+def test_stage2_deepseek_breaker_defaults_from_env(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["stage2_unified_enhancer.py", "--market-data", "market.json"])
+    monkeypatch.setenv("DEEPSEEK_BREAKER_CONSECUTIVE_TIMEOUTS", "7")
+    monkeypatch.setenv("DEEPSEEK_BREAKER_TIMEOUT_RATE", "0.7")
+    monkeypatch.setenv("DEEPSEEK_BREAKER_MIN_ATTEMPTS", "9")
+
+    args = stage2._parse_args()
+
+    assert args.deepseek_breaker_consecutive_timeouts == 7
+    assert args.deepseek_breaker_timeout_rate == 0.7
+    assert args.deepseek_breaker_min_attempts == 9
+
+
+def test_stage2_deepseek_breaker_cli_overrides_env(monkeypatch):
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage2_unified_enhancer.py",
+            "--market-data",
+            "market.json",
+            "--deepseek-breaker-consecutive-timeouts",
+            "11",
+            "--deepseek-breaker-timeout-rate",
+            "0.8",
+            "--deepseek-breaker-min-attempts",
+            "13",
+        ],
+    )
+    monkeypatch.setenv("DEEPSEEK_BREAKER_CONSECUTIVE_TIMEOUTS", "7")
+    monkeypatch.setenv("DEEPSEEK_BREAKER_TIMEOUT_RATE", "0.7")
+    monkeypatch.setenv("DEEPSEEK_BREAKER_MIN_ATTEMPTS", "9")
+
+    args = stage2._parse_args()
+
+    assert args.deepseek_breaker_consecutive_timeouts == 11
+    assert args.deepseek_breaker_timeout_rate == 0.8
+    assert args.deepseek_breaker_min_attempts == 13
 
 def test_task_planner_detects_missing_and_placeholders(tmp_path: Path):
     payload = {

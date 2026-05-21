@@ -2015,6 +2015,8 @@ def _build_stage2_summary_diagnostics(
         ),
         "deepseek_circuit_breaker_reason": exec_stats.get("deepseek_circuit_breaker_reason"),
         "deepseek_timeout_rate": exec_stats.get("deepseek_timeout_rate", 0.0),
+        "deepseek_breaker_attempts": exec_stats.get("deepseek_breaker_attempts", 0),
+        "deepseek_breaker_timeouts": exec_stats.get("deepseek_breaker_timeouts", 0),
     }
     unavailable_reason = exec_stats.get("tavily_unavailable_reason")
     if unavailable_reason:
@@ -2054,9 +2056,9 @@ class _DeepSeekCircuitBreaker:
             self.consecutive_timeouts += 1
         else:
             self.consecutive_timeouts = 0
-            return
         if (
-            self.max_consecutive_timeouts > 0
+            timeout
+            and self.max_consecutive_timeouts > 0
             and self.consecutive_timeouts >= self.max_consecutive_timeouts
         ):
             self.triggered = True
@@ -2064,6 +2066,7 @@ class _DeepSeekCircuitBreaker:
             return
         if (
             self.min_attempts > 0
+            and self.max_timeout_rate > 0
             and self.attempts >= self.min_attempts
             and self.timeout_rate >= self.max_timeout_rate
         ):
@@ -2341,6 +2344,9 @@ async def _execute_tasks(
     extract_topk: int = 3,
     low_score_threshold: float = 0.2,
     llm_hard_timeout: Optional[float] = None,
+    deepseek_breaker_consecutive_timeouts: int = 6,
+    deepseek_breaker_timeout_rate: float = 0.6,
+    deepseek_breaker_min_attempts: int = 8,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
     completed: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
@@ -2385,6 +2391,8 @@ async def _execute_tasks(
     stats.setdefault("deepseek_circuit_breaker_triggered", False)
     stats.setdefault("deepseek_circuit_breaker_reason", None)
     stats.setdefault("deepseek_timeout_rate", 0.0)
+    stats.setdefault("deepseek_breaker_attempts", 0)
+    stats.setdefault("deepseek_breaker_timeouts", 0)
     initial_unavailable_reason = stats.get("tavily_unavailable_reason")
     tavily_unavailable_reason: Optional[str] = (
         initial_unavailable_reason
@@ -2394,7 +2402,11 @@ async def _execute_tasks(
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
-    deepseek_circuit_breaker = _DeepSeekCircuitBreaker()
+    deepseek_circuit_breaker = _DeepSeekCircuitBreaker(
+        max_consecutive_timeouts=deepseek_breaker_consecutive_timeouts,
+        max_timeout_rate=deepseek_breaker_timeout_rate,
+        min_attempts=deepseek_breaker_min_attempts,
+    )
     extract_globally_disabled = disable_extract
     extract_disabled_until: Dict[str, float] = {}
     extract_422_tracker: Dict[str, Dict[str, Any]] = {}
@@ -2403,6 +2415,8 @@ async def _execute_tasks(
         stats["deepseek_circuit_breaker_triggered"] = bool(deepseek_circuit_breaker.triggered)
         stats["deepseek_circuit_breaker_reason"] = deepseek_circuit_breaker.reason
         stats["deepseek_timeout_rate"] = deepseek_circuit_breaker.timeout_rate
+        stats["deepseek_breaker_attempts"] = deepseek_circuit_breaker.attempts
+        stats["deepseek_breaker_timeouts"] = deepseek_circuit_breaker.timeouts
 
     def _deepseek_circuit_breaker_skip_reason() -> Optional[str]:
         if not deepseek_circuit_breaker.triggered:
@@ -2632,6 +2646,7 @@ async def _execute_tasks(
                         )
                 result = result or {}
                 deepseek_circuit_breaker.record(timeout=False)
+                _sync_deepseek_circuit_breaker_stats()
                 result["llm_latency_ms"] = int((time.perf_counter() - start_llm) * 1000)
                 stats.setdefault("deepseek_latencies", []).append(result["llm_latency_ms"])
                 if attempts > 1:
@@ -2640,11 +2655,10 @@ async def _execute_tasks(
             except Exception as exc:  # pragma: no cover
                 is_timeout = _is_deepseek_timeout(exc)
                 deepseek_circuit_breaker.record(timeout=is_timeout)
+                _sync_deepseek_circuit_breaker_stats()
                 if is_timeout:
                     stats["timeout_count"] += 1
                     stats["deepseek_timeouts"] += 1
-                if deepseek_circuit_breaker.triggered:
-                    _sync_deepseek_circuit_breaker_stats()
                 if attempts >= 2 or deepseek_circuit_breaker.triggered:
                     logger.warning(f"DeepSeek 请求失败，将使用 regex 兜底: {exc}")
                     val, url = _call_fallback_extract(snips, task)
@@ -4253,6 +4267,26 @@ def _validate_general_extraction(
     return val, manual, note_append
 
 
+def _env_int_default(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw in {None, ""}:
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float_default(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw in {None, ""}:
+        return default
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage 2 Unified Enhancer (Tavily + DeepSeek)")
     parser.add_argument("--market-data", required=True, help="Stage1 生成的 market_data.json 路径")
@@ -4274,6 +4308,24 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--deepseek-timeout", type=float, default=30.0, help="DeepSeek抽取超时时间(秒)")
     parser.add_argument("--deepseek-max-concurrency", type=int, default=3, help="DeepSeek并发上限")
+    parser.add_argument(
+        "--deepseek-breaker-consecutive-timeouts",
+        type=int,
+        default=_env_int_default("DEEPSEEK_BREAKER_CONSECUTIVE_TIMEOUTS", 6),
+        help="DeepSeek circuit breaker 连续超时阈值；<=0 禁用连续超时触发",
+    )
+    parser.add_argument(
+        "--deepseek-breaker-timeout-rate",
+        type=float,
+        default=_env_float_default("DEEPSEEK_BREAKER_TIMEOUT_RATE", 0.6),
+        help="DeepSeek circuit breaker 超时率阈值；<=0 禁用超时率触发",
+    )
+    parser.add_argument(
+        "--deepseek-breaker-min-attempts",
+        type=int,
+        default=_env_int_default("DEEPSEEK_BREAKER_MIN_ATTEMPTS", 8),
+        help="DeepSeek circuit breaker 超时率触发的最小尝试数；<=0 禁用超时率触发",
+    )
     parser.add_argument("--deepseek-model", default="deepseek-v4-pro", help="DeepSeek模型名")
     parser.add_argument(
         "--deepseek-base-url",
@@ -4661,6 +4713,9 @@ async def main() -> int:
                 extract_topk=args.extract_topk,
                 low_score_threshold=args.low_score_threshold,
                 llm_hard_timeout=args.llm_hard_timeout,
+                deepseek_breaker_consecutive_timeouts=args.deepseek_breaker_consecutive_timeouts,
+                deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
+                deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
             )
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
@@ -4695,6 +4750,9 @@ async def main() -> int:
                 extract_topk=args.extract_topk,
                 low_score_threshold=args.low_score_threshold,
                 llm_hard_timeout=args.llm_hard_timeout,
+                deepseek_breaker_consecutive_timeouts=args.deepseek_breaker_consecutive_timeouts,
+                deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
+                deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
             )
             completed_tasks.extend(retry_completed)
             failures.extend(retry_failures)
@@ -4845,6 +4903,8 @@ async def main() -> int:
         "deepseek_circuit_breaker_triggered": exec_stats.get("deepseek_circuit_breaker_triggered", False),
         "deepseek_circuit_breaker_reason": exec_stats.get("deepseek_circuit_breaker_reason"),
         "deepseek_timeout_rate": exec_stats.get("deepseek_timeout_rate", 0.0),
+        "deepseek_breaker_attempts": exec_stats.get("deepseek_breaker_attempts", 0),
+        "deepseek_breaker_timeouts": exec_stats.get("deepseek_breaker_timeouts", 0),
         "retry_count": exec_stats.get("retry_count", 0),
         "extract_calls": exec_stats.get("extract_calls", 0),
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),

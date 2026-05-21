@@ -256,6 +256,9 @@ async def test_deepseek_circuit_breaker_skips_subsequent_extractions(tmp_path):
         disable_extract=True,
         extract_topk=1,
         llm_hard_timeout=0.2,
+        deepseek_breaker_consecutive_timeouts=3,
+        deepseek_breaker_timeout_rate=0.5,
+        deepseek_breaker_min_attempts=4,
     )
 
     assert len(completed) + len(failures) == len(tasks)
@@ -273,6 +276,87 @@ async def test_deepseek_circuit_breaker_skips_subsequent_extractions(tmp_path):
         "deepseek_circuit_breaker" in str(item.get("task", {}).get("extraction_skipped_reason") or "")
         for item in skipped_items
     )
+
+
+@pytest.mark.anyio("asyncio")
+async def test_deepseek_timeout_then_success_updates_partial_breaker_stats(tmp_path):
+    class SearchOnlyClient:
+        async def search(self, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/cpi",
+                        "snippet": "CPI 最新同比 2.3",
+                        "content": "CPI 最新同比 2.3",
+                        "score": 0.95,
+                    }
+                ]
+            }
+
+    class TimeoutThenSuccessExtractor:
+        def __init__(self):
+            self.calls = 0
+
+        async def extract(self, *args, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                raise asyncio.TimeoutError("deepseek timeout")
+            return {
+                "value": 2.3,
+                "unit": None,
+                "source_url": "https://example.com/cpi",
+                "confidence": 0.9,
+                "manual_required": False,
+                "manual_reason": None,
+                "note": "deepseek_structured",
+            }
+
+    task = {
+        "task_id": "macro-cpi",
+        "indicator_key": "cpi",
+        "stage_phase": "macro",
+        "search_backend": "tavily",
+        "extraction_backend": "deepseek",
+        "query": "cpi",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }
+    market_payload = {
+        "macro_indicators": {
+            "cpi": {"current_value": None, "previous_value": 2.0}
+        }
+    }
+    stats = {}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        market_payload,
+        SearchOnlyClient(),
+        None,
+        TimeoutThenSuccessExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        deepseek_timeout=0.1,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        stats=stats,
+        disable_extract=True,
+        extract_topk=1,
+        llm_hard_timeout=0.2,
+    )
+
+    assert completed
+    assert not failures
+    assert stats["deepseek_circuit_breaker_triggered"] is False
+    assert stats["deepseek_timeout_rate"] > 0
+    assert stats["deepseek_breaker_attempts"] == 2
+    assert stats["deepseek_breaker_timeouts"] == 1
+    assert all(
+        "deepseek_circuit_breaker" not in str(item.get("manual_reason") or "")
+        for item in websearch_results
+    )
+
+
 @pytest.fixture
 def anyio_backend():
     # 强制使用 asyncio，避免缺少 trio 依赖导致的参数化失败
