@@ -68,6 +68,7 @@ from datasource.utils.policy_rules import (
 from datasource.utils.run_paths import build_run_paths_from_reference
 from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
+from datasource.utils.source_trust import should_mark_official_non_estimated
 from datasource.utils.text_markers import contains_ytd_marker
 
 try:
@@ -1596,6 +1597,16 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         if source_url:
             entry["source_url"] = source_url
 
+    def _mark_official_non_estimated(entry: Dict[str, Any]) -> None:
+        snippets = extraction.get("snippets") or task.get("snippets") or []
+        decision = should_mark_official_non_estimated(task, extraction, snippets)
+        if not decision.allowed:
+            return
+        entry["is_estimated"] = False
+        existing_note = str(entry.get("note") or "").strip()
+        if decision.reason not in existing_note.split():
+            entry["note"] = f"{existing_note} {decision.reason}".strip()
+
     macro = market_payload.setdefault("macro_indicators", {})
     if indicator_key in macro:
         entry = macro[indicator_key]
@@ -1608,6 +1619,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
             elif reasons:
                 marker = "estimated_keep:" + "|".join(reasons)
                 entry["note"] = ((entry.get("note") or "") + " " + marker).strip()
+        _mark_official_non_estimated(entry)
         return "macro_indicators"
 
     monetary = market_payload.setdefault("monetary_policy", {})
@@ -1616,6 +1628,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         entry = monetary[monetary_key]
         _write_common_fields(entry, "current_value")
         _write_period_fields(entry)
+        _mark_official_non_estimated(entry)
         return "monetary_policy"
 
     # fund_flow 回写（简化：将抽取值写 recent_5d，total_120d 同值）
