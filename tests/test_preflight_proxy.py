@@ -44,6 +44,15 @@ def _write_fake_python(root: Path, body: str) -> Path:
     return fake_bin
 
 
+def _write_fake_executable(root: Path, name: str, body: str) -> Path:
+    fake_bin = root / "fake-bin"
+    fake_bin.mkdir(exist_ok=True)
+    executable = fake_bin / name
+    executable.write_text("#!/usr/bin/env bash\n" + body, encoding="utf-8")
+    executable.chmod(0o755)
+    return fake_bin
+
+
 def _bash_path(path: Path, *, root: Path) -> str:
     try:
         relative = path.resolve().relative_to(root.resolve())
@@ -102,6 +111,41 @@ def _source_preflight(
     )
 
 
+def _run_preflight(
+    root: Path,
+    *,
+    env: Optional[dict] = None,
+    path_prefix: Optional[Path] = None,
+) -> subprocess.CompletedProcess:
+    merged = os.environ.copy()
+    for key in (
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "all_proxy",
+        "DATASOURCE_NETWORK_MODE",
+        "DATASOURCE_PREFLIGHT_SOURCE_ONLY",
+    ):
+        merged.pop(key, None)
+    merged["ALLOW_SYSTEM_PYTHON"] = "1"
+    merged.update(env or {})
+    if path_prefix is not None:
+        merged["PATH"] = f"{_bash_path(path_prefix, root=root)}{os.pathsep}{merged['PATH']}"
+    return subprocess.run(
+        ["bash", "run_preflight.sh"],
+        cwd=root,
+        env=merged,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
 def test_preflight_direct_mode_reports_proxy_cleared_after_runtime_cleanup(
     tmp_path: Path,
 ) -> None:
@@ -122,6 +166,63 @@ def test_preflight_direct_mode_reports_proxy_cleared_after_runtime_cleanup(
     assert "[OK] Network mode: direct" in result.stdout
     assert "Proxy cleared" in result.stdout
     assert "socks5h://vpn.local:1080" not in result.stdout
+
+
+def test_preflight_source_only_env_does_not_bypass_normal_execution(
+    tmp_path: Path,
+) -> None:
+    root = _copy_preflight(tmp_path)
+    (root / ".env").write_text(
+        "TUSHARE_TOKEN=xxxxxxxxxxxxxxxxxxxx\n"
+        "TAVILY_API_KEY=short\n"
+        "DEEPSEEK_API_KEY=zzzzzzzzzzzzzzzzzzzz\n",
+        encoding="utf-8",
+    )
+
+    result = _run_preflight(
+        root,
+        env={"DATASOURCE_PREFLIGHT_SOURCE_ONLY": "1"},
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "Missing/short TAVILY_API_KEY" in result.stdout
+    assert "[OK] DNS" not in result.stdout
+    assert "[OK] HTTPS" not in result.stdout
+
+
+def test_preflight_proxy_mode_normal_execution_checks_original_socks_proxy_before_network(
+    tmp_path: Path,
+) -> None:
+    root = _copy_preflight(tmp_path)
+    fake_bin = _write_fake_python(root, "exit 1\n")
+    _write_fake_executable(
+        root,
+        "getent",
+        "printf 'unexpected-getent %s\\n' \"$*\"\nexit 0\n",
+    )
+    _write_fake_executable(
+        root,
+        "curl",
+        "printf 'unexpected-curl %s\\n' \"$*\"\nexit 0\n",
+    )
+
+    result = _run_preflight(
+        root,
+        env={
+            "DATASOURCE_NETWORK_MODE": "proxy",
+            "ALL_PROXY": "socks5h://vpn.local:1080",
+        },
+        path_prefix=fake_bin,
+    )
+
+    assert result.returncode != 0, result.stdout
+    assert "[OK] Network mode: proxy" in result.stdout
+    assert "ALL_PROXY=socks5h://vpn.local:1080" in result.stdout
+    assert "SOCKS proxy requires socksio/httpx[socks]" in result.stdout
+    assert "[OK] DNS" not in result.stdout
+    assert "[OK] HTTPS" not in result.stdout
+    assert "unexpected-getent" not in result.stdout
+    assert "unexpected-curl" not in result.stdout
 
 
 def test_preflight_proxy_mode_socks_requires_socksio(tmp_path: Path) -> None:
