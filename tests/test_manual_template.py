@@ -86,7 +86,7 @@ def test_manual_template_etf_fund_flow_is_estimate_only() -> None:
     note = etf["_note"].lower()
 
     assert etf["is_estimated"] is True
-    assert etf["metric_basis"] == "news_net_flow"
+    assert etf["metric_basis"] == "estimated_net_flow"
     assert etf["window_evidence"] == "news_summary"
     assert "estimate-only" in note
     assert "will not clear the gate" in note

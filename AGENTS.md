@@ -173,8 +173,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 普通 manual 来源不要因为不是官方域名就默认改成 estimated 或 blocked；是否 official override 只影响显式估算值能否被正规化。
 - fund_flow 的 `source_url` 只证明来源存在，不自动证明 5日/120日窗口真实可用。只有 Tier1/Tier2 结构化来源、`window_evidence` 为 `direct_window`、`direct_daily_series` 或 `direct_balance_delta`，且 `metric_basis` 不是 `news_net_flow`/`estimated_net_flow` 时，才允许 `is_estimated=false`。
 - fund_flow gate 的 `source_tier` 从 `source_url` 域名推断；manual JSON 中手工填写的 `source_tier`/`claimed_source_tier` 仅可作为诊断说明，不能释放 gate。
-- fund_flow Tier1 来源包括 HKEX/SSE/SZSE 等官方或交易所结构化入口；Tier2 包括可解析目标窗口的东方财富数据页；新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
-- fund_flow 手工补数若使用 `news_net_flow`、`estimated_net_flow`、单日外推、季度/年度摘要或无法证明目标窗口，Stage2.5 会强制 `is_estimated=true` 并写入 `estimated_not_allowed` blocker；不得为了通过 gate 手工改成 `false`。
+- fund_flow Tier1 域名：`hkex.com.hk`、`sse.com.cn`、`szse.cn`；Tier2 结构化 path：`data.eastmoney.com/hsgt`、`data.eastmoney.com/etf`、`data.eastmoney.com/fund`、`data.eastmoney.com/rzrq`。其他新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
+- fund_flow 手工补数若使用 `news_net_flow`、`estimated_net_flow`、单日外推、季度/年度/年内摘要、外推或无法证明目标窗口，Stage2.5 会强制 `is_estimated=true` 并写入 `estimated_not_allowed` blocker；不得为了通过 gate 手工改成 `false`。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
 - 若终端显示“注入数据项: 0”，说明结果无可解析数值或文件为空，应改用手工 schema 版 `_manual.json`。
 

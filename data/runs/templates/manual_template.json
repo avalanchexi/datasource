@@ -4,7 +4,14 @@
     "source_url": "Every numeric manual value must include a single source_url string, or a URL in source/note. URLs in this template are placeholders or entry points; replace them with the exact evidence URL supporting the copied value.",
     "is_estimated": "Official published values, official midpoint rates, exchange values, and index vendor values should use is_estimated=false. Use true only for spread estimates, formulas, proxy series, extrapolation, or other approximations.",
     "allow_estimated": "--allow-estimated is not a global bypass. It only allows policy allowlist estimated keys to participate; compare_gaps, stale_redlist, and policy gate still apply.",
-    "bdi_estimated_allow_conditions": "BDI is allowlisted only when config/policy_rules.yaml secondary constraints pass: trusted_domains, max_age_days, value_range, unit_keywords."
+    "bdi_estimated_allow_conditions": "BDI is allowlisted only when config/policy_rules.yaml secondary constraints pass: trusted_domains, max_age_days, value_range, unit_keywords.",
+    "fund_flow_gate": {
+      "tier1_domains": ["hkex.com.hk", "sse.com.cn", "szse.cn"],
+      "tier2_paths": ["data.eastmoney.com/hsgt", "data.eastmoney.com/etf", "data.eastmoney.com/fund", "data.eastmoney.com/rzrq"],
+      "direct_window_evidence": ["direct_window", "direct_daily_series", "direct_balance_delta"],
+      "blocked_metric_basis": ["news_net_flow", "estimated_net_flow"],
+      "weak_evidence_keywords": ["季度", "年度", "年内", "单日", "外推"]
+    }
   },
   "macro_indicators": {
     "industrial": {
