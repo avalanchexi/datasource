@@ -1077,6 +1077,7 @@ async def test_tavily_quota_fast_switches_remaining_tasks_to_manual_required(tmp
 @pytest.mark.anyio("asyncio")
 async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_required(tmp_path):
     client = ProxyErrorTavilyClient()
+    exa = RecordingExaClient()
     stats = {}
     task_log_path = tmp_path / "task_log.jsonl"
     tasks = [
@@ -1108,7 +1109,7 @@ async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_r
         tasks,
         {"commodities": []},
         client,
-        None,
+        exa,
         NoopExtractor(),
         task_log_path=task_log_path,
         cache_ttl=None,
@@ -1130,6 +1131,7 @@ async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_r
 
     assert completed == []
     assert client.calls == 1
+    assert len(exa.calls) == 0
     assert stats["tavily_unavailable_reason"] == "environment_proxy_error"
     assert "socksio" in stats["environment_proxy_error"].lower()
     assert len(failures) == 2
@@ -1310,6 +1312,7 @@ async def test_tavily_quota_fast_switch_preserves_manual_reason_for_force_refres
 @pytest.mark.anyio("asyncio")
 async def test_tavily_extract_environment_proxy_fast_switches_remaining_tasks(tmp_path):
     client = ExtractProxyErrorTavilyClient()
+    exa = RecordingExaClient()
     stats = {}
     tasks = [
         {
@@ -1342,7 +1345,7 @@ async def test_tavily_extract_environment_proxy_fast_switches_remaining_tasks(tm
         tasks,
         {"commodities": []},
         client,
-        None,
+        exa,
         NoopExtractor(),
         task_log_path=tmp_path / "task_log.jsonl",
         cache_ttl=None,
@@ -1365,6 +1368,7 @@ async def test_tavily_extract_environment_proxy_fast_switches_remaining_tasks(tm
     assert completed == []
     assert client.search_calls == 1
     assert client.extract_calls == 1
+    assert len(exa.calls) == 0
     assert stats["tavily_unavailable_reason"] == "environment_proxy_error"
     assert len(failures) == 2
     assert len(websearch_results) == 2
@@ -1375,7 +1379,7 @@ async def test_tavily_extract_environment_proxy_fast_switches_remaining_tasks(tm
 
 
 @pytest.mark.anyio("asyncio")
-async def test_tavily_extract_quota_fast_switches_remaining_tasks(tmp_path):
+async def test_tavily_extract_quota_without_exa_keeps_manual_required_fast_switch(tmp_path):
     client = ExtractQuotaTavilyClient()
     stats = {}
     tasks = [
@@ -1443,3 +1447,69 @@ async def test_tavily_extract_quota_fast_switches_remaining_tasks(tmp_path):
         item["extraction"]["manual_reason"] == "quota_or_rate_limit"
         for item in websearch_results
     )
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_extract_quota_switches_current_and_remaining_tasks_to_exa(tmp_path):
+    client = ExtractQuotaTavilyClient()
+    exa = RecordingExaClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "extract-quota-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+        {
+            "task_id": "extract-quota-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.search_calls == 1
+    assert client.extract_calls == 1
+    assert len(exa.calls) == 2
+    assert len(completed) == 2
+    assert failures == []
+    assert stats["tavily_to_exa_failover"] is True
+    assert stats["search_backend_final"] == "exa"
+    assert all(item["search_backend"] == "exa" for item in websearch_results)

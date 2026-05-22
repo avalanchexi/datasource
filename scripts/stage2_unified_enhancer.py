@@ -3777,20 +3777,68 @@ async def _execute_tasks(
                             websearch_results.append(websearch_item)
                             break
                         if _is_tavily_quota_error(exc):
-                            _mark_tavily_quota_unavailable()
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
-                            task_record, websearch_item = _build_tavily_fast_switch_records(
-                                task_for_log,
-                                attempt_index=attempt,
-                                elapsed_ms=elapsed_ms,
-                                error=exc,
-                                query_attempts=query_attempts,
-                            )
-                            _append_task_log(task_log_path, task_record)
-                            failures.append(task_record)
-                            manual_required_keys.append(task_record["indicator_key"])
-                            websearch_results.append(websearch_item)
-                            break
+                            if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
+                                _mark_tavily_quota_unavailable()
+                                exa_result, exa_note, exa_metadata = await _run_exa_search_for_task(
+                                    task_for_log,
+                                    "quota_or_rate_limit",
+                                    query_override=query_used or task.get("query"),
+                                )
+                                if exa_result:
+                                    result = exa_result
+                                    query_used = result.get("query") or query_used or task.get("query")
+                                    snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                        task_for_log,
+                                        result,
+                                        query_used,
+                                        exa_note,
+                                    )
+                                    search_backend = "exa"
+                                    search_note = exa_note
+                                    task_for_log["query_attempts"] = query_attempts
+                                    task_for_log.update(
+                                        {
+                                            "search_backend": "exa",
+                                            "search_backend_state": "exa_active",
+                                            "failover_reason": failover_reason,
+                                        }
+                                    )
+                                    if not snippets:
+                                        skip_deepseek_reason = (
+                                            task_for_log.get("unusable_reason")
+                                            or exa_note
+                                            or "no_snippets"
+                                        )
+                                else:
+                                    task_record, websearch_item = _build_exa_failover_manual_records(
+                                        task_for_log,
+                                        reason=exa_note,
+                                        attempt_index=attempt,
+                                        elapsed_ms=elapsed_ms,
+                                        error=exc,
+                                        query_attempts=query_attempts,
+                                        exa_metadata=exa_metadata,
+                                    )
+                                    _append_task_log(task_log_path, task_record)
+                                    failures.append(task_record)
+                                    manual_required_keys.append(task_record["indicator_key"])
+                                    websearch_results.append(websearch_item)
+                                    break
+                            else:
+                                _mark_tavily_quota_unavailable()
+                                task_record, websearch_item = _build_tavily_fast_switch_records(
+                                    task_for_log,
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    error=exc,
+                                    query_attempts=query_attempts,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
                         logger.debug(f"Tavily extract skipped/failed: {exc}")
                     if (
                         search_backend == "tavily"
