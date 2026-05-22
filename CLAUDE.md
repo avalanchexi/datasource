@@ -214,70 +214,11 @@ if comp < 0.8:
 "
 ```
 
-## Architecture
+## Architecture Notes
 
-```
-src/datasource/
-├── adapters/        # 数据源适配器 (TuShare, Tavily, Exa, InternationalFinance)
-├── engines/         # 处理引擎 (deepseek_reasoner, stage2_task_planner)
-├── calculators/     # 计算模块
-│   ├── pring/       # 2026-04-27 重构拆分: scoring / leading_indicator / summaries / stage_allocations
-│   ├── pring_analyzer.py  # 入口，委托至 pring/ 子模块
-│   ├── fund_flow_calculator.py / bond_calculator.py / technical_indicators.py
-│   └── economic_cycle_analyzer.py
-├── models/          # Pydantic 数据契约
-├── config/          # 配置 (indices_config.py, search_profiles.py)
-├── generators/      # 报告生成器 (simple_report)
-├── cache/           # 缓存 (memory_cache, sqlite_cache)
-├── utils/           # 共享工具（含 2026-04-27 重构提取出的小型工具）
-│   ├── coercion.py        # 数值转换、缺失值/sentinel(7.13) 判定
-│   ├── json_io.py         # 严格 JSON 读写、可选诊断 JSON
-│   ├── key_aliases.py     # monetary canonical key 注册表 + 别名归一
-│   ├── missing_items.py   # canonical metadata.missing_items + 顶层兼容视图
-│   ├── text_markers.py    # YTD / MLF 参考值 / 估算口径 marker 检测
-│   ├── run_paths.py       # 按日期推导 data/runs/${DATE_NH} 路径
-│   ├── pipeline_quality_state.py  # quality state + gap_monitor 同步
-│   ├── trend_history_store.py / quality_metrics.py / observability.py
-│   └── source_priority.py / source_conflicts.py / policy_rules.py / fund_flow_series.py
-├── agents/          # AI 代理 (background_scan with config/templates)
-├── analyzers/       # 长期分析、国际对比、行业轮动、政策追踪、风险监控等
-├── comparators/ mappers/ trackers/ warnings/  # 横向比较、口径映射、追踪、告警
-└── manager.py       # DataSourceManager 单例入口
+完整 repo map、配置路径、输出文件和 WebSearch schema 以 `AGENTS.md` 为准；`CLAUDE.md` 只保留高频提醒。
 
-scripts/             # 活动流水线入口（stage1/2/2_5/3/4 + 健康检查/审计/snapshot）
-├── utility/         # 辅助生成器与校验脚本（不在每日主路径，但仍维护）
-├── archive/         # 已归档的一次性/低频实验脚本（README 注明用途）
-└── legacy/          # 已弃用脚本（旧版 MCP / 背景扫描入口；保留作历史参考）
-
-standalone/          # 独立分析脚本（不依赖主流水线，自包含）+ 独立运行产出的 JSON
-optimization/        # 重构/优化设计文档与决策记录（按日期目录）
-docs/superpowers/    # plans/ + specs/ 重构与硬化设计稿
-```
-
-**2026-04-27 重构落地要点**：
-- 共享工具模块化：原本散落在 stage 脚本里的数值转换、JSON 读写、key 别名、缺口管理逻辑统一到 `src/datasource/utils/`，新增/修改流水线代码应优先复用这些 helper（`to_float`、`load_json`/`load_diagnostic_json`、`canonical_monetary_key`、`flatten_missing_items` 等）
-- Pring 拆分：`pring_analyzer.py` 仅作入口，纯函数评分/前导指标/摘要/阶段分配分别在 `pring/scoring.py`、`pring/leading_indicator.py`、`pring/summaries.py`、`pring/stage_allocations.py`，golden 回放夹具在 `tests/fixtures/pring_golden/`
-- canonical missing_items：`metadata.missing_items`（按 category 分组的 dict）是权威来源；顶层 `missing_items` list、`gap_monitor` 现作为兼容视图，由 Stage2.5 自动同步，不要手写
-- 脚本目录分层：`scripts/`（活动）/ `scripts/utility/`（辅助）/ `scripts/archive/`（归档）/ `scripts/legacy/`（弃用）。新工具放 `scripts/` 或 `scripts/utility/`，不要在 `legacy/` 下新增内容
-
-**关键文件**:
-- `src/datasource/models/market_data_contract.py`: Pydantic 数据契约（StockIndex/Commodity/Forex/Bond/FundFlow/Macro/MonetaryPolicy）；FundFlowData 内置 `_parse_amount()` 处理万亿/千亿/亿单位转换；BondYieldData 含 `date/as_of_date/report_period` 三字段，报告展示"最近可用日期"（优先级 as_of_date > date > report_period）
-- `src/datasource/config/search_profiles.py`: Tavily 搜索配置（query/域名/阈值），26KB
-- `src/datasource/config/indices_config.py`: 技术指标映射配置，32KB
-- `src/datasource/engines/deepseek_reasoner.py`: DeepSeek LLM 抽取引擎
-- `src/datasource/engines/stage2_task_planner.py`: Stage2 任务分解与调度
-
-**配置文件**:
-- `config/policy_rules.yaml`: 策略规则 — `extract_422_threshold: 1`, `low_score_threshold: 0.2`, `critical_missing_keys: [dxy, bdi, rrr, mlf]`, `min_trading_days: 100`
-- `config/quality_thresholds.json`: 数据质量阈值 — 波动率(商品10%/外汇2%/股指8%)、债券50bp、过期时间(商品外汇1h/债券6h/宏观720h)
-
-**关键数据路径**:
-- `data/trend_history/min/series/{category}/{symbol}.json`: 滚动时序数据
-- `data/trend_history/min/events/{indicator}.json`: 宏观事件序列
-- `data/cache/tavily_cache.sqlite`: Tavily 搜索缓存（跨日复用）
-- `logs/runs/YYYYMMDD/observability.json`: Stage2 指标级耗时/来源统计（score_filtered_drop, cache_hit_rate, avg_elapsed_ms 等）
-
-### Key Patterns
+### Key Pattern
 
 ```python
 from datasource import get_manager
@@ -290,41 +231,6 @@ response = await manager.get_forex_data("DXY", start, end)  # 返回 DataRespons
 - 股指 200 交易日 / 外汇商品债券 121 交易日 / 资金流 120 交易日 / 宏观事件 24 条
 - Stage1 写入 `is_partial=true`，Stage2.5 最终覆盖
 - CN10Y/CN10Y_CDB 禁止 ETF 代理写入；禁止从 `reports/*.md` 反向回填
-
-## WebSearch JSON Schema
-
-所有字段必须包含**可解析的数字**，不能是描述性文本。
-
-| Category | Required Fields | Example |
-|----------|----------------|---------|
-| commodities | `symbol`, `name`, `current_price`, `unit` | `{"symbol": "GC=F", "current_price": 2650.5, "unit": "$/oz"}` |
-| forex | `pair`, `name`, `current_rate` | `{"pair": "USDCNY", "current_rate": 7.248}` |
-| bonds | `symbol`, `name`, `current_yield` | `{"symbol": "US10Y", "current_yield": 4.18}` |
-| fund_flow | `recent_5d`, `total_120d`, `trend`, `source` | `{"recent_5d": 85.6, "total_120d": 1250.0, "trend": "流入"}` |
-
-**Critical**: `recent_5d`/`total_120d` 必须是数字（非"波动"/"净流入"）。
-`_manual.json` 中凡填写了数值的条目必须提供 `source_url`（或在 `source/note` 中附 URL）。
-
-## Data Coverage
-
-**TuShare 可得** (Stage1):
-- 宏观: GDP, CPI, PPI, PMI, M0/M1/M2, 社融
-- 股指日线、两融余额
-
-**TuShare 直采口径注意**:
-- `fund_flow.etf`: 可用 `etf_share_size.total_size` 计算全市场规模 delta（`metric_basis=etf_total_size_delta`），不是新闻净流入；窗口不完整继续 Stage2/Stage2.5。
-- `DXY`: 可探测 `fx_obasic` `FX_BASKET`/`USDOLLAR.FXCM` + `fx_daily`，报告标注 TuShare USDOLLAR proxy，不写 ICE DXY。
-- `USDCNH`: `fx_daily` 需用 `ts_code=USDCNH.FXCM`（`USDCNH` 常返回空）
-- `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；空则回退 `curve_type=1`
-- `CN10Y_CDB`: 无稳定 TuShare 口径，需 WebSearch/手工注入；利差估算保留 `is_estimated=True`
-- 不得静默用近似 TuShare 接口替换 `GC=F/CL=F/BZ=F/HG=F`、`BCOM/GSG`、`CN10Y_CDB`、`industrial/industrial_sales/bdi`、`reserve_ratio/reverse_repo/mlf`。
-
-**必须 WebSearch** (Stage2/2.5):
-- 外汇: DXY（Stage1 proxy 不可得或不完整时）, USDCNY/USDCNH
-- 债券: CN10Y, CN10Y_CDB, US10Y
-- 商品: BDI（波罗的海干散货指数）
-- 资金流: 北向/南向/ETF（Stage1 ETF 规模窗口不完整时）
-- 宏观: 工业增加值、工业营收
 
 ## Environment Variables
 
@@ -364,20 +270,6 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 **诊断工具**:
 - `bash run_clean.sh python scripts/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
 - `bash run_clean.sh python scripts/stage2_low_score_audit.py --date YYYY-MM-DD` — 审计低分仍进入抽取的指标
-
-## Output Files
-
-| Stage | Output | Purpose |
-|-------|--------|---------|
-| Stage1 | `data/runs/${DATE_NH}/market_data.json` | 原始 API 数据 |
-| Stage2 | `data/runs/${DATE_NH}/market_data_stage2.json` | 增强后数据 |
-| Stage2 | `data/runs/${DATE_NH}/gap_monitor.json` | 缺失数据追踪 |
-| Stage2 | `data/runs/${DATE_NH}/websearch_results_auto.json` | Tavily 搜索结果 |
-| Stage2 | `logs/runs/${DATE_NH}/observability.json` | 指标级耗时/失败统计 |
-| Stage2 | `data/runs/${DATE_NH}/quality_metrics.json` | 数据质量评估 |
-| Stage2.5 | `data/runs/${DATE_NH}/market_data_complete.json` | 注入完成后数据 |
-| Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
-| Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告（脚本：`scripts/stage4_report_generator.py`；`tests/scripts/generate_simple_report_test.py` 为兼容入口） |
 
 ## Code Standards
 
