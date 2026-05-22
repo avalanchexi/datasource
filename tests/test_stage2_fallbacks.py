@@ -795,6 +795,30 @@ class EmptyExaClient:
         return {"results": [], "query": kwargs.get("query") or "empty"}
 
 
+class FirstSuccessThenEmptyExaClient:
+    def __init__(self):
+        self.calls = []
+
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        query = kwargs.get("query") or "quote"
+        if len(self.calls) == 1:
+            return {
+                "results": [
+                    {
+                        "url": "https://example.com/quote",
+                        "title": query,
+                        "snippet": f"{query} 收盘 1234.5",
+                        "content": f"{query} 收盘 1234.5",
+                        "score": 0.91,
+                        "published_date": "2026-05-22",
+                    }
+                ],
+                "query": query,
+            }
+        return {"results": [], "query": query}
+
+
 class ValueExtractor:
     def __init__(self):
         self.calls = 0
@@ -975,6 +999,10 @@ class FailingFallbackExtractor:
 )
 def test_tavily_quota_error_classifier_covers_common_text_variants(message):
     assert _is_tavily_quota_error(RuntimeError(message)) is True
+
+
+def test_tavily_quota_error_classifier_does_not_treat_generic_usage_as_limit():
+    assert _is_tavily_quota_error(RuntimeError("invalid usage parameter")) is False
 
 
 @pytest.mark.anyio("asyncio")
@@ -1649,6 +1677,104 @@ async def test_fund_flow_field_retry_tavily_432_fails_over_current_field_to_exa(
 
 
 @pytest.mark.anyio("asyncio")
+async def test_queue_fund_flow_field_retry_tavily_432_without_exa_writes_quota_skeleton(tmp_path):
+    class FieldRetryLimitTavilyClient:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, **kwargs):
+            self.calls.append(kwargs)
+            query = kwargs.get("query") or ""
+            if "120日" in query:
+                raise _make_tavily_http_error(
+                    432,
+                    text='{"detail":"Key limit exceeded for current plan"}',
+                    headers={"x-request-id": "tavily-field-no-exa-432"},
+                )
+            return {
+                "results": [{
+                    "url": "https://data.eastmoney.com/hsgt/",
+                    "title": "沪深港通资金流向",
+                    "snippet": "北向资金近5日净流入5.0亿元。",
+                    "content": "北向资金近5日净流入5.0亿元。",
+                    "score": 0.95,
+                    "published_date": "2026-05-22",
+                }],
+                "query": query,
+            }
+
+        async def extract(self, **kwargs):  # pragma: no cover - disable_extract=True
+            raise AssertionError("Tavily extract should not run in this test")
+
+    class PartialFundFlowExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            return {
+                "recent_5d": 5.0,
+                "trend": "流入",
+                "source_url": snippets[0].get("url") if snippets else None,
+                "confidence": 0.8,
+                "manual_required": False,
+                "manual_reason": None,
+            }
+
+    stats = {}
+    tavily = FieldRetryLimitTavilyClient()
+    tasks = [{
+        "task_id": "fund-flow-northbound-field-retry-432-no-exa",
+        "indicator_key": "northbound",
+        "stage_phase": "fund_flow",
+        "category": "fund_flow",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "query": "北向资金 近5日",
+        "field_queries": {"total_120d": ["北向资金 120日"]},
+        "created_at": 1700000000,
+        "preferred_domains": ["data.eastmoney.com"],
+    }]
+    payload = {"fund_flow": {"northbound": {"type": "northbound", "recent_5d": None, "total_120d": None}}}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        payload,
+        tavily,
+        None,
+        PartialFundFlowExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=True,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=True,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert len(failures) == 1
+    assert len(websearch_results) == 1
+    failure = failures[0]
+    assert failure["manual_reason"] == "quota_or_rate_limit"
+    assert failure["tavily_http_status"] == 432
+    assert failure["tavily_request_id"] == "tavily-field-no-exa-432"
+    assert "Key limit exceeded" in failure["tavily_error_message"]
+    assert failure["field_attempts"][0]["field_scope"] == "total_120d"
+    assert websearch_results[0]["manual_reason"] == "quota_or_rate_limit"
+    assert websearch_results[0]["tavily_http_status"] == 432
+    assert websearch_results[0]["field_attempts"][0]["search_backend"] == "tavily"
+    assert stats["tavily_limit_error_count"] == 1
+    assert stats["tavily_error_samples"][0]["tavily_request_id"] == "tavily-field-no-exa-432"
+    assert stats.get("queue_dead_letters", 0) == 0
+
+
+@pytest.mark.anyio("asyncio")
 async def test_tavily_quota_exa_error_metadata_is_audited(tmp_path):
     client = QuotaTavilyClient()
     exa = ErrorExaClient()
@@ -1798,6 +1924,78 @@ async def test_tavily_quota_exa_empty_records_manual_required(tmp_path):
     assert failures[0]["manual_reason"] == "exa_empty"
     assert websearch_results[0]["search_backend"] == "exa"
     assert websearch_results[0]["manual_reason"] == "exa_empty"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_active_empty_skeleton_preserves_tavily_diagnostics_after_failover(tmp_path):
+    client = Limit432TavilyClient()
+    exa = FirstSuccessThenEmptyExaClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "quota-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "active-exa-empty-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.calls == 1
+    assert len(exa.calls) == 2
+    assert len(completed) == 1
+    assert len(failures) == 1
+    failure = failures[0]
+    assert failure["indicator_key"] == "CL=F"
+    assert failure["search_backend"] == "exa"
+    assert failure["manual_reason"] == "exa_empty"
+    assert failure["tavily_http_status"] == 432
+    assert failure["tavily_request_id"] == "tavily-search-432"
+    assert "Key limit exceeded" in failure["tavily_error_message"]
+    websearch_item = next(item for item in websearch_results if item.get("indicator_key") == "CL=F")
+    assert websearch_item["manual_reason"] == "exa_empty"
+    assert websearch_item["tavily_http_status"] == 432
+    assert websearch_item["task"]["tavily_request_id"] == "tavily-search-432"
+    assert websearch_item["extraction"]["tavily_http_status"] == 432
 
 
 @pytest.mark.anyio("asyncio")

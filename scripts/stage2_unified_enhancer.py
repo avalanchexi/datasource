@@ -392,8 +392,11 @@ def _text_indicates_quota_or_rate_limit(text: Any) -> bool:
             "rate_limited",
             "ratelimit",
             "too many requests",
-            "usage",
             "usage limit",
+            "usage exceeded",
+            "usage quota",
+            "usage cap",
+            "usage capped",
             "plan limit",
             "key limit",
             "paygo",
@@ -2689,6 +2692,14 @@ async def _execute_tasks(
             samples.append(metadata)
         return metadata
 
+    def _get_or_record_tavily_limit_metadata(source: Any) -> Dict[str, Any]:
+        nonlocal active_tavily_limit_metadata
+        metadata = getattr(source, "tavily_metadata", None)
+        if isinstance(metadata, dict) and metadata:
+            active_tavily_limit_metadata = metadata
+            return metadata
+        return _record_tavily_limit_error(source)
+
     def _activate_exa_failover(task: Dict[str, Any], reason: str) -> bool:
         nonlocal active_search_backend, failover_reason
         if not exa_client:
@@ -3581,6 +3592,9 @@ async def _execute_tasks(
                     }
                     if not _activate_exa_failover(task, "quota_or_rate_limit"):
                         attempts = [tavily_attempt]
+                        setattr(exc, "tavily_metadata", tavily_metadata)
+                        setattr(exc, "query_attempts", attempts)
+                        setattr(exc, "field_attempts", attempts)
                         raise
                     active_backend = "exa"
                     field_search_backend = "exa"
@@ -3834,7 +3848,34 @@ async def _execute_tasks(
                     }
                 )
             except Exception as exc:
-                if attempt_idx <= queue_retry_limit:
+                if _is_tavily_quota_error(exc):
+                    tavily_metadata = _get_or_record_tavily_limit_metadata(exc)
+                    _mark_tavily_quota_unavailable()
+                    query_attempts = getattr(exc, "query_attempts", None) or task.get("query_attempts") or []
+                    field_attempts = getattr(exc, "field_attempts", None) or []
+                    if field_attempts:
+                        query_attempts = list(query_attempts)
+                        for field_attempt in field_attempts:
+                            if field_attempt not in query_attempts:
+                                query_attempts.append(field_attempt)
+                    task_record, websearch_item = _build_tavily_fast_switch_records(
+                        task,
+                        attempt_index=attempt_idx,
+                        elapsed_ms=0,
+                        error=exc,
+                        query_attempts=query_attempts,
+                        tavily_metadata=tavily_metadata,
+                    )
+                    if field_attempts:
+                        task_record["field_attempts"] = field_attempts
+                        websearch_item["field_attempts"] = field_attempts
+                        if isinstance(websearch_item.get("task"), dict):
+                            websearch_item["task"]["field_attempts"] = field_attempts
+                    failures.append(task_record)
+                    manual_required_keys.append(task_record["indicator_key"])
+                    _append_task_log(task_log_path, task_record)
+                    websearch_results.append(websearch_item)
+                elif attempt_idx <= queue_retry_limit:
                     stats["queue_requeued"] += 1
                     await queue.put((task, snippets, attempt_idx + 1))  # type: ignore
                 else:
@@ -3923,6 +3964,7 @@ async def _execute_tasks(
                         task,
                         attempt_index=0,
                         elapsed_ms=0,
+                        tavily_metadata=active_tavily_limit_metadata,
                     )
                     failures.append(task_record)
                     manual_required_keys.append(task_record["indicator_key"])
@@ -3992,7 +4034,9 @@ async def _execute_tasks(
                                     reason=exa_note,
                                     attempt_index=attempt,
                                     elapsed_ms=elapsed_ms,
+                                    query_attempts=query_attempts,
                                     exa_metadata=exa_metadata,
+                                    tavily_metadata=active_tavily_limit_metadata,
                                 )
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
@@ -4900,7 +4944,7 @@ async def _execute_tasks(
                         websearch_results.append(websearch_item)
                         break
                     if _is_tavily_quota_error(exc):
-                        tavily_metadata = _record_tavily_limit_error(exc)
+                        tavily_metadata = _get_or_record_tavily_limit_metadata(exc)
                         _mark_tavily_quota_unavailable()
                         task_record, websearch_item = _build_tavily_fast_switch_records(
                             task,
