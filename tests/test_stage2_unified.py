@@ -794,6 +794,28 @@ def test_stage2_exa_fallback_can_be_enabled_explicitly(monkeypatch):
     assert stage2._should_enable_exa_fallback(args) is True
 
 
+def test_stage2_exa_client_initializes_for_quota_failover_when_key_present(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["stage2_unified_enhancer.py", "--market-data", "market.json"])
+    monkeypatch.setenv("EXA_API_KEY", "test-exa-key")
+    monkeypatch.delenv("STAGE2_ENABLE_EXA_FALLBACK", raising=False)
+
+    args = stage2._parse_args()
+
+    assert stage2._should_initialize_exa_client(args) is True
+    assert stage2._should_enable_exa_fallback(args) is False
+
+
+def test_stage2_exa_client_not_initialized_without_key_or_explicit_fallback(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["stage2_unified_enhancer.py", "--market-data", "market.json"])
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("STAGE2_ENABLE_EXA_FALLBACK", raising=False)
+
+    args = stage2._parse_args()
+
+    assert stage2._should_initialize_exa_client(args) is False
+    assert stage2._should_enable_exa_fallback(args) is False
+
+
 def test_stage2_deepseek_breaker_defaults_from_env(monkeypatch):
     monkeypatch.setattr("sys.argv", ["stage2_unified_enhancer.py", "--market-data", "market.json"])
     monkeypatch.setenv("DEEPSEEK_BREAKER_CONSECUTIVE_TIMEOUTS", "7")

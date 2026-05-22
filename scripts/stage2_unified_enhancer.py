@@ -4997,6 +4997,10 @@ def _should_enable_exa_fallback(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "enable_exa_fallback", False)) or env_value in {"1", "true", "yes", "on"}
 
 
+def _should_initialize_exa_client(args: argparse.Namespace) -> bool:
+    return bool(os.getenv("EXA_API_KEY")) or _should_enable_exa_fallback(args)
+
+
 def _load_tasks_from_file(path: Path) -> List[Dict[str, Any]]:
     tasks = []
     with path.open("r", encoding="utf-8") as f:
@@ -5215,17 +5219,26 @@ async def main() -> int:
         ),
     )
     exa_client = None
-    exa_enabled = _should_enable_exa_fallback(args)
-    if exa_enabled and AsyncExaClient and os.getenv("EXA_API_KEY"):
+    exa_api_key = os.getenv("EXA_API_KEY")
+    if _should_initialize_exa_client(args) and exa_api_key and AsyncExaClient:
         exa_client = AsyncExaClient(
-            api_key=os.getenv("EXA_API_KEY"),
+            api_key=exa_api_key,
             cache=cache,
             max_concurrency=2,
         )
-    elif exa_enabled and os.getenv("EXA_API_KEY"):
+        if _should_enable_exa_fallback(args):
+            logger.info("[Stage2] Exa fallback enabled.")
+        else:
+            logger.info(
+                "[Stage2] EXA_API_KEY 已设置；将仅用于 Tavily quota/rate-limit failover，"
+                "非 quota Exa fallback 仍需 --enable-exa-fallback。"
+            )
+    elif _should_enable_exa_fallback(args) and exa_api_key:
         logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Exa 兜底将被跳过。")
-    elif os.getenv("EXA_API_KEY"):
-        logger.info("[Stage2] EXA_API_KEY 已设置，但 Exa fallback 默认关闭；如需启用请传 --enable-exa-fallback。")
+    elif _should_enable_exa_fallback(args) and not exa_api_key:
+        logger.warning("[Stage2] Exa fallback requested but EXA_API_KEY is not set")
+    elif exa_api_key and not AsyncExaClient:
+        logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Tavily quota Exa failover 将被跳过。")
     extractor = DeepSeekExtractionAgent(
         model=args.deepseek_model,
         base_url=args.deepseek_base_url,
@@ -5290,6 +5303,7 @@ async def main() -> int:
                 deepseek_breaker_consecutive_timeouts=args.deepseek_breaker_consecutive_timeouts,
                 deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
                 deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
+                allow_exa_non_quota_fallback=_should_enable_exa_fallback(args),
             )
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
@@ -5327,6 +5341,7 @@ async def main() -> int:
                 deepseek_breaker_consecutive_timeouts=args.deepseek_breaker_consecutive_timeouts,
                 deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
                 deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
+                allow_exa_non_quota_fallback=_should_enable_exa_fallback(args),
             )
             completed_tasks.extend(retry_completed)
             failures.extend(retry_failures)
