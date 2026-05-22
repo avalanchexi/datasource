@@ -6,21 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-统一金融数据集成框架，支持 TuShare、AKShare、InternationalFinance 数据源自动故障转移。集成 Tavily+DeepSeek 网络搜索增强（Exa 默认关闭、仅显式 opt-in，当前不进入日常路径）、Pring 六阶段经济周期分析 (V4.0 三层框架)，以及 120 日背景扫描报告自动生成。
+统一金融数据集成框架，支持 TuShare、AKShare、InternationalFinance 数据源自动故障转移。集成 Tavily-first + DeepSeek 网络搜索增强（配置 `EXA_API_KEY` 时支持 Tavily quota/rate/payment failover；非 quota fallback 仍需显式 opt-in）、Pring 六阶段经济周期分析 (V4.0 三层框架)，以及 120 日背景扫描报告自动生成。
 
-**核心数据流**: Stage1 (API采集) → Stage2 (Tavily+DeepSeek增强) → Stage2.5 (手工注入补缺) → Stage3 (Pring分析) → Stage4 (报告生成)
+**核心数据流**: Stage1 (API采集) → Stage2 (Tavily-first + DeepSeek；必要时 Exa quota failover) → Stage2.5 (手工注入补缺) → Stage3 (Pring分析) → Stage4 (报告生成)
 
 > 执行参数与口径以 `AGENTS.md` 为准；本文件保留最小操作指引与高频约束。
 
 ## Critical Constraints
 
-- **Tavily 每日限制**: Stage2 Tavily search/extract **每日只能运行一次**。遇到 422 会自动回退 DeepSeek 从原始 snippets 抽取；遇到 quota/rate limit 会同轮 fast-switch 为 `manual_required` skeleton。不要重跑 Tavily，查看 `tavily_unavailable_reason`、`retrieval_diagnostics`、`manual_reason_breakdown` 后转 Stage2.5 补数
+- **Tavily 每日限制**: Stage2 Tavily search/extract **每日只能运行一次**。遇到 422 会自动回退 DeepSeek 从原始 snippets 抽取；遇到 402/403/429/quota/rate-limit/payment 且有 `EXA_API_KEY` 时同轮切到 `exa_active`，否则转 `manual_required` skeleton。不要重跑 Tavily
 - **数据来源约束**: 严禁从历史 `reports/*.md` 中抓取或复用数据；所有数据必须来自 API 实时获取或 stage 计算产出
 - **完整度要求**: Stage3 需要 `data_completeness ≥ 80%`，否则报告会有缺失
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
-- **Exa 默认关闭**: 当前先走 Tavily-first 提升命中率，Exa 不进入日常路径；只有传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时才使用
+- **Exa failover 边界**: Stage2 保持 Tavily-first；`EXA_API_KEY` 用于 Tavily quota/rate/payment failover。环境/proxy/SOCKS/DNS/TLS 错误和普通 Tavily extract 422 不切 Exa；非 quota fallback 仍需 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1`
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
-- **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily) -> Stage2.5`，当前流程不使用旧版外部补数链路
+- **采集优先级固定**: `TuShare(Stage1) -> Stage2(Tavily-first，必要时 Exa quota failover) -> Stage2.5`，当前流程不使用旧版外部补数链路
 
 ## Quick Start
 
@@ -136,7 +136,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 | **Fast (仅补缺)** | `--extraction-backend regex --disable-extract` |
 | **重试指定缺口** | `--tasks USDCNY,northbound,etf` |
 | **资金流后端** | 固定 `--fund-flow-backend tavily`（当前唯一支持） |
-| **Exa fallback** | 默认关闭；需 `EXA_API_KEY` 且显式传 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1` |
+| **Exa failover** | Stage2 仍 Tavily-first；有 `EXA_API_KEY` 时 Tavily quota/rate/payment 自动同轮切 Exa，非 quota fallback 才需要 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1` |
 
 > 详细参数说明见 AGENTS.md "Stage2 Performance / Timeout Tips"
 
@@ -151,8 +151,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - `USDCNY` 是 quote profile 的受控例外：ChinaMoney/CFETS 官方表格页可走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
 - dated quote profiles 会用 `bad_url_patterns` 和 `value_evidence_miss` 降权/剔除概念页、规格页、annual weights、forecast 等不可写报告页面。
 - `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
-- Tavily quota/rate limit 后同轮 fast-switch 到 `manual_required` skeleton；不要新增 quota probe 或重跑 Tavily，查看 `tavily_unavailable_reason=quota_or_rate_limit`、`retrieval_diagnostics`、`manual_reason_breakdown`。
-- Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。失败分类需结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`tavily_unavailable_reason=quota_or_rate_limit`、`field_retry_merged_count/field_retry_missing_fields`。
+- Tavily quota/rate/payment 后，若有 `EXA_API_KEY` 会从 `tavily_active` 切到 `exa_active`，重试当前失败任务并让剩余任务走 Exa；没有 Exa 或 Exa 不可用才转 `manual_required` skeleton。不要新增 quota probe 或重跑 Tavily。
+- Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，已有值跳过看 `task_skipped_existing`。Exa failover 看 `search_backend_final`、`tavily_to_exa_failover_count`、`exa_failover_success/empty/error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`；其他失败分类结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`field_retry_merged_count/field_retry_missing_fields`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时会自动触发一次定向 query 重试（补充单位、机构以及任务已有的日期/期次上下文；`daily_quote` 不强行追加宏观月份）。
 - Stage2.5 在接收 Stage2 `results` 结构时，会保留 `manual_required/manual_reason` 并生成 `metadata.manual_required` 待补全骨架（含候选 `source_url/query/query_used`，按 `category:indicator_key` 去重）。
 - official override 仅用于代码内 `official manual override allowlist`：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。只有可信官方 HTTPS URL evidence 才会把显式 `is_estimated=True` 正规化为 `False`，并追加 `manual_official_not_estimated`。
@@ -334,7 +334,7 @@ TAVILY_API_KEY=xxx     # Required: Stage2
 DEEPSEEK_API_KEY=xxx   # Required: LLM extraction
 DEEPSEEK_MODEL=deepseek-v4-pro  # Default; DEEPSEEK_MODEL or CLI args can override
 DEEPSEEK_EXTRACT_MAX_TOKENS=900  # Optional: Stage2 extraction JSON token budget
-EXA_API_KEY=xxx        # Optional, default off; requires --enable-exa-fallback / STAGE2_ENABLE_EXA_FALLBACK=1
+EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment failover; non-quota fallback still needs --enable-exa-fallback / STAGE2_ENABLE_EXA_FALLBACK=1
 ```
 
 ## Troubleshooting
@@ -343,8 +343,10 @@ EXA_API_KEY=xxx        # Optional, default off; requires --enable-exa-fallback /
 |------|----------|
 | DeepSeek 超时 | 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`；仍不稳用 `--extraction-backend regex --disable-extract` |
 | DeepSeek JSON 失败 | `deepseek_json_truncated` 优先调 token 或转 Stage2.5；`deepseek_json_parse_error` 查 prompt/schema 与 snippets |
-| Tavily extract 422 | 自动回退 DeepSeek；仍不稳用 `--disable-extract` |
+| Tavily extract 422 | 自动回退 DeepSeek；不会激活全局 Exa failover，仍不稳用 `--disable-extract` |
 | USDCNY 官方表格为空 | 看 `official_domain_filter_empty`；不要放宽到非官方 fallback，转 Stage2.5 补可信官方来源 |
+| Tavily quota/rate/payment | 有 `EXA_API_KEY` 时同轮切 Exa；看 `search_backend_final`、`tavily_to_exa_failover_count`、`exa_failover_*`、`exa_error_breakdown`。无 Exa 或 `exa_unavailable` 时转 Stage2.5 |
+| Stage2 代理/DNS/TLS 错误 | 环境错误不触发 Exa；重跑 `bash run_preflight.sh`，确认 `DATASOURCE_NETWORK_MODE` 和代理设置 |
 | Tavily 当日重复 422 | **不要重试 Stage2**；改用 Stage2.5 手工注入 |
 | 日志出现 `deepseek_no_value/no_deepseek_key` | 视为 `manual_required`，优先使用 `metadata.manual_required` 骨架补数 |
 | Stage3 `block_stage3=True` 但数据已注入 | 检查 `missing_items`、`policy_evaluation.json`、`gap_monitor.json`，补齐/修正 manual JSON 后重跑 Stage2.5/Stage3 |
