@@ -3235,6 +3235,24 @@ async def _execute_tasks(
             diagnostics = dict(active_tavily_limit_metadata)
         return diagnostics
 
+    def _field_retry_used_exa(field_attempts: List[Dict[str, Any]]) -> bool:
+        return any(attempt.get("search_backend") == "exa" for attempt in field_attempts or [])
+
+    def _promote_task_to_exa_after_field_retry(
+        task: Dict[str, Any],
+        field_attempts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not _field_retry_used_exa(field_attempts):
+            return task
+        promoted = {
+            **task,
+            "search_backend": "exa",
+            "search_backend_state": "exa_active",
+            "failover_reason": failover_reason or "quota_or_rate_limit",
+        }
+        promoted.update(active_tavily_limit_metadata)
+        return promoted
+
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
         text_parts: List[str] = []
@@ -3819,6 +3837,7 @@ async def _execute_tasks(
                         _append_task_log(task_log_path, task_record)
                         websearch_results.append(websearch_item)
                         continue
+                    task = _promote_task_to_exa_after_field_retry(task, field_attempts)
                 manual_required = bool(extraction.get("manual_required"))
                 manual_reason = extraction.get("manual_reason")
                 if manual_reason:
@@ -4867,6 +4886,11 @@ async def _execute_tasks(
                                 manual_required_keys.append(task_record["indicator_key"])
                                 websearch_results.append(websearch_item)
                                 break
+                            task_for_log = _promote_task_to_exa_after_field_retry(
+                                task_for_log,
+                                field_attempts,
+                            )
+                            search_backend = task_for_log.get("search_backend") or search_backend
                         # 对资金流再尝试基于片段推断方向，补充 note，减少 manual_required
                         if is_fund_flow and extraction.get("value") is not None:
                             inferred_dir = _infer_flow_direction(snippets)

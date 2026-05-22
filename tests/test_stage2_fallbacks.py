@@ -1657,10 +1657,12 @@ async def test_fund_flow_field_retry_tavily_432_fails_over_current_field_to_exa(
 
     assert failures == []
     assert len(completed) == 1
+    assert completed[0]["search_backend"] == "exa"
     assert completed[0]["tavily_http_status"] == 432
     assert completed[0]["tavily_request_id"] == "tavily-field-432"
     assert payload["fund_flow"]["northbound"]["recent_5d"] == pytest.approx(5.0)
     assert payload["fund_flow"]["northbound"]["total_120d"] == pytest.approx(120.0)
+    assert payload["fund_flow"]["northbound"]["source"] == "exa+deepseek"
     assert stats["tavily_to_exa_failover"] is True
     assert stats["search_backend_final"] == "exa"
     assert stats["tavily_limit_error_count"] == 1
@@ -1669,6 +1671,7 @@ async def test_fund_flow_field_retry_tavily_432_fails_over_current_field_to_exa(
     assert len(exa.calls) == 1
     assert "120日" in (exa.calls[0].get("query") or "")
     assert websearch_results
+    assert websearch_results[0]["search_backend"] == "exa"
     field_attempts = websearch_results[0]["field_attempts"]
     assert any(
         attempt.get("field_scope") == "total_120d" and attempt.get("search_backend") == "exa"
