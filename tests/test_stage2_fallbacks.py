@@ -754,6 +754,18 @@ class ProxyErrorTavilyClient:
         raise AssertionError("extract should not run after proxy environment failure")
 
 
+class DnsErrorTavilyClient:
+    def __init__(self):
+        self.calls = 0
+
+    async def search(self, **kwargs):
+        self.calls += 1
+        raise RuntimeError("Temporary failure in name resolution")
+
+    async def extract(self, **kwargs):  # pragma: no cover - should not be called
+        raise AssertionError("extract should not run after DNS environment failure")
+
+
 class ExtractProxyErrorTavilyClient:
     def __init__(self):
         self.search_calls = 0
@@ -1492,6 +1504,60 @@ async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_r
     assert len(task_log_records) == 2
     assert all(record["manual_required"] is True for record in task_log_records)
     assert all(record["manual_reason"] == "environment_proxy_error" for record in task_log_records)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_environment_dns_error_does_not_use_non_quota_exa_fallback(tmp_path):
+    client = DnsErrorTavilyClient()
+    exa = RecordingExaClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "dns-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        }
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+        allow_exa_non_quota_fallback=True,
+    )
+
+    assert client.calls == 1
+    assert len(exa.calls) == 0
+    assert completed == []
+    assert len(failures) == 1
+    assert failures[0]["manual_required"] is True
+    assert failures[0]["manual_reason"] == "environment_proxy_error"
+    assert websearch_results[0]["manual_required"] is True
+    assert websearch_results[0]["manual_reason"] == "environment_proxy_error"
 
 
 @pytest.mark.anyio("asyncio")

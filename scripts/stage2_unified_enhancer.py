@@ -306,6 +306,19 @@ def _is_environment_proxy_error(exc: Exception) -> bool:
     ]
     if any(token in msg for token in strong_markers):
         return True
+    connectivity_markers = [
+        "temporary failure in name resolution",
+        "name or service not known",
+        "dns",
+        "ssl",
+        "tls",
+        "certificate",
+        "connection reset",
+        "connection refused",
+        "network is unreachable",
+    ]
+    if any(token in msg for token in connectivity_markers):
+        return True
     if "socks" in msg and "proxy" in msg and re.search(r"socks[45]?h?://", msg):
         return True
     if "proxy error" not in msg and "proxyerror" not in msg:
@@ -1583,10 +1596,21 @@ def _field_retry_window_evidence(
     return "unknown"
 
 
-def _source_label_for_task(task: Dict[str, Any], source_url: Optional[str]) -> str:
+def _source_label_for_task(
+    task: Dict[str, Any],
+    source_url: Optional[str],
+    extraction_note: Optional[Any] = None,
+) -> str:
     backend = str(task.get("search_backend") or "tavily").lower()
+    extraction_backend = str(task.get("extraction_backend") or "").lower()
+    note = str(extraction_note or "").lower()
+    is_regex_extraction = extraction_backend == "regex" or "regex" in note
     if backend == "exa":
+        if is_regex_extraction:
+            return "exa_regex"
         return "exa+deepseek" if source_url else "exa_regex"
+    if is_regex_extraction:
+        return "tavily_regex"
     return "tavily+deepseek" if source_url else "tavily_regex"
 
 
@@ -1603,7 +1627,7 @@ def _apply_extraction(
     indicator_key = task["indicator_key"]
     note = extraction.get("note")
     source_url = extraction.get("source_url")
-    source_label = _source_label_for_task(task, source_url)
+    source_label = _source_label_for_task(task, source_url, note)
     as_of_date = extraction.get("as_of_date")
     report_period = extraction.get("report_period")
 

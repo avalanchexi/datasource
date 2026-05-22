@@ -341,6 +341,34 @@ def test_apply_extraction_uses_exa_regex_source_label_without_source_url():
     assert market_payload["commodities"][0]["source"] == "exa_regex"
 
 
+def test_apply_extraction_uses_exa_regex_source_label_with_source_url():
+    market_payload = {
+        "commodities": [
+            {"symbol": "CL=F", "name": "WTI原油", "current_price": None}
+        ]
+    }
+    task = {
+        "task_id": "exa-oil-regex",
+        "category": "commodities",
+        "indicator_key": "CL=F",
+        "search_backend": "exa",
+        "extraction_backend": "regex",
+        "unit": "$/bbl",
+    }
+    extraction = {
+        "value": 77.2,
+        "unit": "$/bbl",
+        "source_url": "https://example.com/oil",
+        "confidence": 0.55,
+        "note": "regex_only",
+    }
+
+    assert stage2._apply_extraction(market_payload, task, extraction, snippets=[])
+    item = market_payload["commodities"][0]
+    assert item["source"] == "exa_regex"
+    assert item["source_url"] == "https://example.com/oil"
+
+
 def test_apply_extraction_marks_official_macro_source_not_estimated():
     market_payload = {
         "metadata": {"date": "2026-05-21"},
