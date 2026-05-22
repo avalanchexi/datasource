@@ -369,6 +369,33 @@ def test_apply_extraction_uses_exa_regex_source_label_with_source_url():
     assert item["source_url"] == "https://example.com/oil"
 
 
+def test_apply_extraction_keeps_exa_deepseek_label_with_regex_direction_note():
+    market_payload = {
+        "commodities": [
+            {"symbol": "GC=F", "name": "COMEX黄金", "current_price": None}
+        ]
+    }
+    task = {
+        "task_id": "exa-gold-deepseek",
+        "category": "commodities",
+        "indicator_key": "GC=F",
+        "search_backend": "exa",
+        "extraction_backend": "deepseek",
+        "unit": "$/oz",
+    }
+    extraction = {
+        "value": 2400.5,
+        "unit": "$/oz",
+        "source_url": "https://example.com/gold",
+        "confidence": 0.9,
+        "note": "deepseek_structured regex_dir:inflow",
+    }
+
+    assert stage2._apply_extraction(market_payload, task, extraction, snippets=[])
+    item = market_payload["commodities"][0]
+    assert item["source"] == "exa+deepseek"
+
+
 def test_apply_extraction_marks_official_macro_source_not_estimated():
     market_payload = {
         "metadata": {"date": "2026-05-21"},

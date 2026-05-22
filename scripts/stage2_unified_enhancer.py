@@ -1604,7 +1604,12 @@ def _source_label_for_task(
     backend = str(task.get("search_backend") or "tavily").lower()
     extraction_backend = str(task.get("extraction_backend") or "").lower()
     note = str(extraction_note or "").lower()
-    is_regex_extraction = extraction_backend == "regex" or "regex" in note
+    is_regex_note = (
+        note.startswith("regex_only")
+        or note.startswith("regex_fallback")
+        or " regex_fallback" in note
+    )
+    is_regex_extraction = extraction_backend == "regex" or is_regex_note
     if backend == "exa":
         if is_regex_extraction:
             return "exa_regex"
