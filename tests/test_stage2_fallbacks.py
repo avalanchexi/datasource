@@ -3,7 +3,12 @@ import json
 from pathlib import Path
 import pytest
 
-from scripts.stage2_unified_enhancer import _execute_tasks, _is_tavily_quota_error
+from scripts.stage2_unified_enhancer import (
+    _execute_tasks,
+    _is_tavily_quota_error,
+    _is_tavily_quota_response,
+    _tavily_error_metadata,
+)
 
 
 class FakeClient422:
@@ -38,6 +43,61 @@ class FakeExtractorTimeout:
     def _fallback_extract(self, snips):
         # 提供一个数值兜底
         return 1.23, snips[0].get("url") if snips else None
+
+
+class FakeTavilyResponse:
+    def __init__(self, status_code, text="", headers=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+
+
+def _make_tavily_http_error(status_code, text="", headers=None):
+    exc = RuntimeError(f"Client error '{status_code} ' for url 'https://api.tavily.com/search'")
+    exc.response = FakeTavilyResponse(status_code, text=text, headers=headers)
+    return exc
+
+
+@pytest.mark.parametrize("status_code", [402, 403, 429, 432, 433])
+def test_tavily_quota_error_classifier_covers_http_limit_statuses(status_code):
+    exc = _make_tavily_http_error(status_code)
+
+    assert _is_tavily_quota_error(exc) is True
+
+
+@pytest.mark.parametrize("status_code", [402, 403, 429, 432, 433])
+def test_tavily_quota_response_classifier_covers_http_limit_statuses(status_code):
+    assert _is_tavily_quota_response({"status": status_code, "error": "limit reached"}) is True
+    assert _is_tavily_quota_response({"status": str(status_code), "detail": "limit reached"}) is True
+
+
+def test_tavily_error_metadata_is_safe_and_includes_status_message_and_request_id():
+    exc = _make_tavily_http_error(
+        432,
+        text='{"detail":"Key limit exceeded","api_key":"secret-value-that-must-not-leak"}',
+        headers={"x-request-id": "tavily-req-432"},
+    )
+
+    metadata = _tavily_error_metadata(exc)
+
+    assert metadata["tavily_http_status"] == 432
+    assert metadata["tavily_error_type"] == "RuntimeError"
+    assert metadata["tavily_request_id"] == "tavily-req-432"
+    assert "Key limit exceeded" in metadata["tavily_error_message"]
+    assert "secret-value-that-must-not-leak" not in metadata["tavily_error_message"]
+    assert "[redacted]" in metadata["tavily_error_message"]
+
+
+def test_tavily_error_metadata_reads_mixed_case_dict_request_id_header():
+    exc = _make_tavily_http_error(
+        432,
+        text='{"detail":"Key limit exceeded"}',
+        headers={"X-Request-Id": "tavily-mixed-case-432"},
+    )
+
+    metadata = _tavily_error_metadata(exc)
+
+    assert metadata["tavily_request_id"] == "tavily-mixed-case-432"
 
 
 @pytest.mark.anyio("asyncio")
@@ -883,6 +943,7 @@ class FailingFallbackExtractor:
         "Too Many Requests",
         "billing quota exhausted",
         "usage limit reached",
+        "usage exceeded",
     ],
 )
 def test_tavily_quota_error_classifier_covers_common_text_variants(message):

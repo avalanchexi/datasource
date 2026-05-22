@@ -282,9 +282,101 @@ def _prefer_latest_report_snippets(
     return filtered or snippets
 
 
+_TAVILY_LIMIT_STATUSES = {402, 403, 429, 432, 433}
+_TAVILY_ERROR_TEXT_LIMIT = 500
+_TAVILY_REQUEST_ID_HEADERS = (
+    "x-request-id",
+    "x-tavily-request-id",
+    "x-tavily-trace-id",
+    "request-id",
+)
+
+
+def _coerce_http_status(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_header_value(headers: Any, names: Tuple[str, ...]) -> Optional[str]:
+    if not headers:
+        return None
+    for name in names:
+        value = None
+        try:
+            value = headers.get(name)
+        except AttributeError:
+            value = None
+        if value is None:
+            try:
+                value = headers.get(name.lower())
+            except AttributeError:
+                value = None
+        if value is None:
+            try:
+                target = name.casefold()
+                for header_name, header_value in headers.items():
+                    if str(header_name).casefold() == target:
+                        value = header_value
+                        break
+            except AttributeError:
+                value = None
+        if value:
+            return str(value)
+    return None
+
+
+def _sanitize_tavily_error_text(text: Any) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    sanitized = re.sub(
+        r"(?i)(api[_-]?key[\"']?\s*[:=]\s*)[\"']?[^\"'\s,}]+",
+        r"\1[redacted]",
+        raw,
+    )
+    if len(sanitized) > _TAVILY_ERROR_TEXT_LIMIT:
+        return sanitized[:_TAVILY_ERROR_TEXT_LIMIT] + "...[truncated]"
+    return sanitized
+
+
+def _tavily_error_metadata(source: Any) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    response = getattr(source, "response", None)
+
+    if isinstance(source, dict):
+        status = _coerce_http_status(source.get("status") or source.get("status_code"))
+        message = " ".join(
+            str(source.get(key) or "")
+            for key in ("error", "message", "detail", "warning")
+            if source.get(key)
+        )
+        request_id = source.get("request_id") or source.get("tavily_request_id")
+        error_type = "tavily_response"
+    else:
+        status = _coerce_http_status(getattr(response, "status_code", None))
+        message = getattr(response, "text", None) or str(source or "")
+        request_id = _safe_header_value(
+            getattr(response, "headers", None),
+            _TAVILY_REQUEST_ID_HEADERS,
+        )
+        error_type = source.__class__.__name__
+
+    if status is not None:
+        metadata["tavily_http_status"] = status
+    metadata["tavily_error_type"] = error_type
+    sanitized_message = _sanitize_tavily_error_text(message)
+    if sanitized_message:
+        metadata["tavily_error_message"] = sanitized_message
+    if request_id:
+        metadata["tavily_request_id"] = str(request_id)
+    return metadata
+
+
 def _is_tavily_quota_error(exc: Exception) -> bool:
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    if status in {402, 403, 429}:
+    status = _coerce_http_status(getattr(getattr(exc, "response", None), "status_code", None))
+    if status in _TAVILY_LIMIT_STATUSES:
         return True
     return _text_indicates_quota_or_rate_limit(str(exc))
 
@@ -300,12 +392,18 @@ def _text_indicates_quota_or_rate_limit(text: Any) -> bool:
             "rate_limited",
             "ratelimit",
             "too many requests",
+            "usage",
             "usage limit",
+            "plan limit",
+            "key limit",
+            "paygo",
             "billing",
             "payment",
             "402",
             "403",
             "429",
+            "432",
+            "433",
         ]
     )
 
@@ -313,12 +411,8 @@ def _text_indicates_quota_or_rate_limit(text: Any) -> bool:
 def _is_tavily_quota_response(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
-    status = payload.get("status")
-    try:
-        status_int = int(status)
-    except (TypeError, ValueError):
-        status_int = None
-    if status_int in {402, 403, 429}:
+    status_int = _coerce_http_status(payload.get("status") or payload.get("status_code"))
+    if status_int in _TAVILY_LIMIT_STATUSES:
         return True
     return _text_indicates_quota_or_rate_limit(
         " ".join(
