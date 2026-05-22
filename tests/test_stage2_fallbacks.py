@@ -698,6 +698,39 @@ class ValueExtractor:
         }
 
 
+class FundFlowExaClient:
+    def __init__(self, content):
+        self.calls = []
+        self.content = content
+
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "results": [{
+                "url": "https://data.eastmoney.com/hsgt/",
+                "title": "沪深港通资金流向",
+                "snippet": self.content,
+                "content": self.content,
+                "score": 0.95,
+                "published_date": "2026-05-22",
+            }],
+            "query": kwargs.get("query"),
+        }
+
+
+class FundFlowExtractor:
+    async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+        return {
+            "recent_5d": 5.0,
+            "total_120d": 120.0,
+            "trend": "流入",
+            "source_url": snippets[0].get("url") if snippets else None,
+            "confidence": 0.8,
+            "manual_required": False,
+            "manual_reason": None,
+        }
+
+
 class ProxyErrorTavilyClient:
     def __init__(self):
         self.calls = 0
@@ -882,6 +915,198 @@ async def test_tavily_quota_exa_failover_applies_strict_required_quality_gate(tm
     assert websearch_results[0]["manual_required"] is True
     assert "strict_keyword_miss" in (websearch_results[0].get("manual_reason") or "")
     assert extractor.calls == 0
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_failover_runs_fund_flow_and_blocks_weak_window_evidence(tmp_path):
+    stats = {}
+    exa = FundFlowExaClient("新闻称近期北向资金呈净流入态势。")
+    tasks = [{
+        "task_id": "fund-flow-northbound",
+        "indicator_key": "northbound",
+        "stage_phase": "fund_flow",
+        "category": "fund_flow",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "query": "北向资金 近5日 120日",
+        "created_at": 1700000000,
+        "preferred_domains": ["data.eastmoney.com"],
+    }]
+    payload = {"fund_flow": {"northbound": {"type": "northbound", "recent_5d": None, "total_120d": None}}}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        payload,
+        QuotaTavilyClient(),
+        exa,
+        FundFlowExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert len(exa.calls) == 1
+    assert completed == []
+    assert len(failures) == 1
+    assert failures[0]["manual_reason"] in {"estimated_not_allowed", "fund_flow_window_missing"}
+    assert websearch_results[0]["search_backend"] == "exa"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_failover_fund_flow_direct_window_can_complete(tmp_path):
+    stats = {}
+    content = "北向资金近5日净流入5.0亿元，近120日累计净流入120.0亿元。"
+    exa = FundFlowExaClient(content)
+    tasks = [{
+        "task_id": "fund-flow-northbound-direct",
+        "indicator_key": "northbound",
+        "stage_phase": "fund_flow",
+        "category": "fund_flow",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "query": "北向资金 近5日 120日",
+        "created_at": 1700000000,
+        "preferred_domains": ["data.eastmoney.com"],
+    }]
+    payload = {"fund_flow": {"northbound": {"type": "northbound", "recent_5d": None, "total_120d": None}}}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        payload,
+        QuotaTavilyClient(),
+        exa,
+        FundFlowExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert failures == []
+    assert len(completed) == 1
+    assert len(exa.calls) == 1
+    assert websearch_results[0]["search_backend"] == "exa"
+    assert payload["fund_flow"]["northbound"]["window_evidence"] == "direct_window"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_failover_fund_flow_field_retry_uses_exa_not_tavily(tmp_path):
+    class FieldRetryExaClient:
+        def __init__(self):
+            self.calls = []
+
+        async def search(self, **kwargs):
+            self.calls.append(kwargs)
+            query = kwargs.get("query") or ""
+            if "120日" in query:
+                content = "北向资金近120日累计净流入120.0亿元。"
+            else:
+                content = "北向资金近5日净流入5.0亿元。"
+            return {
+                "results": [{
+                    "url": "https://data.eastmoney.com/hsgt/",
+                    "title": "沪深港通资金流向",
+                    "snippet": content,
+                    "content": content,
+                    "score": 0.95,
+                    "published_date": "2026-05-22",
+                }],
+                "query": query,
+            }
+
+    class PartialFundFlowExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            text = " ".join(str(s.get("content") or s.get("snippet") or "") for s in snippets)
+            if "120日" in text:
+                return {
+                    "total_120d": 120.0,
+                    "trend": "流入",
+                    "source_url": snippets[0].get("url") if snippets else None,
+                    "confidence": 0.8,
+                    "manual_required": False,
+                    "manual_reason": None,
+                }
+            return {
+                "recent_5d": 5.0,
+                "trend": "流入",
+                "source_url": snippets[0].get("url") if snippets else None,
+                "confidence": 0.8,
+                "manual_required": False,
+                "manual_reason": None,
+            }
+
+    stats = {}
+    exa = FieldRetryExaClient()
+    tavily = QuotaTavilyClient()
+    tasks = [{
+        "task_id": "fund-flow-northbound-field-retry",
+        "indicator_key": "northbound",
+        "stage_phase": "fund_flow",
+        "category": "fund_flow",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "query": "北向资金 近5日",
+        "field_queries": {"total_120d": ["北向资金 120日"]},
+        "created_at": 1700000000,
+        "preferred_domains": ["data.eastmoney.com"],
+    }]
+    payload = {"fund_flow": {"northbound": {"type": "northbound", "recent_5d": None, "total_120d": None}}}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        payload,
+        tavily,
+        exa,
+        PartialFundFlowExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert failures == []
+    assert len(completed) == 1
+    assert tavily.calls == 1
+    assert len(exa.calls) >= 2
+    assert websearch_results[0]["search_backend"] == "exa"
+    assert payload["fund_flow"]["northbound"]["total_120d"] == pytest.approx(120.0)
 
 
 @pytest.mark.anyio("asyncio")

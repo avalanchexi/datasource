@@ -1391,12 +1391,23 @@ def _augment_extraction_metadata(
         if rrr_type:
             extraction.setdefault("rrr_type", rrr_type)
     if indicator_key in {"northbound", "southbound", "etf", "margin"}:
+        if not extraction.get("unit") and any(token in text for token in ("亿元", "亿港元", "亿")):
+            extraction["unit"] = "亿元"
         metric_basis = _default_fund_flow_metric_basis(str(indicator_key), extraction)
         extraction.setdefault("metric_basis", metric_basis)
         recent_value = _safe_number(extraction.get("recent_5d"))
         total_value = _safe_number(extraction.get("total_120d"))
-        if recent_value is not None and total_value is not None:
-            source_snippets = _snippets_for_source_url(snippets, extraction.get("source_url"))
+        if _safe_number(extraction.get("value")) is None and recent_value is not None:
+            extraction["value"] = recent_value
+        source_snippets = _snippets_for_source_url(snippets, extraction.get("source_url"))
+        direct_evidence = {"direct_window", "direct_daily_series", "direct_balance_delta"}
+        field_retry_evidence = extraction.setdefault("field_retry_evidence", {})
+        if not isinstance(field_retry_evidence, dict):
+            field_retry_evidence = {}
+            extraction["field_retry_evidence"] = field_retry_evidence
+        recent_evidence = None
+        total_evidence = None
+        if recent_value is not None:
             recent_evidence = _field_retry_window_evidence(
                 "recent_5d",
                 str(indicator_key),
@@ -1405,6 +1416,16 @@ def _augment_extraction_metadata(
                 metric_basis,
                 recent_value,
             )
+            field_retry_evidence.setdefault(
+                "recent_5d",
+                {
+                    "source_url": extraction.get("source_url"),
+                    "source_tier": _infer_fund_flow_source_tier(extraction),
+                    "window_evidence": recent_evidence,
+                    "metric_basis": metric_basis,
+                },
+            )
+        if total_value is not None:
             total_evidence = _field_retry_window_evidence(
                 "total_120d",
                 str(indicator_key),
@@ -1413,7 +1434,16 @@ def _augment_extraction_metadata(
                 metric_basis,
                 total_value,
             )
-            direct_evidence = {"direct_window", "direct_daily_series", "direct_balance_delta"}
+            field_retry_evidence.setdefault(
+                "total_120d",
+                {
+                    "source_url": extraction.get("source_url"),
+                    "source_tier": _infer_fund_flow_source_tier(extraction),
+                    "window_evidence": total_evidence,
+                    "metric_basis": metric_basis,
+                },
+            )
+        if recent_value is not None and total_value is not None:
             if (
                 str(indicator_key) == "margin"
                 and recent_evidence == "direct_balance_delta"
@@ -2482,6 +2512,38 @@ async def _execute_tasks(
         if isinstance(samples, list) and len(samples) < 5:
             samples.append(metadata)
 
+    def _normalize_exa_snippets(result: Dict[str, Any]) -> Dict[str, Any]:
+        normalized: List[Dict[str, Any]] = []
+        for item in result.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            snippet = dict(item)
+            highlights = snippet.get("highlights")
+            if isinstance(highlights, list):
+                highlights_text = " ".join(str(v) for v in highlights if str(v).strip())
+            else:
+                highlights_text = str(highlights or "")
+            content = (
+                snippet.get("content")
+                or snippet.get("raw_content")
+                or snippet.get("text")
+                or snippet.get("summary")
+                or highlights_text
+                or snippet.get("snippet")
+                or ""
+            )
+            summary = snippet.get("summary") or highlights_text or content
+            snippet["url"] = snippet.get("url") or snippet.get("source_url") or ""
+            snippet["title"] = snippet.get("title") or ""
+            snippet["snippet"] = snippet.get("snippet") or summary or content
+            snippet["content"] = content
+            snippet["published_date"] = snippet.get("published_date") or snippet.get("date")
+            snippet["search_backend"] = "exa"
+            normalized.append(snippet)
+        result["results"] = normalized
+        result.setdefault("search_backend", "exa")
+        return result
+
     async def _run_exa_search_for_task(
         task: Dict[str, Any],
         reason: str,
@@ -2516,7 +2578,7 @@ async def _execute_tasks(
             _record_exa_error(metadata)
             logger.warning(f"Exa search failover failed: {exc}")
             return None, "exa_error", metadata
-        result = result or {}
+        result = _normalize_exa_snippets(result or {})
         snippets = result.get("results") or []
         if not snippets:
             stats["exa_failover_empty"] += 1
@@ -2572,6 +2634,7 @@ async def _execute_tasks(
             "selected_reason": quality.get("selected_reason"),
             "usage_evidence_score": quality.get("usage_evidence_score", 0),
             "value_evidence_score": quality.get("value_evidence_score", 0),
+            "quality_score": quality.get("quality_score", -1.0),
             "good_url_hit_count": quality.get("good_url_hit_count", 0),
             "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
             "unusable_reason": quality.get("unusable_reason"),
@@ -3054,6 +3117,7 @@ async def _execute_tasks(
     async def _retry_fund_flow_fields(
         task: Dict[str, Any],
         extraction: Dict[str, Any],
+        active_backend: str,
     ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         field_queries = task.get("field_queries") or {}
         if not field_queries:
@@ -3073,7 +3137,79 @@ async def _execute_tasks(
             if not candidates:
                 continue
             stats["field_retry_count"] += 1
-            best_payload, attempts, _ = await _run_search_candidates(task, candidates)
+            if str(active_backend or "").lower() == "exa":
+                best_payload = None
+                attempts: List[Dict[str, Any]] = []
+                for idx, candidate in enumerate(candidates):
+                    query = str(candidate.get("query") or "").strip()
+                    if not query:
+                        continue
+                    field_task_candidate = {
+                        **task,
+                        "field_scope": field_scope,
+                        "query": query,
+                        "preferred_domains": candidate.get("preferred_domains") or task.get("preferred_domains"),
+                        "exclude_domains": candidate.get("exclude_domains") or task.get("exclude_domains"),
+                        "required_keywords": candidate.get("required_keywords") or task.get("required_keywords"),
+                        "exclude_keywords": candidate.get("exclude_keywords") or task.get("exclude_keywords"),
+                        "max_results": candidate.get("max_results") or task.get("max_results"),
+                    }
+                    result, note, metadata = await _run_exa_search_for_task(
+                        field_task_candidate,
+                        failover_reason or "field_retry",
+                        query_override=query,
+                    )
+                    if not result:
+                        attempts.append(
+                            {
+                                "query": query,
+                                "family": candidate.get("family"),
+                                "field_scope": field_scope,
+                                "search_backend": "exa",
+                                "manual_required": True,
+                                "manual_reason": note,
+                                **(metadata or {}),
+                            }
+                        )
+                        continue
+                    field_snippets, field_score_stats, field_task_for_log = _apply_exa_quality_to_task(
+                        field_task_candidate,
+                        result,
+                        result.get("query") or query,
+                        note,
+                    )
+                    attempt_meta = {
+                        "query": query,
+                        "family": candidate.get("family"),
+                        "field_scope": field_scope,
+                        "search_backend": "exa",
+                        "result_count": len(result.get("results") or []),
+                        "usable_count": field_task_for_log.get("usable_count_before_extract"),
+                        "trusted_count": field_task_for_log.get("trusted_count"),
+                        "issuer_hit": field_task_for_log.get("issuer_hit"),
+                        "period_hit": field_task_for_log.get("period_hit"),
+                        "score_max": field_score_stats.get("score_max"),
+                        "quality_score": field_task_for_log.get("quality_score"),
+                        "usage_evidence_score": field_task_for_log.get("usage_evidence_score"),
+                        "value_evidence_score": field_task_for_log.get("value_evidence_score"),
+                        "good_url_hit_count": field_task_for_log.get("good_url_hit_count"),
+                        "bad_url_hit_count": field_task_for_log.get("bad_url_hit_count"),
+                        "unusable_reason": field_task_for_log.get("unusable_reason"),
+                    }
+                    attempts.append(attempt_meta)
+                    payload = {
+                        "candidate": candidate,
+                        "result": result,
+                        "snippets": field_snippets,
+                        "score_stats": field_score_stats,
+                        "quality_score": field_task_for_log.get("quality_score", -1.0),
+                        "task_for_log": field_task_for_log,
+                        "candidate_index": idx,
+                    }
+                    if best_payload is None or payload["quality_score"] > best_payload["quality_score"]:
+                        best_payload = payload
+            else:
+                best_payload, attempts, _ = await _run_search_candidates(task, candidates)
             field_attempts.extend(attempts)
             if not best_payload:
                 continue
@@ -3083,6 +3219,7 @@ async def _execute_tasks(
                 "query": best_payload["candidate"].get("query"),
                 "query_used": best_payload["candidate"].get("query"),
                 "query_family_used": best_payload["candidate"].get("family"),
+                "search_backend": str(active_backend or task.get("search_backend") or "tavily").lower(),
             }
             field_snippets = best_payload.get("snippets") or []
             if not field_snippets:
@@ -3179,7 +3316,11 @@ async def _execute_tasks(
                 is_fund_flow = task["indicator_key"] in {"northbound", "southbound", "etf", "margin"}
                 field_attempts: List[Dict[str, Any]] = []
                 if is_fund_flow:
-                    extraction, field_attempts = await _retry_fund_flow_fields(task, extraction)
+                    extraction, field_attempts = await _retry_fund_flow_fields(
+                        task,
+                        extraction,
+                        str(task.get("search_backend") or active_search_backend),
+                    )
                 manual_required = bool(extraction.get("manual_required"))
                 manual_reason = extraction.get("manual_reason")
                 if manual_reason:
@@ -3195,6 +3336,18 @@ async def _execute_tasks(
                         s for s in [extraction.get("note", ""), note_append] if s
                     ).strip()
                     extraction["note"] = combined_note or None
+                    if unit_manual and _safe_number(extraction.get("recent_5d")) is not None and _safe_number(
+                        extraction.get("total_120d")
+                    ) is not None:
+                        metric_basis = _default_fund_flow_metric_basis(task["indicator_key"], extraction)
+                        window_evidence = _infer_fund_flow_window_evidence(
+                            task["indicator_key"], extraction, metric_basis
+                        )
+                        if window_evidence not in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+                            extraction["manual_reason"] = _append_note(
+                                extraction.get("manual_reason"),
+                                "fund_flow_window_missing",
+                            )
                     manual_required = manual_required or unit_manual
                 else:
                     val_adj, manual2, note_append2 = _validate_general_extraction(extraction, task, snippets)
@@ -4054,7 +4207,11 @@ async def _execute_tasks(
                         _refine_extraction_value(extraction, task, snippets)
                         field_attempts: List[Dict[str, Any]] = []
                         if is_fund_flow:
-                            extraction, field_attempts = await _retry_fund_flow_fields(task, extraction)
+                            extraction, field_attempts = await _retry_fund_flow_fields(
+                                task_for_log,
+                                extraction,
+                                search_backend,
+                            )
                         # 对资金流再尝试基于片段推断方向，补充 note，减少 manual_required
                         if is_fund_flow and extraction.get("value") is not None:
                             inferred_dir = _infer_flow_direction(snippets)
@@ -4088,6 +4245,18 @@ async def _execute_tasks(
                                 s for s in [extraction.get("note", ""), note_append] if s
                             ).strip()
                             extraction["note"] = combined_note or None
+                            if unit_manual and _safe_number(extraction.get("recent_5d")) is not None and _safe_number(
+                                extraction.get("total_120d")
+                            ) is not None:
+                                metric_basis = _default_fund_flow_metric_basis(task["indicator_key"], extraction)
+                                window_evidence = _infer_fund_flow_window_evidence(
+                                    task["indicator_key"], extraction, metric_basis
+                                )
+                                if window_evidence not in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+                                    extraction["manual_reason"] = _append_note(
+                                        extraction.get("manual_reason"),
+                                        "fund_flow_window_missing",
+                                    )
                             manual_required = manual_required or unit_manual
                             validate_note_append = note_append or ""
                         else:
@@ -4434,7 +4603,7 @@ def _validate_fund_flow_extraction(
         manual = True
         note_append = (note_append + " 单位缺失(需含亿)").strip()
     # 方向校验：根据 note / raw snippet 关键词推断
-    text_blob = str(extraction.get("note") or "").lower()
+    text_blob = f"{extraction.get('note') or ''} {extraction.get('trend') or ''}".lower()
     direction_unknown = True
     if "流出" in text_blob or "net outflow" in text_blob:
         if val > 0:
