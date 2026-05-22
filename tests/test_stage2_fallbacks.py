@@ -466,6 +466,7 @@ async def test_extract_422_uses_exa_fallback_for_non_fund_flow(tmp_path):
         extract_422_threshold=1,
         extract_topk=1,
         llm_hard_timeout=10,
+        allow_exa_non_quota_fallback=True,
     )
 
     assert completed
@@ -474,6 +475,118 @@ async def test_extract_422_uses_exa_fallback_for_non_fund_flow(tmp_path):
     assert stats.get("exa_fallback_after_extract_422", 0) >= 1
     assert websearch_results[0]["search_backend"] == "exa"
     assert websearch_results[0]["result_type"] == "search_success"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_extract_422_does_not_use_exa_fallback_by_default(tmp_path):
+    stats = {}
+    payload = {"commodities": [{"symbol": "GC=F", "current_price": None, "source": ""}]}
+    exa = FakeExaClient()
+    task = {
+        "task_id": "test-gold-422-default-off",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "preferred_domains": ["cmegroup.com", "investing.com"],
+        "query": "COMEX 黄金期货 最新价格",
+        "unit": "$/oz",
+        "issuer": "COMEX/CME",
+        "issuer_aliases": ["CME", "COMEX"],
+        "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        "required_keywords": ["gold", "黄金", "comex"],
+        "strict_required_keywords": True,
+        "retry_count": 0,
+        "created_at": 0,
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        payload,
+        FakeClientCommodity422(),
+        exa,
+        FakeExtractorCommodity(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        auto_disable_extract_on_422=True,
+        extract_422_threshold=1,
+        extract_topk=1,
+        llm_hard_timeout=10,
+        allow_exa_non_quota_fallback=False,
+    )
+
+    assert exa.calls == 0
+    assert stats["tavily_to_exa_failover"] is False
+    assert completed == []
+    assert failures
+    assert all(item["search_backend"] != "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_extract_422_exa_fallback_applies_strict_required_quality_gate(tmp_path):
+    stats = {}
+    payload = {"commodities": [{"symbol": "GC=F", "current_price": None, "source": ""}]}
+    exa = UnrelatedExaClient()
+    extractor = ValueExtractor()
+    task = {
+        "task_id": "test-gold-422-unrelated-exa",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "preferred_domains": ["cmegroup.com", "investing.com"],
+        "query": "COMEX 黄金期货 最新价格",
+        "unit": "$/oz",
+        "issuer": "COMEX/CME",
+        "issuer_aliases": ["CME", "COMEX"],
+        "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        "required_keywords": ["gold", "黄金", "comex"],
+        "strict_required_keywords": True,
+        "retry_count": 0,
+        "created_at": 0,
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        payload,
+        FakeClientCommodity422(),
+        exa,
+        extractor,
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        auto_disable_extract_on_422=True,
+        extract_422_threshold=1,
+        extract_topk=1,
+        llm_hard_timeout=10,
+        allow_exa_non_quota_fallback=True,
+    )
+
+    assert len(exa.calls) >= 1
+    assert completed == []
+    assert failures
+    reason = failures[0].get("manual_reason") or ""
+    assert "strict_keyword_miss" in reason or "value_evidence_miss" in reason
+    assert websearch_results[0]["manual_required"] is True
+    assert "strict_keyword_miss" in (websearch_results[0].get("manual_reason") or "") or "value_evidence_miss" in (
+        websearch_results[0].get("manual_reason") or ""
+    )
+    assert extractor.calls == 0
 
 
 class QuotaTavilyClient:

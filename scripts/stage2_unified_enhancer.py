@@ -2551,6 +2551,35 @@ async def _execute_tasks(
         }
         return _candidate_query_quality(task, candidate, raw_snippets)
 
+    def _apply_exa_quality_to_task(
+        task: Dict[str, Any],
+        result: Dict[str, Any],
+        query_used: Optional[str],
+        search_note: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        quality = _quality_filter_exa_result(task, result, query_used)
+        snippets = quality.get("snippets") or []
+        score_stats = quality.get("score_stats") or _score_stats(snippets)
+        task_for_log = {
+            **task,
+            "search_backend": "exa",
+            "query_used": query_used,
+            "score_stats": score_stats,
+            "usable_count_before_extract": quality.get("usable_count", 0),
+            "trusted_count": quality.get("trusted_count", 0),
+            "issuer_hit": quality.get("issuer_hit", False),
+            "period_hit": quality.get("period_hit", False),
+            "selected_reason": quality.get("selected_reason"),
+            "usage_evidence_score": quality.get("usage_evidence_score", 0),
+            "value_evidence_score": quality.get("value_evidence_score", 0),
+            "good_url_hit_count": quality.get("good_url_hit_count", 0),
+            "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
+            "unusable_reason": quality.get("unusable_reason"),
+        }
+        if search_note:
+            task_for_log["search_note"] = search_note
+        return snippets, score_stats, task_for_log
+
     def _build_exa_failover_manual_records(
         task: Dict[str, Any],
         *,
@@ -2884,6 +2913,8 @@ async def _execute_tasks(
         reason: str,
         query_override: Optional[str] = None,
     ) -> (Optional[Dict[str, Any]], Optional[str]):
+        if not allow_exa_non_quota_fallback:
+            return None, None
         if not exa_client:
             if reason in {"extract_422", "extract_cooldown"}:
                 stats["exa_skipped_no_key_after_extract"] += 1
@@ -3399,29 +3430,21 @@ async def _execute_tasks(
                             if exa_result:
                                 result = exa_result
                                 query_used = result.get("query") or directed_query_override or task.get("query")
-                                quality = _quality_filter_exa_result(task, result, query_used)
-                                snippets = quality.get("snippets") or []
-                                score_stats = quality.get("score_stats") or _score_stats(snippets)
+                                snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                    task,
+                                    result,
+                                    query_used,
+                                    exa_note,
+                                )
                                 search_backend = "exa"
                                 search_note = exa_note
-                                task_for_log = {
-                                    **task,
-                                    "search_backend": "exa",
-                                    "search_backend_state": "exa_active",
-                                    "failover_reason": failover_reason,
-                                    "query_used": query_used,
-                                    "score_stats": score_stats,
-                                    "usable_count_before_extract": quality.get("usable_count", 0),
-                                    "trusted_count": quality.get("trusted_count", 0),
-                                    "issuer_hit": quality.get("issuer_hit", False),
-                                    "period_hit": quality.get("period_hit", False),
-                                    "selected_reason": quality.get("selected_reason"),
-                                    "usage_evidence_score": quality.get("usage_evidence_score", 0),
-                                    "value_evidence_score": quality.get("value_evidence_score", 0),
-                                    "good_url_hit_count": quality.get("good_url_hit_count", 0),
-                                    "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
-                                    "unusable_reason": quality.get("unusable_reason"),
-                                }
+                                task_for_log.update(
+                                    {
+                                        "search_backend": "exa",
+                                        "search_backend_state": "exa_active",
+                                        "failover_reason": failover_reason,
+                                    }
+                                )
                             else:
                                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                                 task_record, websearch_item = _build_exa_failover_manual_records(
@@ -3494,30 +3517,22 @@ async def _execute_tasks(
                         if exa_result:
                             result = exa_result
                             query_used = result.get("query") or task.get("query")
-                            quality = _quality_filter_exa_result(task, result, query_used)
-                            snippets = quality.get("snippets") or []
-                            score_stats = quality.get("score_stats") or _score_stats(snippets)
+                            snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                task,
+                                result,
+                                query_used,
+                                exa_note,
+                            )
                             search_backend = "exa"
                             search_note = exa_note
-                            task_for_log = {
-                                **task,
-                                "search_backend": "exa",
-                                "search_backend_state": "exa_active",
-                                "failover_reason": failover_reason,
-                                "query_used": query_used,
-                                "query_attempts": query_attempts,
-                                "score_stats": score_stats,
-                                "usable_count_before_extract": quality.get("usable_count", 0),
-                                "trusted_count": quality.get("trusted_count", 0),
-                                "issuer_hit": quality.get("issuer_hit", False),
-                                "period_hit": quality.get("period_hit", False),
-                                "selected_reason": quality.get("selected_reason"),
-                                "usage_evidence_score": quality.get("usage_evidence_score", 0),
-                                "value_evidence_score": quality.get("value_evidence_score", 0),
-                                "good_url_hit_count": quality.get("good_url_hit_count", 0),
-                                "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
-                                "unusable_reason": quality.get("unusable_reason"),
-                            }
+                            task_for_log["query_attempts"] = query_attempts
+                            task_for_log.update(
+                                {
+                                    "search_backend": "exa",
+                                    "search_backend_state": "exa_active",
+                                    "failover_reason": failover_reason,
+                                }
+                            )
                         else:
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
                             logger.warning(
@@ -3592,10 +3607,15 @@ async def _execute_tasks(
                             exa_result, exa_note = await _try_exa_fallback(task, "no_snippets")
                             if exa_result:
                                 result = exa_result
-                                snippets = result.get("results") or []
+                                query_used = result.get("query") or query_used or task.get("query")
+                                snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                    task,
+                                    result,
+                                    query_used,
+                                    exa_note,
+                                )
                                 search_backend = "exa"
                                 search_note = exa_note
-                                task_for_log = {**task, "search_backend": "exa"}
                         if not snippets:
                             skip_deepseek_reason = (
                                 task_for_log.get("unusable_reason")
@@ -3684,11 +3704,22 @@ async def _execute_tasks(
                                         )
                                         if exa_result:
                                             result = exa_result
-                                            snippets = exa_result.get("results") or []
+                                            query_used = result.get("query") or query_used or task.get("query")
+                                            snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                                task_for_log,
+                                                result,
+                                                query_used,
+                                                exa_note,
+                                            )
                                             search_backend = "exa"
                                             search_note = exa_note
-                                            task_for_log = {**task_for_log, "search_backend": "exa"}
-                                        # 不设置 skip_deepseek_reason，让 DeepSeek 从原始 snippets 抽取
+                                            if not snippets:
+                                                skip_deepseek_reason = (
+                                                    task_for_log.get("unusable_reason")
+                                                    or exa_note
+                                                    or "no_snippets"
+                                                )
+                                        # Exa 命中过滤后才替换 snippets；被质量门禁拒绝则跳过 DeepSeek。
                                         await asyncio.sleep(0.5)
                                         if auto_disable_extract_on_422:
                                             now_ts = time.time()
@@ -3772,11 +3803,22 @@ async def _execute_tasks(
                         )
                         if exa_result:
                             result = exa_result
-                            snippets = exa_result.get("results") or []
+                            query_used = result.get("query") or query_used or task.get("query")
+                            snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                task_for_log,
+                                result,
+                                query_used,
+                                exa_note,
+                            )
                             search_backend = "exa"
                             search_note = exa_note
-                            task_for_log = {**task_for_log, "search_backend": "exa"}
                             extract_skipped_reason = "extract_cooldown_exa_fallback"
+                            if not snippets:
+                                skip_deepseek_reason = (
+                                    task_for_log.get("unusable_reason")
+                                    or exa_note
+                                    or "no_snippets"
+                                )
                     if search_backend == "tavily" and extract_globally_disabled and extract_skipped_reason is None:
                         extract_skipped_reason = "extract_globally_disabled"
                     # score 过滤
