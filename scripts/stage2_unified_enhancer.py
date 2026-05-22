@@ -2354,6 +2354,7 @@ async def _execute_tasks(
     deepseek_breaker_consecutive_timeouts: int = 6,
     deepseek_breaker_timeout_rate: float = 0.6,
     deepseek_breaker_min_attempts: int = 8,
+    allow_exa_non_quota_fallback: bool = False,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
     completed: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
@@ -2400,6 +2401,17 @@ async def _execute_tasks(
     stats.setdefault("deepseek_timeout_rate", 0.0)
     stats.setdefault("deepseek_breaker_attempts", 0)
     stats.setdefault("deepseek_breaker_timeouts", 0)
+    stats.setdefault("search_backend_final", "tavily")
+    stats.setdefault("tavily_to_exa_failover", False)
+    stats.setdefault("tavily_to_exa_failover_count", 0)
+    stats.setdefault("exa_failover_success", 0)
+    stats.setdefault("exa_failover_empty", 0)
+    stats.setdefault("exa_failover_error", 0)
+    stats.setdefault("exa_unavailable", 0)
+    stats.setdefault("exa_error_breakdown", {})
+    stats.setdefault("exa_error_samples", [])
+    active_search_backend = "tavily"
+    failover_reason = None
     initial_unavailable_reason = stats.get("tavily_unavailable_reason")
     tavily_unavailable_reason: Optional[str] = (
         initial_unavailable_reason
@@ -2441,6 +2453,161 @@ async def _execute_tasks(
         tavily_unavailable_reason = "environment_proxy_error"
         stats["tavily_unavailable_reason"] = "environment_proxy_error"
         stats["environment_proxy_error"] = str(exc)
+
+    def _activate_exa_failover(task: Dict[str, Any], reason: str) -> bool:
+        nonlocal active_search_backend, failover_reason
+        if not exa_client:
+            stats["exa_unavailable"] += 1
+            return False
+        if active_search_backend != "exa":
+            active_search_backend = "exa"
+            failover_reason = reason
+            stats["tavily_to_exa_failover"] = True
+            stats["tavily_to_exa_failover_count"] += 1
+            stats["search_backend_final"] = "exa"
+        return True
+
+    def _record_exa_error(metadata: Dict[str, Any]) -> None:
+        stats["exa_failover_error"] += 1
+        tag = (
+            metadata.get("exa_error_tag")
+            or metadata.get("exa_http_status")
+            or metadata.get("exa_error_type")
+            or "unknown_error"
+        )
+        breakdown = stats.setdefault("exa_error_breakdown", {})
+        if isinstance(breakdown, dict):
+            breakdown[str(tag)] = breakdown.get(str(tag), 0) + 1
+        samples = stats.setdefault("exa_error_samples", [])
+        if isinstance(samples, list) and len(samples) < 5:
+            samples.append(metadata)
+
+    async def _run_exa_search_for_task(
+        task: Dict[str, Any],
+        reason: str,
+        query_override: Optional[str] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], str]:
+        if not _activate_exa_failover(task, reason):
+            return None, "exa_unavailable"
+        query = query_override or task.get("query_used") or task.get("query") or task.get("indicator_key")
+        include_domains = task.get("preferred_domains") or None
+        num_results = task.get("max_results") or None
+        start_published = _start_date_from_max_age(task.get("max_age_days"))
+        search_type = _exa_search_type(task.get("indicator_key") or "")
+        try:
+            result = await exa_client.search(  # type: ignore[union-attr]
+                query=query,
+                num_results=num_results,
+                include_domains=include_domains,
+                start_published_date=start_published,
+                search_type=search_type,
+                contents={"text": True, "summary": True, "highlights": True},
+                cache_ttl=cache_ttl,
+            )
+        except Exception as exc:  # pragma: no cover
+            if AsyncExaClient and hasattr(AsyncExaClient, "error_metadata"):
+                metadata = AsyncExaClient.error_metadata(exc)  # type: ignore[union-attr]
+            else:
+                metadata = {
+                    "exa_error_type": type(exc).__name__,
+                    "exa_error_message": str(exc),
+                    "exa_error_tag": "unknown_error",
+                }
+            _record_exa_error(metadata)
+            logger.warning(f"Exa search failover failed: {exc}")
+            return None, "exa_error"
+        result = result or {}
+        snippets = result.get("results") or []
+        if not snippets:
+            stats["exa_failover_empty"] += 1
+            return None, "exa_empty"
+        stats["exa_failover_success"] += 1
+        return result, "exa_failover"
+
+    def _build_exa_failover_manual_records(
+        task: Dict[str, Any],
+        *,
+        reason: str,
+        attempt_index: int,
+        elapsed_ms: int,
+        error: Optional[Exception] = None,
+        query_attempts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        now_ts = int(datetime.now().timestamp())
+        query = task.get("query_used") or task.get("query") or task.get("indicator_key")
+        note = f"exa_failover:{reason}"
+        source = "Stage2 manual_required"
+        category = task.get("category") or task.get("stage_phase")
+        task_payload = {
+            **task,
+            "category": category,
+            "query": query,
+            "query_used": task.get("query_used") or query,
+            "query_attempts": query_attempts or task.get("query_attempts") or [],
+            "search_backend": "exa",
+            "search_backend_state": "exa_active",
+            "failover_reason": failover_reason,
+            "manual_required": True,
+            "manual_reason": reason,
+            "source": source,
+            "note": note,
+        }
+        extraction = {
+            "value": None,
+            "unit": task.get("unit"),
+            "source_url": None,
+            "confidence": 0.0,
+            "note": note,
+            "llm_error": None,
+            "llm_latency_ms": 0,
+            "manual_required": True,
+            "manual_reason": reason,
+        }
+        task_record = {
+            "task_id": task["task_id"],
+            "indicator_key": task["indicator_key"],
+            "category": category,
+            "stage_phase": task["stage_phase"],
+            "query": query,
+            "search_backend": "exa",
+            "search_backend_state": "exa_active",
+            "failover_reason": failover_reason,
+            "fund_flow_backend": task.get("fund_flow_backend"),
+            "extraction_backend": extraction_backend,
+            "source": source,
+            "source_url": None,
+            "confidence": 0.0,
+            "error": str(error) if error else None,
+            "llm_error": str(error) if error else None,
+            "llm_latency_ms": None,
+            "attempt_index": attempt_index,
+            "elapsed_ms": elapsed_ms,
+            "created_at": task.get("created_at", now_ts),
+            "finished_at": now_ts,
+            "manual_required": True,
+            "manual_reason": reason,
+            "note": note,
+            "raw_results": [],
+            "result_type": "manual_required",
+        }
+        websearch_item = {
+            "task_id": task["task_id"],
+            "indicator_key": task["indicator_key"],
+            "category": category,
+            "stage_phase": task["stage_phase"],
+            "query": query,
+            "task": task_payload,
+            "extraction": extraction,
+            "extraction_backend": extraction_backend,
+            "raw_results": [],
+            "search_backend": "exa",
+            "manual_required": True,
+            "manual_reason": reason,
+            "source": source,
+            "note": note,
+            "result_type": "manual_required",
+        }
+        return task_record, websearch_item
 
     def _build_tavily_fast_switch_records(
         task: Dict[str, Any],
@@ -3151,17 +3318,20 @@ async def _execute_tasks(
                     }
                 )
                 continue
-            if tavily_unavailable_reason == "quota_or_rate_limit":
-                task_record, websearch_item = _build_tavily_fast_switch_records(
-                    task,
-                    attempt_index=0,
-                    elapsed_ms=0,
-                )
-                failures.append(task_record)
-                manual_required_keys.append(task_record["indicator_key"])
-                _append_task_log(task_log_path, task_record)
-                websearch_results.append(websearch_item)
-                continue
+            if tavily_unavailable_reason == "quota_or_rate_limit" and active_search_backend != "exa":
+                if _activate_exa_failover(task, "quota_or_rate_limit"):
+                    pass
+                else:
+                    task_record, websearch_item = _build_tavily_fast_switch_records(
+                        task,
+                        attempt_index=0,
+                        elapsed_ms=0,
+                    )
+                    failures.append(task_record)
+                    manual_required_keys.append(task_record["indicator_key"])
+                    _append_task_log(task_log_path, task_record)
+                    websearch_results.append(websearch_item)
+                    continue
             if tavily_unavailable_reason == "environment_proxy_error":
                 exc = RuntimeError(stats.get("environment_proxy_error") or "environment_proxy_error")
                 task_record, websearch_item = _build_environment_proxy_error_records(
@@ -3182,51 +3352,93 @@ async def _execute_tasks(
                 extract_skipped_reason: Optional[str] = None
                 query_used: Optional[str] = None
                 query_attempts: List[Dict[str, Any]] = []
-                search_backend = "tavily"
+                search_backend = active_search_backend
                 search_note: Optional[str] = None
                 task_for_log = task
                 result: Dict[str, Any] = {}
                 try:
                     try:
-                        search_candidates = _expand_query_candidates(
-                            task,
-                            directed_query_override=directed_query_override,
-                        )
-                        best_payload, query_attempts, last_exc = await _run_search_candidates(task, search_candidates)
-                        if best_payload:
-                            result = best_payload["result"]
-                            snippets = best_payload["snippets"]
-                            score_stats = best_payload["score_stats"]
-                            query_used = best_payload["candidate"].get("query")
-                            task_for_log = {
-                                **task,
-                                "query_used": query_used,
-                                "query_family_used": best_payload["candidate"].get("family"),
-                                "field_scope": best_payload["candidate"].get("field_scope"),
-                                "query_attempts": query_attempts,
-                                "score_stats": score_stats,
-                                "usable_count_before_extract": best_payload.get("usable_count", 0),
-                                "trusted_count": best_payload.get("trusted_count", 0),
-                                "issuer_hit": best_payload.get("issuer_hit", False),
-                                "period_hit": best_payload.get("period_hit", False),
-                                "selected_reason": best_payload.get("selected_reason"),
-                                "usage_evidence_score": best_payload.get("usage_evidence_score", 0),
-                                "value_evidence_score": best_payload.get("value_evidence_score", 0),
-                                "good_url_hit_count": best_payload.get("good_url_hit_count", 0),
-                                "bad_url_hit_count": best_payload.get("bad_url_hit_count", 0),
-                                "unusable_reason": best_payload.get("unusable_reason"),
-                            }
+                        if active_search_backend == "exa":
+                            exa_result, exa_note = await _run_exa_search_for_task(
+                                task,
+                                failover_reason or "quota_or_rate_limit",
+                                query_override=directed_query_override or task.get("query"),
+                            )
+                            if exa_result:
+                                result = exa_result
+                                snippets = result.get("results") or []
+                                score_stats = _score_stats(snippets)
+                                query_used = result.get("query") or directed_query_override or task.get("query")
+                                search_backend = "exa"
+                                search_note = exa_note
+                                task_for_log = {
+                                    **task,
+                                    "search_backend": "exa",
+                                    "search_backend_state": "exa_active",
+                                    "failover_reason": failover_reason,
+                                    "query_used": query_used,
+                                    "score_stats": score_stats,
+                                }
+                            else:
+                                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                task_record, websearch_item = _build_exa_failover_manual_records(
+                                    task,
+                                    reason=exa_note,
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
                         else:
-                            snippets = []
-                            score_stats = _score_stats(snippets)
-                            if last_exc:
-                                raise last_exc
+                            search_candidates = _expand_query_candidates(
+                                task,
+                                directed_query_override=directed_query_override,
+                            )
+                            best_payload, query_attempts, last_exc = await _run_search_candidates(task, search_candidates)
+                            if best_payload:
+                                result = best_payload["result"]
+                                snippets = best_payload["snippets"]
+                                score_stats = best_payload["score_stats"]
+                                query_used = best_payload["candidate"].get("query")
+                                task_for_log = {
+                                    **task,
+                                    "query_used": query_used,
+                                    "query_family_used": best_payload["candidate"].get("family"),
+                                    "field_scope": best_payload["candidate"].get("field_scope"),
+                                    "query_attempts": query_attempts,
+                                    "score_stats": score_stats,
+                                    "usable_count_before_extract": best_payload.get("usable_count", 0),
+                                    "trusted_count": best_payload.get("trusted_count", 0),
+                                    "issuer_hit": best_payload.get("issuer_hit", False),
+                                    "period_hit": best_payload.get("period_hit", False),
+                                    "selected_reason": best_payload.get("selected_reason"),
+                                    "usage_evidence_score": best_payload.get("usage_evidence_score", 0),
+                                    "value_evidence_score": best_payload.get("value_evidence_score", 0),
+                                    "good_url_hit_count": best_payload.get("good_url_hit_count", 0),
+                                    "bad_url_hit_count": best_payload.get("bad_url_hit_count", 0),
+                                    "unusable_reason": best_payload.get("unusable_reason"),
+                                }
+                            else:
+                                snippets = []
+                                score_stats = _score_stats(snippets)
+                                if last_exc:
+                                    raise last_exc
                     except Exception as exc:
                         is_proxy_error = _is_environment_proxy_error(exc)
                         is_quota_error = False if is_proxy_error else _is_tavily_quota_error(exc)
                         if is_proxy_error:
                             _mark_environment_proxy_unavailable(exc)
                             exa_result, exa_note = None, None
+                        elif is_quota_error and _activate_exa_failover(task, "quota_or_rate_limit"):
+                            _mark_tavily_quota_unavailable()
+                            exa_result, exa_note = await _run_exa_search_for_task(
+                                task,
+                                "quota_or_rate_limit",
+                                query_override=task.get("query"),
+                            )
                         elif is_quota_error:
                             _mark_tavily_quota_unavailable()
                             exa_result, exa_note = None, None
@@ -3237,9 +3449,19 @@ async def _execute_tasks(
                         if exa_result:
                             result = exa_result
                             snippets = result.get("results") or []
+                            score_stats = _score_stats(snippets)
+                            query_used = result.get("query") or task.get("query")
                             search_backend = "exa"
                             search_note = exa_note
-                            task_for_log = {**task, "search_backend": "exa"}
+                            task_for_log = {
+                                **task,
+                                "search_backend": "exa",
+                                "search_backend_state": "exa_active",
+                                "failover_reason": failover_reason,
+                                "query_used": query_used,
+                                "query_attempts": query_attempts,
+                                "score_stats": score_stats,
+                            }
                         else:
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
                             logger.warning(
@@ -3260,13 +3482,23 @@ async def _execute_tasks(
                                 websearch_results.append(websearch_item)
                                 break
                             if is_quota_error:
-                                task_record, websearch_item = _build_tavily_fast_switch_records(
-                                    task,
-                                    attempt_index=attempt,
-                                    elapsed_ms=elapsed_ms,
-                                    error=exc,
-                                    query_attempts=query_attempts,
-                                )
+                                if exa_note in {"exa_error", "exa_empty", "exa_unavailable"}:
+                                    task_record, websearch_item = _build_exa_failover_manual_records(
+                                        task,
+                                        reason=exa_note,
+                                        attempt_index=attempt,
+                                        elapsed_ms=elapsed_ms,
+                                        error=exc,
+                                        query_attempts=query_attempts,
+                                    )
+                                else:
+                                    task_record, websearch_item = _build_tavily_fast_switch_records(
+                                        task,
+                                        attempt_index=attempt,
+                                        elapsed_ms=elapsed_ms,
+                                        error=exc,
+                                        query_attempts=query_attempts,
+                                    )
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
                                 manual_required_keys.append(task_record["indicator_key"])
@@ -3527,6 +3759,8 @@ async def _execute_tasks(
                     task_for_log = {
                         **task,
                         "search_backend": search_backend,
+                        "search_backend_state": task_for_log.get("search_backend_state"),
+                        "failover_reason": task_for_log.get("failover_reason"),
                         "query_used": query_used,
                         "query_family_used": task_for_log.get("query_family_used"),
                         "field_scope": task_for_log.get("field_scope"),
