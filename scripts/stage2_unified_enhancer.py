@@ -3194,6 +3194,25 @@ async def _execute_tasks(
             or _is_tavily_fast_switch_record(task)
         )
 
+    def _attach_field_attempts(
+        task_record: Dict[str, Any],
+        websearch_item: Dict[str, Any],
+        field_attempts: List[Dict[str, Any]],
+    ) -> None:
+        if not field_attempts:
+            return
+        task_record["field_attempts"] = field_attempts
+        websearch_item["field_attempts"] = field_attempts
+        if isinstance(websearch_item.get("task"), dict):
+            websearch_item["task"]["field_attempts"] = field_attempts
+
+    def _exa_metadata_from_attempt(attempt: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in attempt.items()
+            if str(key).startswith("exa_") or key == "request_id"
+        }
+
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
         text_parts: List[str] = []
@@ -3493,10 +3512,14 @@ async def _execute_tasks(
             if not candidates:
                 continue
             stats["field_retry_count"] += 1
+            field_failover_reason: Optional[str] = None
+            field_failover_tavily_metadata: Dict[str, Any] = {}
+            field_failover_exa_metadata: Dict[str, Any] = {}
             if str(active_backend or "").lower() == "exa":
                 best_payload = None
                 attempts: List[Dict[str, Any]] = []
                 field_search_backend = "exa"
+                field_failover_tavily_metadata = dict(active_tavily_limit_metadata)
                 for idx, candidate in enumerate(candidates):
                     query = str(candidate.get("query") or "").strip()
                     if not query:
@@ -3517,6 +3540,8 @@ async def _execute_tasks(
                         query_override=query,
                     )
                     if not result:
+                        field_failover_reason = note
+                        field_failover_exa_metadata = metadata or {}
                         attempts.append(
                             {
                                 "query": query,
@@ -3590,6 +3615,7 @@ async def _execute_tasks(
                         "error": str(exc),
                         **tavily_metadata,
                     }
+                    field_failover_tavily_metadata = tavily_metadata
                     if not _activate_exa_failover(task, "quota_or_rate_limit"):
                         attempts = [tavily_attempt]
                         setattr(exc, "tavily_metadata", tavily_metadata)
@@ -3604,9 +3630,39 @@ async def _execute_tasks(
                         "quota_or_rate_limit",
                     )
                     attempts = [tavily_attempt] + exa_attempts
+                    field_failover_reason = _exa_note
+                    field_failover_exa_metadata = _exa_metadata or {}
                     best_payload = exa_best_payload
             field_attempts.extend(attempts)
             if not best_payload:
+                if field_search_backend == "exa" and attempts:
+                    exa_attempt = next(
+                        (
+                            attempt
+                            for attempt in reversed(attempts)
+                            if attempt.get("search_backend") == "exa"
+                        ),
+                        {},
+                    )
+                    reason = (
+                        field_failover_reason
+                        or exa_attempt.get("manual_reason")
+                        or "exa_empty"
+                    )
+                    if reason in {"exa_empty", "exa_error", "exa_unavailable"} and not extraction.get(
+                        "_field_retry_failover_manual"
+                    ):
+                        extraction["_field_retry_failover_manual"] = {
+                            "reason": reason,
+                            "tavily_metadata": field_failover_tavily_metadata
+                            or dict(active_tavily_limit_metadata),
+                            "exa_metadata": field_failover_exa_metadata
+                            or _exa_metadata_from_attempt(exa_attempt),
+                            "query_attempts": list(attempts),
+                            "field_attempts": list(attempts),
+                        }
+                        extraction["manual_required"] = True
+                        extraction["manual_reason"] = reason
                 continue
             field_task = {
                 **task,
@@ -3716,6 +3772,27 @@ async def _execute_tasks(
                         extraction,
                         str(task.get("search_backend") or active_search_backend),
                     )
+                    field_failover_manual = extraction.pop("_field_retry_failover_manual", None)
+                    if isinstance(field_failover_manual, dict):
+                        task_record, websearch_item = _build_exa_failover_manual_records(
+                            task,
+                            reason=str(field_failover_manual.get("reason") or "exa_empty"),
+                            attempt_index=attempt_idx,
+                            elapsed_ms=0,
+                            query_attempts=field_failover_manual.get("query_attempts") or field_attempts,
+                            exa_metadata=field_failover_manual.get("exa_metadata") or {},
+                            tavily_metadata=field_failover_manual.get("tavily_metadata") or {},
+                        )
+                        _attach_field_attempts(
+                            task_record,
+                            websearch_item,
+                            field_failover_manual.get("field_attempts") or field_attempts,
+                        )
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        _append_task_log(task_log_path, task_record)
+                        websearch_results.append(websearch_item)
+                        continue
                 manual_required = bool(extraction.get("manual_required"))
                 manual_reason = extraction.get("manual_reason")
                 if manual_reason:
@@ -3867,10 +3944,7 @@ async def _execute_tasks(
                         tavily_metadata=tavily_metadata,
                     )
                     if field_attempts:
-                        task_record["field_attempts"] = field_attempts
-                        websearch_item["field_attempts"] = field_attempts
-                        if isinstance(websearch_item.get("task"), dict):
-                            websearch_item["task"]["field_attempts"] = field_attempts
+                        _attach_field_attempts(task_record, websearch_item, field_attempts)
                     failures.append(task_record)
                     manual_required_keys.append(task_record["indicator_key"])
                     _append_task_log(task_log_path, task_record)
@@ -4743,6 +4817,28 @@ async def _execute_tasks(
                                 extraction,
                                 search_backend,
                             )
+                            field_failover_manual = extraction.pop("_field_retry_failover_manual", None)
+                            if isinstance(field_failover_manual, dict):
+                                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                task_record, websearch_item = _build_exa_failover_manual_records(
+                                    task_for_log,
+                                    reason=str(field_failover_manual.get("reason") or "exa_empty"),
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    query_attempts=field_failover_manual.get("query_attempts") or field_attempts,
+                                    exa_metadata=field_failover_manual.get("exa_metadata") or {},
+                                    tavily_metadata=field_failover_manual.get("tavily_metadata") or {},
+                                )
+                                _attach_field_attempts(
+                                    task_record,
+                                    websearch_item,
+                                    field_failover_manual.get("field_attempts") or field_attempts,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
                         # 对资金流再尝试基于片段推断方向，补充 note，减少 manual_required
                         if is_fund_flow and extraction.get("value") is not None:
                             inferred_dir = _infer_flow_direction(snippets)
