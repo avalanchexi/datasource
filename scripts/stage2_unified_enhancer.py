@@ -2632,6 +2632,7 @@ async def _execute_tasks(
     stats.setdefault("exa_error_samples", [])
     active_search_backend = "tavily"
     failover_reason = None
+    active_tavily_limit_metadata: Dict[str, Any] = {}
     initial_unavailable_reason = stats.get("tavily_unavailable_reason")
     tavily_unavailable_reason: Optional[str] = (
         initial_unavailable_reason
@@ -2675,7 +2676,9 @@ async def _execute_tasks(
         stats["environment_proxy_error"] = str(exc)
 
     def _record_tavily_limit_error(source: Any) -> Dict[str, Any]:
+        nonlocal active_tavily_limit_metadata
         metadata = _tavily_error_metadata(source)
+        active_tavily_limit_metadata = metadata
         stats["tavily_limit_error_count"] = stats.get("tavily_limit_error_count", 0) + 1
         samples = stats.setdefault("tavily_error_samples", [])
         if isinstance(samples, list) and len(samples) < 5:
@@ -3941,6 +3944,7 @@ async def _execute_tasks(
                                         "failover_reason": failover_reason,
                                     }
                                 )
+                                task_for_log.update(active_tavily_limit_metadata)
                             else:
                                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                                 task_record, websearch_item = _build_exa_failover_manual_records(
@@ -4041,6 +4045,7 @@ async def _execute_tasks(
                                     "failover_reason": failover_reason,
                                 }
                             )
+                            task_for_log.update(active_tavily_limit_metadata)
                         else:
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
                             logger.warning(
@@ -4205,6 +4210,7 @@ async def _execute_tasks(
                                     extract_resp = extract_resp or {}
                                     if _is_tavily_quota_response(extract_resp):
                                         elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                        tavily_metadata = _record_tavily_limit_error(extract_resp)
                                         if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
                                             _mark_tavily_quota_unavailable()
                                             search_candidates = _expand_query_candidates(task_for_log)
@@ -4224,6 +4230,7 @@ async def _execute_tasks(
                                                     snippets
                                                 )
                                                 task_for_log = dict(exa_best_payload.get("task_for_log") or task_for_log)
+                                                task_for_log.update(tavily_metadata)
                                                 task_for_log["query_attempts"] = query_attempts
                                                 search_backend = "exa"
                                                 search_note = exa_best_payload.get("note") or exa_note
@@ -4241,6 +4248,7 @@ async def _execute_tasks(
                                                     elapsed_ms=elapsed_ms,
                                                     query_attempts=query_attempts,
                                                     exa_metadata=exa_metadata,
+                                                    tavily_metadata=tavily_metadata,
                                                 )
                                                 _append_task_log(task_log_path, task_record)
                                                 failures.append(task_record)
@@ -4254,6 +4262,7 @@ async def _execute_tasks(
                                                 attempt_index=attempt,
                                                 elapsed_ms=elapsed_ms,
                                                 query_attempts=query_attempts,
+                                                tavily_metadata=tavily_metadata,
                                             )
                                             _append_task_log(task_log_path, task_record)
                                             failures.append(task_record)
@@ -4375,6 +4384,7 @@ async def _execute_tasks(
                                             "failover_reason": failover_reason,
                                         }
                                     )
+                                    task_for_log.update(active_tavily_limit_metadata)
                                     if not snippets:
                                         skip_deepseek_reason = (
                                             task_for_log.get("unusable_reason")
@@ -4482,8 +4492,14 @@ async def _execute_tasks(
                         or task_for_log.get("request_id")
                         or task_for_log.get("exa_request_id")
                     )
+                    tavily_diagnostics = {
+                        key: task_for_log[key]
+                        for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+                        if key in task_for_log
+                    }
                     task_for_log = {
                         **task,
+                        **tavily_diagnostics,
                         "search_backend": search_backend,
                         "search_backend_state": task_for_log.get("search_backend_state"),
                         "failover_reason": task_for_log.get("failover_reason"),
@@ -4722,7 +4738,13 @@ async def _execute_tasks(
                                 directed_retry_done = True
                                 continue
 
+                        tavily_diagnostics = {
+                            key: task_for_log[key]
+                            for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+                            if key in task_for_log
+                        }
                         task_record = {
+                            **tavily_diagnostics,
                             "task_id": task["task_id"],
                             "indicator_key": task["indicator_key"],
                             "stage_phase": task["stage_phase"],

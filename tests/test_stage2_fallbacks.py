@@ -936,6 +936,17 @@ class ExtractQuotaResponseTavilyClient(ExtractQuotaTavilyClient):
         return {"status": 429, "error": "rate limit exceeded", "results": []}
 
 
+class ExtractLimit433ResponseTavilyClient(ExtractQuotaTavilyClient):
+    async def extract(self, **kwargs):
+        self.extract_calls += 1
+        return {
+            "status": 433,
+            "error": "PayGo limit exceeded",
+            "request_id": "tavily-extract-433",
+            "results": [],
+        }
+
+
 class FailingFallbackExtractor:
     async def extract(
         self,
@@ -1030,6 +1041,73 @@ async def test_tavily_quota_switches_current_and_remaining_tasks_to_exa(tmp_path
     assert stats["exa_failover_success"] == 2
     assert all(record["request_id"] == "exa-success-123" for record in completed)
     assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_432_search_switches_current_and_remaining_tasks_to_exa(tmp_path):
+    client = Limit432TavilyClient()
+    exa = RecordingExaClient(request_id="exa-after-432")
+    stats = {}
+    tasks = [
+        {
+            "task_id": "quota-432-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        },
+        {
+            "task_id": "quota-432-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.calls == 1
+    assert len(exa.calls) == 2
+    assert len(completed) == 2
+    assert failures == []
+    assert stats["tavily_to_exa_failover"] is True
+    assert stats["tavily_to_exa_failover_count"] == 1
+    assert stats["search_backend_final"] == "exa"
+    assert stats["tavily_limit_error_count"] == 1
+    assert stats["tavily_error_samples"][0]["tavily_http_status"] == 432
+    assert all(item["search_backend"] == "exa" for item in websearch_results)
+    assert all(item["task"]["search_backend_state"] == "exa_active" for item in websearch_results)
 
 
 @pytest.mark.anyio("asyncio")
@@ -2244,6 +2322,80 @@ async def test_tavily_extract_quota_response_switches_current_and_remaining_task
     assert stats["tavily_unavailable_reason"] == "quota_or_rate_limit"
     assert stats["search_backend_final"] == "exa"
     assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_extract_433_response_switches_current_and_remaining_tasks_to_exa(tmp_path):
+    client = ExtractLimit433ResponseTavilyClient()
+    exa = RecordingExaClient(request_id="exa-after-433")
+    stats = {}
+    tasks = [
+        {
+            "task_id": "extract-433-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+        {
+            "task_id": "extract-433-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.search_calls == 1
+    assert client.extract_calls == 1
+    assert len(exa.calls) == 2
+    assert len(completed) == 2
+    assert failures == []
+    assert stats["tavily_to_exa_failover"] is True
+    assert stats["search_backend_final"] == "exa"
+    assert stats["tavily_limit_error_count"] == 1
+    assert stats["tavily_error_samples"][0]["tavily_http_status"] == 433
+    assert all(item["search_backend"] == "exa" for item in websearch_results)
+    assert all(record["tavily_http_status"] == 433 for record in completed)
+    assert all(record["tavily_request_id"] == "tavily-extract-433" for record in completed)
+    assert all("PayGo limit exceeded" in record["tavily_error_message"] for record in completed)
+    assert all(item["task"]["tavily_http_status"] == 433 for item in websearch_results)
+    assert all(item["task"]["tavily_request_id"] == "tavily-extract-433" for item in websearch_results)
+    assert all("PayGo limit exceeded" in item["task"]["tavily_error_message"] for item in websearch_results)
 
 
 @pytest.mark.anyio("asyncio")
