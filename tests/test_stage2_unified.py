@@ -269,6 +269,51 @@ def test_apply_extraction_clears_stale_status_on_matching_force_refresh():
     assert entry["stale_reason"] is None
 
 
+def test_apply_extraction_uses_exa_deepseek_source_label():
+    market_payload = {
+        "commodities": [
+            {"symbol": "GC=F", "name": "COMEX黄金", "current_price": None}
+        ]
+    }
+    task = {
+        "task_id": "exa-gold",
+        "category": "commodities",
+        "indicator_key": "GC=F",
+        "search_backend": "exa",
+        "unit": "$/oz",
+    }
+    extraction = {
+        "value": 2400.5,
+        "unit": "$/oz",
+        "source_url": "https://example.com/gold",
+        "confidence": 0.9,
+    }
+
+    assert stage2._apply_extraction(market_payload, task, extraction, snippets=[])
+    item = market_payload["commodities"][0]
+    assert item["source"] == "exa+deepseek"
+    assert item["source_url"] == "https://example.com/gold"
+
+
+def test_apply_extraction_uses_exa_regex_source_label_without_source_url():
+    market_payload = {
+        "commodities": [
+            {"symbol": "CL=F", "name": "WTI原油", "current_price": None}
+        ]
+    }
+    task = {
+        "task_id": "exa-oil",
+        "category": "commodities",
+        "indicator_key": "CL=F",
+        "search_backend": "exa",
+        "unit": "$/bbl",
+    }
+    extraction = {"value": 77.2, "unit": "$/bbl", "confidence": 0.55}
+
+    assert stage2._apply_extraction(market_payload, task, extraction, snippets=[])
+    assert market_payload["commodities"][0]["source"] == "exa_regex"
+
+
 def test_apply_extraction_marks_official_macro_source_not_estimated():
     market_payload = {
         "metadata": {"date": "2026-05-21"},

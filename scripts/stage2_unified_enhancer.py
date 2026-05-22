@@ -1553,6 +1553,13 @@ def _field_retry_window_evidence(
     return "unknown"
 
 
+def _source_label_for_task(task: Dict[str, Any], source_url: Optional[str]) -> str:
+    backend = str(task.get("search_backend") or "tavily").lower()
+    if backend == "exa":
+        return "exa+deepseek" if source_url else "exa_regex"
+    return "tavily+deepseek" if source_url else "tavily_regex"
+
+
 def _apply_extraction(
     market_payload: Dict[str, Any],
     task: Dict[str, Any],
@@ -1566,7 +1573,7 @@ def _apply_extraction(
     indicator_key = task["indicator_key"]
     note = extraction.get("note")
     source_url = extraction.get("source_url")
-    source_label = "tavily+deepseek" if source_url else "tavily_regex"
+    source_label = _source_label_for_task(task, source_url)
     as_of_date = extraction.get("as_of_date")
     report_period = extraction.get("report_period")
 
@@ -3791,7 +3798,7 @@ async def _execute_tasks(
                             if extraction.get("value") is None:
                                 manual_required_keys.append(task_record["indicator_key"])
                         else:
-                            write_target = _apply_extraction(market_payload, task, extraction, snippets=snippets)
+                            write_target = _apply_extraction(market_payload, task_for_log, extraction, snippets=snippets)
                             write_stats = stats.setdefault("write_back_by_category", {})
                             if isinstance(write_stats, dict):
                                 write_stats[write_target] = write_stats.get(write_target, 0) + 1
