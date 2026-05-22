@@ -3485,6 +3485,7 @@ async def _execute_tasks(
             if str(active_backend or "").lower() == "exa":
                 best_payload = None
                 attempts: List[Dict[str, Any]] = []
+                field_search_backend = "exa"
                 for idx, candidate in enumerate(candidates):
                     query = str(candidate.get("query") or "").strip()
                     if not query:
@@ -3554,7 +3555,42 @@ async def _execute_tasks(
                     if best_payload is None or payload["quality_score"] > best_payload["quality_score"]:
                         best_payload = payload
             else:
-                best_payload, attempts, _ = await _run_search_candidates(task, candidates)
+                field_search_backend = str(active_backend or task.get("search_backend") or "tavily").lower()
+                try:
+                    best_payload, attempts, _ = await _run_search_candidates(task, candidates)
+                except Exception as exc:
+                    if _is_environment_proxy_error(exc):
+                        raise
+                    if not _is_tavily_quota_error(exc):
+                        raise
+                    tavily_metadata = _record_tavily_limit_error(exc)
+                    _mark_tavily_quota_unavailable()
+                    failed_candidate = next(
+                        (candidate for candidate in candidates if str(candidate.get("query") or "").strip()),
+                        {},
+                    )
+                    tavily_attempt = {
+                        "query": failed_candidate.get("query"),
+                        "family": failed_candidate.get("family"),
+                        "field_scope": failed_candidate.get("field_scope") or field_scope,
+                        "search_backend": "tavily",
+                        "manual_required": True,
+                        "manual_reason": "quota_or_rate_limit",
+                        "error": str(exc),
+                        **tavily_metadata,
+                    }
+                    if not _activate_exa_failover(task, "quota_or_rate_limit"):
+                        attempts = [tavily_attempt]
+                        raise
+                    active_backend = "exa"
+                    field_search_backend = "exa"
+                    exa_best_payload, exa_attempts, _exa_note, _exa_metadata = await _run_exa_search_candidates(
+                        task,
+                        candidates,
+                        "quota_or_rate_limit",
+                    )
+                    attempts = [tavily_attempt] + exa_attempts
+                    best_payload = exa_best_payload
             field_attempts.extend(attempts)
             if not best_payload:
                 continue
@@ -3564,7 +3600,7 @@ async def _execute_tasks(
                 "query": best_payload["candidate"].get("query"),
                 "query_used": best_payload["candidate"].get("query"),
                 "query_family_used": best_payload["candidate"].get("family"),
-                "search_backend": str(active_backend or task.get("search_backend") or "tavily").lower(),
+                "search_backend": field_search_backend,
             }
             field_snippets = best_payload.get("snippets") or []
             if not field_snippets:
