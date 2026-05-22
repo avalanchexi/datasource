@@ -2690,6 +2690,7 @@ async def _execute_tasks(
             "exa_query": query,
             "exa_result_count": len(snippets),
             "exa_request_id": result.get("request_id"),
+            "request_id": result.get("request_id"),
         }
 
     def _task_for_candidate(task: Dict[str, Any], candidate: Dict[str, Any], query: str) -> Dict[str, Any]:
@@ -3600,7 +3601,7 @@ async def _execute_tasks(
                     and extraction["note"]
                     and extraction["note"].startswith("deepseek_error")
                     else None,
-                    "request_id": None,
+                    "request_id": task.get("request_id") or task.get("exa_request_id"),
                     "http_status": None,
                     "cache_hit": None,
                     "attempt_index": attempt_idx,
@@ -4359,11 +4360,19 @@ async def _execute_tasks(
                         task_for_log.get("unusable_reason"),
                     )
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
+                    request_id_for_log = (
+                        result.get("response_id")
+                        or result.get("request_id")
+                        or task_for_log.get("request_id")
+                        or task_for_log.get("exa_request_id")
+                    )
                     task_for_log = {
                         **task,
                         "search_backend": search_backend,
                         "search_backend_state": task_for_log.get("search_backend_state"),
                         "failover_reason": task_for_log.get("failover_reason"),
+                        "request_id": request_id_for_log,
+                        "exa_request_id": request_id_for_log if search_backend == "exa" else task_for_log.get("exa_request_id"),
                         "query_used": query_used,
                         "query_family_used": task_for_log.get("query_family_used"),
                         "field_scope": task_for_log.get("field_scope"),
@@ -4422,9 +4431,12 @@ async def _execute_tasks(
                                 and extraction["note"]
                                 and extraction["note"].startswith("deepseek_error")
                                 else None,
-                                "request_id": result.get("response_id") or result.get("request_id")
-                                if search_backend == "tavily"
-                                else None,
+                                "request_id": (
+                                    result.get("response_id")
+                                    or result.get("request_id")
+                                    or task_for_log.get("request_id")
+                                    or task_for_log.get("exa_request_id")
+                                ),
                                 "http_status": result.get("status") if search_backend == "tavily" else None,
                                 "cache_hit": result.get("cache_hit", False),
                                 "attempt_index": attempt,
@@ -4611,9 +4623,12 @@ async def _execute_tasks(
                             if isinstance(extraction.get("note"), str)
                             and extraction["note"].startswith("deepseek_error")
                             else None,
-                            "request_id": result.get("response_id") or result.get("request_id")
-                            if search_backend == "tavily"
-                            else None,
+                            "request_id": (
+                                result.get("response_id")
+                                or result.get("request_id")
+                                or task_for_log.get("request_id")
+                                or task_for_log.get("exa_request_id")
+                            ),
                             "http_status": result.get("status") if search_backend == "tavily" else None,
                             "cache_hit": result.get("cache_hit", False),
                             "attempt_index": attempt,

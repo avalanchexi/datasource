@@ -604,14 +604,15 @@ class QuotaTavilyClient:
 
 
 class RecordingExaClient:
-    def __init__(self, value="123.45"):
+    def __init__(self, value="123.45", request_id=None):
         self.calls = []
         self.value = value
+        self.request_id = request_id
 
     async def search(self, **kwargs):
         self.calls.append(kwargs)
         query = kwargs.get("query") or "quote"
-        return {
+        payload = {
             "results": [
                 {
                     "url": "https://example.com/quote",
@@ -624,6 +625,9 @@ class RecordingExaClient:
             ],
             "query": query,
         }
+        if self.request_id:
+            payload["request_id"] = self.request_id
+        return payload
 
 
 class MultiQueryExaClient:
@@ -888,7 +892,7 @@ def test_tavily_quota_error_classifier_covers_common_text_variants(message):
 @pytest.mark.anyio("asyncio")
 async def test_tavily_quota_switches_current_and_remaining_tasks_to_exa(tmp_path):
     client = QuotaTavilyClient()
-    exa = RecordingExaClient()
+    exa = RecordingExaClient(request_id="exa-success-123")
     stats = {}
     tasks = [
         {
@@ -947,7 +951,56 @@ async def test_tavily_quota_switches_current_and_remaining_tasks_to_exa(tmp_path
     assert stats["tavily_to_exa_failover_count"] == 1
     assert stats["search_backend_final"] == "exa"
     assert stats["exa_failover_success"] == 2
+    assert all(record["request_id"] == "exa-success-123" for record in completed)
     assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_exa_queue_records_request_id(tmp_path):
+    client = QuotaTavilyClient()
+    exa = RecordingExaClient(request_id="exa-queue-123")
+    stats = {}
+    tasks = [
+        {
+            "task_id": "quota-queue-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        }
+    ]
+
+    completed, failures, _websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=True,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=True,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed
+    assert failures == []
+    assert completed[0]["request_id"] == "exa-queue-123"
 
 
 @pytest.mark.anyio("asyncio")
