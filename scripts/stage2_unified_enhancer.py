@@ -2674,6 +2674,14 @@ async def _execute_tasks(
         stats["tavily_unavailable_reason"] = "environment_proxy_error"
         stats["environment_proxy_error"] = str(exc)
 
+    def _record_tavily_limit_error(source: Any) -> Dict[str, Any]:
+        metadata = _tavily_error_metadata(source)
+        stats["tavily_limit_error_count"] = stats.get("tavily_limit_error_count", 0) + 1
+        samples = stats.setdefault("tavily_error_samples", [])
+        if isinstance(samples, list) and len(samples) < 5:
+            samples.append(metadata)
+        return metadata
+
     def _activate_exa_failover(task: Dict[str, Any], reason: str) -> bool:
         nonlocal active_search_backend, failover_reason
         if not exa_client:
@@ -2974,15 +2982,17 @@ async def _execute_tasks(
         error: Optional[Exception] = None,
         query_attempts: Optional[List[Dict[str, Any]]] = None,
         exa_metadata: Optional[Dict[str, Any]] = None,
+        tavily_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         now_ts = int(datetime.now().timestamp())
         query = task.get("query_used") or task.get("query") or task.get("indicator_key")
         note = f"exa_failover:{reason}"
         source = "Stage2 manual_required"
         category = task.get("category") or task.get("stage_phase")
+        diagnostics = {**(tavily_metadata or {}), **(exa_metadata or {})}
         task_payload = {
             **task,
-            **(exa_metadata or {}),
+            **diagnostics,
             "category": category,
             "query": query,
             "query_used": task.get("query_used") or query,
@@ -2996,7 +3006,7 @@ async def _execute_tasks(
             "note": note,
         }
         extraction = {
-            **(exa_metadata or {}),
+            **diagnostics,
             "value": None,
             "unit": task.get("unit"),
             "source_url": None,
@@ -3008,7 +3018,7 @@ async def _execute_tasks(
             "manual_reason": reason,
         }
         task_record = {
-            **(exa_metadata or {}),
+            **diagnostics,
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -3036,7 +3046,7 @@ async def _execute_tasks(
             "result_type": "manual_required",
         }
         websearch_item = {
-            **(exa_metadata or {}),
+            **diagnostics,
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -3062,14 +3072,17 @@ async def _execute_tasks(
         elapsed_ms: int,
         error: Optional[Exception] = None,
         query_attempts: Optional[List[Dict[str, Any]]] = None,
+        tavily_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         now_ts = int(datetime.now().timestamp())
         query = task.get("query_used") or task.get("query") or task.get("indicator_key")
         note = "tavily_fast_switch:quota_or_rate_limit"
         source = "Stage2 manual_required"
         category = task.get("category") or task.get("stage_phase")
+        diagnostics = tavily_metadata or {}
         task_payload = {
             **task,
+            **diagnostics,
             "category": category,
             "query": query,
             "query_used": task.get("query_used") or query,
@@ -3081,6 +3094,7 @@ async def _execute_tasks(
             "tavily_fast_switch": True,
         }
         extraction = {
+            **diagnostics,
             "value": None,
             "unit": task.get("unit"),
             "source_url": None,
@@ -3093,6 +3107,7 @@ async def _execute_tasks(
             "tavily_fast_switch": True,
         }
         task_record = {
+            **diagnostics,
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -3119,6 +3134,7 @@ async def _execute_tasks(
             "result_type": "manual_required",
         }
         websearch_item = {
+            **diagnostics,
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -3976,6 +3992,7 @@ async def _execute_tasks(
                     except Exception as exc:
                         is_proxy_error = _is_environment_proxy_error(exc)
                         is_quota_error = False if is_proxy_error else _is_tavily_quota_error(exc)
+                        tavily_metadata = _record_tavily_limit_error(exc) if is_quota_error else {}
                         exa_metadata: Dict[str, Any] = {}
                         if is_proxy_error:
                             _mark_environment_proxy_unavailable(exc)
@@ -4053,6 +4070,7 @@ async def _execute_tasks(
                                         error=exc,
                                         query_attempts=query_attempts,
                                         exa_metadata=exa_metadata,
+                                        tavily_metadata=tavily_metadata,
                                     )
                                 else:
                                     task_record, websearch_item = _build_tavily_fast_switch_records(
@@ -4061,6 +4079,7 @@ async def _execute_tasks(
                                         elapsed_ms=elapsed_ms,
                                         error=exc,
                                         query_attempts=query_attempts,
+                                        tavily_metadata=tavily_metadata,
                                     )
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
@@ -4326,6 +4345,7 @@ async def _execute_tasks(
                             websearch_results.append(websearch_item)
                             break
                         if _is_tavily_quota_error(exc):
+                            tavily_metadata = _record_tavily_limit_error(exc)
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
                             if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
                                 _mark_tavily_quota_unavailable()
@@ -4370,6 +4390,7 @@ async def _execute_tasks(
                                         error=exc,
                                         query_attempts=query_attempts,
                                         exa_metadata=exa_metadata,
+                                        tavily_metadata=tavily_metadata,
                                     )
                                     _append_task_log(task_log_path, task_record)
                                     failures.append(task_record)
@@ -4384,6 +4405,7 @@ async def _execute_tasks(
                                     elapsed_ms=elapsed_ms,
                                     error=exc,
                                     query_attempts=query_attempts,
+                                    tavily_metadata=tavily_metadata,
                                 )
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
@@ -4816,12 +4838,14 @@ async def _execute_tasks(
                         websearch_results.append(websearch_item)
                         break
                     if _is_tavily_quota_error(exc):
+                        tavily_metadata = _record_tavily_limit_error(exc)
                         _mark_tavily_quota_unavailable()
                         task_record, websearch_item = _build_tavily_fast_switch_records(
                             task,
                             attempt_index=attempt,
                             elapsed_ms=elapsed_ms,
                             error=exc,
+                            tavily_metadata=tavily_metadata,
                         )
                         _append_task_log(task_log_path, task_record)
                         failures.append(task_record)

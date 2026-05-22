@@ -663,6 +663,22 @@ class QuotaTavilyClient:
         raise AssertionError("extract should not run after Tavily quota failure")
 
 
+class Limit432TavilyClient:
+    def __init__(self):
+        self.calls = 0
+
+    async def search(self, **kwargs):
+        self.calls += 1
+        raise _make_tavily_http_error(
+            432,
+            text='{"detail":"Key limit exceeded for current plan"}',
+            headers={"x-request-id": "tavily-search-432"},
+        )
+
+    async def extract(self, **kwargs):  # pragma: no cover - search raises before extract
+        raise AssertionError("extract should not run after Tavily 432 search failure")
+
+
 class RecordingExaClient:
     def __init__(self, value="123.45", request_id=None):
         self.calls = []
@@ -1108,6 +1124,69 @@ async def test_tavily_quota_without_exa_records_exa_unavailable(tmp_path):
     assert len(failures) == 1
     assert stats["exa_unavailable"] == 1
     assert failures[0]["manual_reason"] in {"quota_or_rate_limit", "exa_unavailable"}
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_432_without_exa_writes_safe_tavily_diagnostics_to_skeleton(tmp_path):
+    client = Limit432TavilyClient()
+    stats = {}
+    tasks = [{
+        "task_id": "quota-gold-432-no-exa",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        None,
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert len(failures) == 1
+    assert len(websearch_results) == 1
+    assert failures[0]["manual_required"] is True
+    assert failures[0]["manual_reason"] in {"quota_or_rate_limit", "exa_unavailable"}
+    assert failures[0]["tavily_http_status"] == 432
+    assert failures[0]["tavily_request_id"] == "tavily-search-432"
+    assert "Key limit exceeded" in failures[0]["tavily_error_message"]
+    assert websearch_results[0]["tavily_http_status"] == 432
+    assert websearch_results[0]["tavily_request_id"] == "tavily-search-432"
+    assert "Key limit exceeded" in websearch_results[0]["tavily_error_message"]
+    assert websearch_results[0]["task"]["tavily_http_status"] == 432
+    assert websearch_results[0]["task"]["tavily_request_id"] == "tavily-search-432"
+    assert "Key limit exceeded" in websearch_results[0]["task"]["tavily_error_message"]
+    assert websearch_results[0]["extraction"]["tavily_http_status"] == 432
+    assert websearch_results[0]["extraction"]["tavily_request_id"] == "tavily-search-432"
+    assert "Key limit exceeded" in websearch_results[0]["extraction"]["tavily_error_message"]
+    assert stats["tavily_limit_error_count"] == 1
+    assert stats["tavily_error_samples"][0]["tavily_http_status"] == 432
+    assert stats["tavily_error_samples"][0]["tavily_request_id"] == "tavily-search-432"
+    assert "Key limit exceeded" in stats["tavily_error_samples"][0]["tavily_error_message"]
 
 
 @pytest.mark.anyio("asyncio")
