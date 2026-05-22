@@ -513,7 +513,58 @@ class RecordingExaClient:
         }
 
 
+class UnrelatedExaClient:
+    def __init__(self):
+        self.calls = []
+
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        return {
+            "results": [
+                {
+                    "url": "https://example.com/weather",
+                    "title": "weather",
+                    "snippet": "New York weather forecast 1234.5 sunshine index",
+                    "content": "New York weather forecast 1234.5 sunshine index",
+                    "score": 0.98,
+                    "published_date": "2026-05-22",
+                }
+            ],
+            "query": kwargs.get("query") or "weather",
+        }
+
+
+class ErrorExaClient:
+    def __init__(self):
+        self.calls = []
+
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        exc = RuntimeError("429 rate limited")
+        exc.response = type(
+            "Response",
+            (),
+            {
+                "status_code": 429,
+                "headers": {"x-request-id": "exa-request-123"},
+            },
+        )()
+        raise exc
+
+
+class EmptyExaClient:
+    def __init__(self):
+        self.calls = []
+
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"results": [], "query": kwargs.get("query") or "empty"}
+
+
 class ValueExtractor:
+    def __init__(self):
+        self.calls = 0
+
     async def extract(
         self,
         snippets,
@@ -522,6 +573,7 @@ class ValueExtractor:
         issuer_hint=None,
         request_timeout=None,
     ):
+        self.calls += 1
         value = 1234.5 if indicator == "GC=F" else 123.45
         return {
             "value": value,
@@ -661,6 +713,167 @@ async def test_tavily_quota_switches_current_and_remaining_tasks_to_exa(tmp_path
     assert stats["search_backend_final"] == "exa"
     assert stats["exa_failover_success"] == 2
     assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_exa_failover_applies_strict_required_quality_gate(tmp_path):
+    client = QuotaTavilyClient()
+    exa = UnrelatedExaClient()
+    extractor = ValueExtractor()
+    stats = {}
+    task = {
+        "task_id": "quota-gold-unrelated-exa",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+        "required_keywords": ["gold", "comex"],
+        "strict_required_keywords": True,
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        {"commodities": []},
+        client,
+        exa,
+        extractor,
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.calls == 1
+    assert len(exa.calls) >= 1
+    assert completed == []
+    assert len(failures) == 1
+    assert failures[0]["manual_required"] is True
+    assert "strict_keyword_miss" in (failures[0].get("manual_reason") or "")
+    assert websearch_results[0]["search_backend"] == "exa"
+    assert websearch_results[0]["manual_required"] is True
+    assert "strict_keyword_miss" in (websearch_results[0].get("manual_reason") or "")
+    assert extractor.calls == 0
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_exa_error_metadata_is_audited(tmp_path):
+    client = QuotaTavilyClient()
+    exa = ErrorExaClient()
+    stats = {}
+    task = {
+        "task_id": "quota-gold-exa-error",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        {"commodities": []},
+        client,
+        exa,
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.calls == 1
+    assert len(exa.calls) == 1
+    assert completed == []
+    assert len(failures) == 1
+    assert failures[0]["search_backend"] == "exa"
+    assert failures[0]["manual_reason"] == "exa_error"
+    assert failures[0]["exa_error_tag"] == "rate_limited"
+    assert failures[0]["exa_request_id"] == "exa-request-123"
+    assert websearch_results[0]["manual_reason"] == "exa_error"
+    assert websearch_results[0]["exa_error_tag"] == "rate_limited"
+    assert websearch_results[0]["exa_request_id"] == "exa-request-123"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_exa_empty_records_manual_required(tmp_path):
+    client = QuotaTavilyClient()
+    exa = EmptyExaClient()
+    stats = {}
+    task = {
+        "task_id": "quota-gold-exa-empty",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        {"commodities": []},
+        client,
+        exa,
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.calls == 1
+    assert len(exa.calls) == 1
+    assert completed == []
+    assert len(failures) == 1
+    assert failures[0]["search_backend"] == "exa"
+    assert failures[0]["manual_reason"] == "exa_empty"
+    assert websearch_results[0]["search_backend"] == "exa"
+    assert websearch_results[0]["manual_reason"] == "exa_empty"
 
 
 @pytest.mark.anyio("asyncio")
