@@ -47,7 +47,7 @@ bash run_preflight.sh
 
 **所有脚本统一通过 `run_clean.sh` 执行**（优先 `.venv/bin/activate`，Windows/Git-Bash 再尝试 `.venv/Scripts/activate`；空 `.venv` 可用 `DATASOURCE_AUTO_VENV=1` 自动 bootstrap；没有 venv 时必须显式 `ALLOW_SYSTEM_PYTHON=1` 才使用系统 Python。仍会 source .env、清理主动代理、PYTHONPATH=./src）：
 ```bash
-bash run_clean.sh python scripts/stage1_data_collector.py --date 2025-06-01
+bash run_clean.sh python scripts/stage1_data_collector.py --date "$DATE"
 bash run_clean.sh python scripts/stage2_unified_enhancer.py --help
 bash run_clean.sh python scripts/stage3_pring_analyzer.py --help
 ```
@@ -138,7 +138,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 | **资金流后端** | 固定 `--fund-flow-backend tavily`（当前唯一支持） |
 | **Exa failover** | Stage2 仍 Tavily-first；有 `EXA_API_KEY` 时 Tavily quota/rate/payment 自动同轮切 Exa，非 quota fallback 才需要 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1` |
 
-> 详细参数说明见 AGENTS.md "Stage2 Performance / Timeout Tips"
+> 详细参数说明见 AGENTS.md "## 6. Stage2 搜索/抽取规则"
 
 ### Stage2/Stage2.5 搜索优化要点
 
@@ -265,7 +265,7 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 | SyntaxError 启动失败 | `python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py` |
 | 搜索相关性低 | 调整 `search_profiles.queries/exclude_domains`，或提高 `--low-score-threshold` |
 
-> 完整故障排除表见 AGENTS.md "Troubleshooting 速查表"
+> 完整故障排除表见 AGENTS.md "## 12. Troubleshooting"
 
 **诊断工具**:
 - `bash run_clean.sh python scripts/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
