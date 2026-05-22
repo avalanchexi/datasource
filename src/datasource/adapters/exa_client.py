@@ -78,9 +78,33 @@ class AsyncExaClient:
     def _truncate(text: str, max_len: int = 600) -> str:
         if not text:
             return ""
+        if max_len <= 0:
+            return ""
         if len(text) <= max_len:
             return text
+        if max_len <= 3:
+            return text[:max_len]
         return text[: max_len - 3] + "..."
+
+    def _normalize_cached_data(self, cached: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(cached)
+        results = data.get("results") or []
+        if isinstance(results, list):
+            normalized = []
+            for item in results:
+                if isinstance(item, dict):
+                    result = dict(item)
+                    result["snippet"] = self._truncate(
+                        str(result.get("snippet") or ""), self.snippet_max_chars
+                    )
+                    result["content"] = self._truncate(
+                        str(result.get("content") or ""), self.content_max_chars
+                    )
+                    normalized.append(result)
+                else:
+                    normalized.append(item)
+            data["results"] = normalized
+        return data
 
     def _map_result(self, item: Any) -> Dict[str, Any]:
         url = self._extract_attr(item, "url") or ""
@@ -203,6 +227,7 @@ class AsyncExaClient:
         if self.cache:
             cached = self.cache.get(cache_key)
             if cached:
+                cached = self._normalize_cached_data(cached)
                 cached["cache_hit"] = True
                 return cached
 
