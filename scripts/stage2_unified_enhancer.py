@@ -2058,6 +2058,20 @@ def _build_stage2_summary_diagnostics(
     unavailable_reason = exec_stats.get("tavily_unavailable_reason")
     if unavailable_reason:
         payload["tavily_unavailable_reason"] = unavailable_reason
+    exa_failover_summary_keys = (
+        "search_backend_final",
+        "tavily_to_exa_failover",
+        "tavily_to_exa_failover_count",
+        "exa_failover_success",
+        "exa_failover_empty",
+        "exa_failover_error",
+        "exa_unavailable",
+        "exa_error_breakdown",
+        "exa_error_samples",
+    )
+    for key in exa_failover_summary_keys:
+        if key in exec_stats:
+            payload[key] = exec_stats[key]
     return payload
 
 
@@ -5497,6 +5511,19 @@ async def main() -> int:
     }
     if "tavily_unavailable_reason" in summary_diagnostics:
         summary["tavily_unavailable_reason"] = summary_diagnostics["tavily_unavailable_reason"]
+    for key in (
+        "search_backend_final",
+        "tavily_to_exa_failover",
+        "tavily_to_exa_failover_count",
+        "exa_failover_success",
+        "exa_failover_empty",
+        "exa_failover_error",
+        "exa_unavailable",
+        "exa_error_breakdown",
+        "exa_error_samples",
+    ):
+        if key in summary_diagnostics:
+            summary[key] = summary_diagnostics[key]
     _dump_json(summary, log_output)
 
     try:

@@ -186,6 +186,33 @@ def test_summary_diagnostics_persist_tavily_unavailable_reason():
     assert summary_fields["deepseek_breaker_timeouts"] == 3
 
 
+def test_stage2_summary_includes_exa_failover_diagnostics():
+    summary = stage2._build_stage2_summary_diagnostics(
+        completed_tasks=[],
+        failures=[],
+        websearch_results=[],
+        exec_stats={
+            "search_backend_final": "exa",
+            "tavily_to_exa_failover": True,
+            "tavily_to_exa_failover_count": 1,
+            "exa_failover_success": 3,
+            "exa_failover_empty": 1,
+            "exa_failover_error": 2,
+            "exa_unavailable": 0,
+            "exa_error_breakdown": {"rate_limited": 2},
+            "exa_error_samples": [{"exa_error_tag": "rate_limited"}],
+        },
+    )
+
+    assert summary["search_backend_final"] == "exa"
+    assert summary["tavily_to_exa_failover"] is True
+    assert summary["tavily_to_exa_failover_count"] == 1
+    assert summary["exa_failover_success"] == 3
+    assert summary["exa_failover_empty"] == 1
+    assert summary["exa_failover_error"] == 2
+    assert summary["exa_error_breakdown"] == {"rate_limited": 2}
+
+
 def test_is_environment_proxy_error_detects_missing_socksio_message():
     exc = RuntimeError("Using SOCKS proxy, but the 'socksio' package is not installed")
 

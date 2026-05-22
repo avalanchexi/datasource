@@ -665,6 +665,17 @@ class ErrorExaClient:
         raise exc
 
 
+class ErroringExaClient:
+    async def search(self, **kwargs):
+        exc = RuntimeError("429 rate limit exceeded")
+        exc.response = type(
+            "Response",
+            (),
+            {"status_code": 429, "headers": {"x-request-id": "req-err"}},
+        )()
+        raise exc
+
+
 class EmptyExaClient:
     def __init__(self):
         self.calls = []
@@ -859,6 +870,52 @@ async def test_tavily_quota_switches_current_and_remaining_tasks_to_exa(tmp_path
     assert stats["search_backend_final"] == "exa"
     assert stats["exa_failover_success"] == 2
     assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_quota_without_exa_records_exa_unavailable(tmp_path):
+    client = QuotaTavilyClient()
+    stats = {}
+    tasks = [{
+        "task_id": "quota-gold-no-exa",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        None,
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed == []
+    assert len(failures) == 1
+    assert stats["exa_unavailable"] == 1
+    assert failures[0]["manual_reason"] in {"quota_or_rate_limit", "exa_unavailable"}
 
 
 @pytest.mark.anyio("asyncio")
@@ -1161,6 +1218,53 @@ async def test_tavily_quota_exa_error_metadata_is_audited(tmp_path):
     assert websearch_results[0]["manual_reason"] == "exa_error"
     assert websearch_results[0]["exa_error_tag"] == "rate_limited"
     assert websearch_results[0]["exa_request_id"] == "exa-request-123"
+    assert stats["exa_failover_error"] == 1
+    assert stats["exa_error_breakdown"]["rate_limited"] == 1
+    assert stats["exa_error_samples"][0]["exa_request_id"] == "exa-request-123"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_failover_error_records_structured_diagnostics(tmp_path):
+    stats = {}
+    tasks = [{
+        "task_id": "quota-gold-exa-error",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }]
+
+    await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        QuotaTavilyClient(),
+        ErroringExaClient(),
+        NoopExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert stats["exa_failover_error"] == 1
+    assert stats["exa_error_breakdown"]["rate_limited"] == 1
+    assert stats["exa_error_samples"][0]["exa_request_id"] == "req-err"
 
 
 @pytest.mark.anyio("asyncio")
