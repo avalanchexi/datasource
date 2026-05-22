@@ -3213,6 +3213,28 @@ async def _execute_tasks(
             if str(key).startswith("exa_") or key == "request_id"
         }
 
+    def _tavily_diagnostics_from_task(
+        task: Dict[str, Any],
+        field_attempts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        diagnostics = {
+            key: task[key]
+            for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+            if key in task
+        }
+        if not diagnostics and field_attempts:
+            for attempt in reversed(field_attempts):
+                diagnostics = {
+                    key: attempt[key]
+                    for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+                    if key in attempt
+                }
+                if diagnostics:
+                    break
+        if not diagnostics and task.get("search_backend") == "exa" and active_tavily_limit_metadata:
+            diagnostics = dict(active_tavily_limit_metadata)
+        return diagnostics
+
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
         text_parts: List[str] = []
@@ -3634,6 +3656,10 @@ async def _execute_tasks(
                     field_failover_exa_metadata = _exa_metadata or {}
                     best_payload = exa_best_payload
             field_attempts.extend(attempts)
+            field_failover_manual = extraction.get("_field_retry_failover_manual")
+            if isinstance(field_failover_manual, dict):
+                field_failover_manual["query_attempts"] = list(field_attempts)
+                field_failover_manual["field_attempts"] = list(field_attempts)
             if not best_payload:
                 if field_search_backend == "exa" and attempts:
                     exa_attempt = next(
@@ -3658,8 +3684,8 @@ async def _execute_tasks(
                             or dict(active_tavily_limit_metadata),
                             "exa_metadata": field_failover_exa_metadata
                             or _exa_metadata_from_attempt(exa_attempt),
-                            "query_attempts": list(attempts),
-                            "field_attempts": list(attempts),
+                            "query_attempts": list(field_attempts),
+                            "field_attempts": list(field_attempts),
                         }
                         extraction["manual_required"] = True
                         extraction["manual_reason"] = reason
@@ -3779,14 +3805,14 @@ async def _execute_tasks(
                             reason=str(field_failover_manual.get("reason") or "exa_empty"),
                             attempt_index=attempt_idx,
                             elapsed_ms=0,
-                            query_attempts=field_failover_manual.get("query_attempts") or field_attempts,
+                            query_attempts=field_attempts or field_failover_manual.get("query_attempts"),
                             exa_metadata=field_failover_manual.get("exa_metadata") or {},
                             tavily_metadata=field_failover_manual.get("tavily_metadata") or {},
                         )
                         _attach_field_attempts(
                             task_record,
                             websearch_item,
-                            field_failover_manual.get("field_attempts") or field_attempts,
+                            field_attempts or field_failover_manual.get("field_attempts") or [],
                         )
                         failures.append(task_record)
                         manual_required_keys.append(task_record["indicator_key"])
@@ -3828,7 +3854,9 @@ async def _execute_tasks(
                         extraction["note"] = ((extraction.get("note") or "") + " " + note_append2).strip()
                     manual_required = manual_required or manual2
 
+                tavily_diagnostics = _tavily_diagnostics_from_task(task, field_attempts)
                 task_record = {
+                    **tavily_diagnostics,
                     "task_id": task["task_id"],
                     "indicator_key": task["indicator_key"],
                     "stage_phase": task["stage_phase"],
@@ -4825,14 +4853,14 @@ async def _execute_tasks(
                                     reason=str(field_failover_manual.get("reason") or "exa_empty"),
                                     attempt_index=attempt,
                                     elapsed_ms=elapsed_ms,
-                                    query_attempts=field_failover_manual.get("query_attempts") or field_attempts,
+                                    query_attempts=field_attempts or field_failover_manual.get("query_attempts"),
                                     exa_metadata=field_failover_manual.get("exa_metadata") or {},
                                     tavily_metadata=field_failover_manual.get("tavily_metadata") or {},
                                 )
                                 _attach_field_attempts(
                                     task_record,
                                     websearch_item,
-                                    field_failover_manual.get("field_attempts") or field_attempts,
+                                    field_attempts or field_failover_manual.get("field_attempts") or [],
                                 )
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
@@ -4918,11 +4946,7 @@ async def _execute_tasks(
                                 directed_retry_done = True
                                 continue
 
-                        tavily_diagnostics = {
-                            key: task_for_log[key]
-                            for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
-                            if key in task_for_log
-                        }
+                        tavily_diagnostics = _tavily_diagnostics_from_task(task_for_log, field_attempts)
                         task_record = {
                             **tavily_diagnostics,
                             "task_id": task["task_id"],
