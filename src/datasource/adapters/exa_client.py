@@ -23,6 +23,10 @@ except Exception:  # noqa: W0703
 class AsyncExaClient:
     """Async wrapper for Exa SDK search."""
 
+    @classmethod
+    def sdk_available(cls) -> bool:
+        return Exa is not None
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -236,17 +240,22 @@ class AsyncExaClient:
             resp = await asyncio.to_thread(client.search, **payload)
 
         results: List[Any] = []
+        request_id = None
         if isinstance(resp, dict):
             results = resp.get("results") or []
+            request_id = resp.get("requestId") or resp.get("request_id")
         else:
             results = (
                 getattr(resp, "results", None) or resp
             )  # resp may already be a list
+            request_id = getattr(resp, "requestId", None) or getattr(resp, "request_id", None)
         if not isinstance(results, list):
             results = []
 
         mapped = [self._map_result(item) for item in results]
         data = {"results": mapped, "query": query, "cache_hit": False}
+        if request_id:
+            data["request_id"] = request_id
         if self.cache:
             self.cache.set(cache_key, data, ttl=cache_ttl)
         return data

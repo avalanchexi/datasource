@@ -286,8 +286,46 @@ def _is_tavily_quota_error(exc: Exception) -> bool:
     status = getattr(getattr(exc, "response", None), "status_code", None)
     if status in {402, 403, 429}:
         return True
-    msg = str(exc).lower()
-    return any(token in msg for token in ["quota", "rate limit", "payment", "402", "403", "429"])
+    return _text_indicates_quota_or_rate_limit(str(exc))
+
+
+def _text_indicates_quota_or_rate_limit(text: Any) -> bool:
+    msg = str(text or "").lower()
+    return any(
+        token in msg
+        for token in [
+            "quota",
+            "rate limit",
+            "rate-limit",
+            "rate_limited",
+            "ratelimit",
+            "too many requests",
+            "usage limit",
+            "billing",
+            "payment",
+            "402",
+            "403",
+            "429",
+        ]
+    )
+
+
+def _is_tavily_quota_response(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status = payload.get("status")
+    try:
+        status_int = int(status)
+    except (TypeError, ValueError):
+        status_int = None
+    if status_int in {402, 403, 429}:
+        return True
+    return _text_indicates_quota_or_rate_limit(
+        " ".join(
+            str(payload.get(key) or "")
+            for key in ("error", "message", "detail", "warning")
+        )
+    )
 
 
 def _is_environment_proxy_error(exc: Exception) -> bool:
@@ -2611,6 +2649,7 @@ async def _execute_tasks(
             return None, "exa_unavailable", {"exa_error_tag": "unavailable"}
         query = query_override or task.get("query_used") or task.get("query") or task.get("indicator_key")
         include_domains = task.get("preferred_domains") or None
+        exclude_domains = task.get("exclude_domains") or None
         num_results = task.get("max_results") or None
         start_published = _start_date_from_max_age(task.get("max_age_days"))
         search_type = _exa_search_type(task.get("indicator_key") or "")
@@ -2619,6 +2658,7 @@ async def _execute_tasks(
                 query=query,
                 num_results=num_results,
                 include_domains=include_domains,
+                exclude_domains=exclude_domains,
                 start_published_date=start_published,
                 search_type=search_type,
                 contents={"text": True, "summary": True, "highlights": True},
@@ -2649,7 +2689,136 @@ async def _execute_tasks(
         return result, "exa_failover", {
             "exa_query": query,
             "exa_result_count": len(snippets),
+            "exa_request_id": result.get("request_id"),
         }
+
+    def _task_for_candidate(task: Dict[str, Any], candidate: Dict[str, Any], query: str) -> Dict[str, Any]:
+        return {
+            **task,
+            "query": query,
+            "preferred_domains": candidate.get("preferred_domains") or task.get("preferred_domains"),
+            "exclude_domains": candidate.get("exclude_domains") or task.get("exclude_domains"),
+            "required_keywords": candidate.get("required_keywords") or task.get("required_keywords"),
+            "exclude_keywords": candidate.get("exclude_keywords") or task.get("exclude_keywords"),
+            "strict_required_keywords": candidate.get(
+                "strict_required_keywords",
+                task.get("strict_required_keywords"),
+            ),
+            "strict_issuer_match": candidate.get("strict_issuer_match", task.get("strict_issuer_match")),
+            "good_url_patterns": candidate.get("good_url_patterns") or task.get("good_url_patterns"),
+            "bad_url_patterns": candidate.get("bad_url_patterns") or task.get("bad_url_patterns"),
+            "evidence_keywords": candidate.get("evidence_keywords") or task.get("evidence_keywords"),
+            "max_results": candidate.get("max_results") or task.get("max_results"),
+        }
+
+    async def _run_exa_search_candidates(
+        task: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        reason: str,
+    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], str, Dict[str, Any]]:
+        best_payload: Optional[Dict[str, Any]] = None
+        attempts: List[Dict[str, Any]] = []
+        last_note = "exa_empty"
+        last_metadata: Dict[str, Any] = {}
+        for idx, candidate in enumerate(candidates):
+            query = str(candidate.get("query") or "").strip()
+            if not query:
+                continue
+            exa_task = _task_for_candidate(task, candidate, query)
+            result, note, metadata = await _run_exa_search_for_task(
+                exa_task,
+                reason,
+                query_override=query,
+            )
+            last_note = note
+            last_metadata = metadata or {}
+            if not result:
+                attempts.append(
+                    {
+                        "query": query,
+                        "family": candidate.get("family"),
+                        "field_scope": candidate.get("field_scope"),
+                        "search_backend": "exa",
+                        "manual_required": True,
+                        "manual_reason": note,
+                        **last_metadata,
+                    }
+                )
+                continue
+            raw_snippets = result.get("results") or []
+            quality = _candidate_query_quality(task, candidate, raw_snippets)
+            score_stats = quality.get("score_stats") or _score_stats(raw_snippets)
+            attempt_meta = {
+                "query": query,
+                "family": candidate.get("family"),
+                "field_scope": candidate.get("field_scope"),
+                "search_backend": "exa",
+                "result_count": len(raw_snippets),
+                "usable_count": quality.get("usable_count"),
+                "trusted_count": quality.get("trusted_count"),
+                "issuer_hit": quality.get("issuer_hit"),
+                "period_hit": quality.get("period_hit"),
+                "score_max": score_stats.get("score_max"),
+                "quality_score": quality.get("quality_score"),
+                "usage_evidence_score": quality.get("usage_evidence_score"),
+                "value_evidence_score": quality.get("value_evidence_score"),
+                "good_url_hit_count": quality.get("good_url_hit_count"),
+                "bad_url_hit_count": quality.get("bad_url_hit_count"),
+                "unusable_reason": quality.get("unusable_reason"),
+                **last_metadata,
+            }
+            attempts.append(attempt_meta)
+            task_for_log = {
+                **task,
+                "search_backend": "exa",
+                "query": query,
+                "query_used": query,
+                "query_family_used": candidate.get("family"),
+                "field_scope": candidate.get("field_scope"),
+                "score_stats": score_stats,
+                "usable_count_before_extract": quality.get("usable_count", 0),
+                "trusted_count": quality.get("trusted_count", 0),
+                "issuer_hit": quality.get("issuer_hit", False),
+                "period_hit": quality.get("period_hit", False),
+                "selected_reason": quality.get("selected_reason"),
+                "usage_evidence_score": quality.get("usage_evidence_score", 0),
+                "value_evidence_score": quality.get("value_evidence_score", 0),
+                "quality_score": quality.get("quality_score", -1.0),
+                "good_url_hit_count": quality.get("good_url_hit_count", 0),
+                "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
+                "unusable_reason": quality.get("unusable_reason"),
+                "search_note": note,
+                "search_backend_state": "exa_active",
+                "failover_reason": reason,
+                **last_metadata,
+            }
+            payload = {
+                "candidate": candidate,
+                "result": result,
+                "raw_snippets": raw_snippets,
+                "snippets": quality.get("snippets", raw_snippets),
+                "score_stats": score_stats,
+                "quality_score": quality.get("quality_score", -1.0),
+                "selected_reason": quality.get("selected_reason"),
+                "usable_count": quality.get("usable_count", 0),
+                "trusted_count": quality.get("trusted_count", 0),
+                "issuer_hit": quality.get("issuer_hit", False),
+                "period_hit": quality.get("period_hit", False),
+                "usage_evidence_score": quality.get("usage_evidence_score", 0),
+                "value_evidence_score": quality.get("value_evidence_score", 0),
+                "good_url_hit_count": quality.get("good_url_hit_count", 0),
+                "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
+                "unusable_reason": quality.get("unusable_reason"),
+                "task_for_log": task_for_log,
+                "note": note,
+                "metadata": last_metadata,
+                "candidate_index": idx,
+            }
+            if best_payload is None or payload["quality_score"] > best_payload["quality_score"]:
+                best_payload = payload
+        if best_payload and best_payload.get("candidate_index", 0) > 0:
+            stats["post_filter_query_switch_count"] += 1
+        return best_payload, attempts, last_note, last_metadata
 
     def _quality_filter_exa_result(
         task: Dict[str, Any],
@@ -3023,7 +3192,7 @@ async def _execute_tasks(
                         "unit": task.get("unit"),
                         "source_url": url or (snips[0].get("url") if snips else None),
                         "confidence": 0.2 if val is not None else 0.0,
-                        "note": f"deepseek_error:{exc}",
+                        "note": f"deepseek_error:{exc} regex_fallback",
                         "llm_error": str(exc),
                         "llm_timeout": is_timeout,
                         "llm_latency_ms": int((time.perf_counter() - start_llm) * 1000),
@@ -3630,25 +3799,30 @@ async def _execute_tasks(
                 search_note: Optional[str] = None
                 task_for_log = task
                 result: Dict[str, Any] = {}
+                exa_best_payload: Optional[Dict[str, Any]] = None
                 try:
                     try:
                         if active_search_backend == "exa":
-                            exa_result, exa_note, exa_metadata = await _run_exa_search_for_task(
+                            search_candidates = _expand_query_candidates(
                                 task,
-                                failover_reason or "quota_or_rate_limit",
-                                query_override=directed_query_override or task.get("query"),
+                                directed_query_override=directed_query_override,
                             )
-                            if exa_result:
-                                result = exa_result
-                                query_used = result.get("query") or directed_query_override or task.get("query")
-                                snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
-                                    task,
-                                    result,
-                                    query_used,
-                                    exa_note,
+                            best_payload, query_attempts, exa_note, exa_metadata = await _run_exa_search_candidates(
+                                task,
+                                search_candidates,
+                                failover_reason or "quota_or_rate_limit",
+                            )
+                            if best_payload:
+                                result = best_payload["result"]
+                                query_used = best_payload["candidate"].get("query")
+                                snippets = best_payload.get("snippets") or []
+                                score_stats = best_payload.get("score_stats") or _score_stats(snippets)
+                                task_for_log = dict(
+                                    best_payload.get("task_for_log") or task
                                 )
+                                task_for_log["query_attempts"] = query_attempts
                                 search_backend = "exa"
-                                search_note = exa_note
+                                search_note = best_payload.get("note") or exa_note
                                 task_for_log.update(
                                     {
                                         "search_backend": "exa",
@@ -3713,11 +3887,16 @@ async def _execute_tasks(
                             exa_result, exa_note = None, None
                         elif is_quota_error and _activate_exa_failover(task, "quota_or_rate_limit"):
                             _mark_tavily_quota_unavailable()
-                            exa_result, exa_note, exa_metadata = await _run_exa_search_for_task(
+                            search_candidates = _expand_query_candidates(
                                 task,
-                                "quota_or_rate_limit",
-                                query_override=task.get("query"),
                             )
+                            exa_best_payload, exa_attempts, exa_note, exa_metadata = await _run_exa_search_candidates(
+                                task,
+                                search_candidates,
+                                "quota_or_rate_limit",
+                            )
+                            query_attempts.extend(exa_attempts)
+                            exa_result = exa_best_payload["result"] if exa_best_payload else None
                         elif is_quota_error:
                             _mark_tavily_quota_unavailable()
                             exa_result, exa_note = None, None
@@ -3727,15 +3906,21 @@ async def _execute_tasks(
                             )
                         if exa_result:
                             result = exa_result
-                            query_used = result.get("query") or task.get("query")
-                            snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
-                                task,
-                                result,
-                                query_used,
-                                exa_note,
-                            )
+                            if exa_best_payload:
+                                query_used = exa_best_payload["candidate"].get("query")
+                                snippets = exa_best_payload.get("snippets") or []
+                                score_stats = exa_best_payload.get("score_stats") or _score_stats(snippets)
+                                task_for_log = dict(exa_best_payload.get("task_for_log") or task)
+                            else:
+                                query_used = result.get("query") or task.get("query")
+                                snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                    task,
+                                    result,
+                                    query_used,
+                                    exa_note,
+                                )
                             search_backend = "exa"
-                            search_note = exa_note
+                            search_note = exa_best_payload.get("note") if exa_best_payload else exa_note
                             task_for_log["query_attempts"] = query_attempts
                             task_for_log.update(
                                 {
@@ -3903,7 +4088,65 @@ async def _execute_tasks(
                                         include_raw_content=is_fund_flow,
                                         cache_ttl=cache_ttl,
                                     )
-                                    if extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
+                                    extract_resp = extract_resp or {}
+                                    if _is_tavily_quota_response(extract_resp):
+                                        elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                        if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
+                                            _mark_tavily_quota_unavailable()
+                                            search_candidates = _expand_query_candidates(task_for_log)
+                                            exa_best_payload, exa_attempts, exa_note, exa_metadata = (
+                                                await _run_exa_search_candidates(
+                                                    task_for_log,
+                                                    search_candidates,
+                                                    "quota_or_rate_limit",
+                                                )
+                                            )
+                                            query_attempts.extend(exa_attempts)
+                                            if exa_best_payload:
+                                                result = exa_best_payload["result"]
+                                                query_used = exa_best_payload["candidate"].get("query")
+                                                snippets = exa_best_payload.get("snippets") or []
+                                                score_stats = exa_best_payload.get("score_stats") or _score_stats(
+                                                    snippets
+                                                )
+                                                task_for_log = dict(exa_best_payload.get("task_for_log") or task_for_log)
+                                                task_for_log["query_attempts"] = query_attempts
+                                                search_backend = "exa"
+                                                search_note = exa_best_payload.get("note") or exa_note
+                                                if not snippets:
+                                                    skip_deepseek_reason = (
+                                                        task_for_log.get("unusable_reason")
+                                                        or exa_note
+                                                        or "no_snippets"
+                                                    )
+                                            else:
+                                                task_record, websearch_item = _build_exa_failover_manual_records(
+                                                    task_for_log,
+                                                    reason=exa_note,
+                                                    attempt_index=attempt,
+                                                    elapsed_ms=elapsed_ms,
+                                                    query_attempts=query_attempts,
+                                                    exa_metadata=exa_metadata,
+                                                )
+                                                _append_task_log(task_log_path, task_record)
+                                                failures.append(task_record)
+                                                manual_required_keys.append(task_record["indicator_key"])
+                                                websearch_results.append(websearch_item)
+                                                break
+                                        else:
+                                            _mark_tavily_quota_unavailable()
+                                            task_record, websearch_item = _build_tavily_fast_switch_records(
+                                                task_for_log,
+                                                attempt_index=attempt,
+                                                elapsed_ms=elapsed_ms,
+                                                query_attempts=query_attempts,
+                                            )
+                                            _append_task_log(task_log_path, task_record)
+                                            failures.append(task_record)
+                                            manual_required_keys.append(task_record["indicator_key"])
+                                            websearch_results.append(websearch_item)
+                                            break
+                                    elif extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
                                         stats["tavily_extract_422_count"] += 1
                                         logger.debug("Tavily extract 422, 降级到 DeepSeek 直接从 snippets 抽取")
                                         stats.setdefault("extract_fallback_to_deepseek", 0)
@@ -3991,22 +4234,24 @@ async def _execute_tasks(
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
                             if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
                                 _mark_tavily_quota_unavailable()
-                                exa_result, exa_note, exa_metadata = await _run_exa_search_for_task(
-                                    task_for_log,
-                                    "quota_or_rate_limit",
-                                    query_override=query_used or task.get("query"),
+                                search_candidates = _expand_query_candidates(task_for_log)
+                                exa_best_payload, exa_attempts, exa_note, exa_metadata = (
+                                    await _run_exa_search_candidates(
+                                        task_for_log,
+                                        search_candidates,
+                                        "quota_or_rate_limit",
+                                    )
                                 )
+                                query_attempts.extend(exa_attempts)
+                                exa_result = exa_best_payload["result"] if exa_best_payload else None
                                 if exa_result:
                                     result = exa_result
-                                    query_used = result.get("query") or query_used or task.get("query")
-                                    snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
-                                        task_for_log,
-                                        result,
-                                        query_used,
-                                        exa_note,
-                                    )
+                                    query_used = exa_best_payload["candidate"].get("query")
+                                    snippets = exa_best_payload.get("snippets") or []
+                                    score_stats = exa_best_payload.get("score_stats") or _score_stats(snippets)
+                                    task_for_log = dict(exa_best_payload.get("task_for_log") or task_for_log)
                                     search_backend = "exa"
-                                    search_note = exa_note
+                                    search_note = exa_best_payload.get("note") or exa_note
                                     task_for_log["query_attempts"] = query_attempts
                                     task_for_log.update(
                                         {
@@ -5045,6 +5290,14 @@ def _should_initialize_exa_client(args: argparse.Namespace) -> bool:
     return bool(os.getenv("EXA_API_KEY")) or _should_enable_exa_fallback(args)
 
 
+def _is_exa_sdk_available() -> bool:
+    return bool(
+        AsyncExaClient
+        and callable(getattr(AsyncExaClient, "sdk_available", None))
+        and AsyncExaClient.sdk_available()  # type: ignore[union-attr]
+    )
+
+
 def _load_tasks_from_file(path: Path) -> List[Dict[str, Any]]:
     tasks = []
     with path.open("r", encoding="utf-8") as f:
@@ -5264,7 +5517,8 @@ async def main() -> int:
     )
     exa_client = None
     exa_api_key = os.getenv("EXA_API_KEY")
-    if _should_initialize_exa_client(args) and exa_api_key and AsyncExaClient:
+    exa_sdk_available = _is_exa_sdk_available()
+    if _should_initialize_exa_client(args) and exa_api_key and exa_sdk_available:
         exa_client = AsyncExaClient(
             api_key=exa_api_key,
             cache=cache,
@@ -5277,11 +5531,11 @@ async def main() -> int:
                 "[Stage2] EXA_API_KEY 已设置；将仅用于 Tavily quota/rate-limit failover，"
                 "非 quota Exa fallback 仍需 --enable-exa-fallback。"
             )
-    elif _should_enable_exa_fallback(args) and exa_api_key:
+    elif _should_enable_exa_fallback(args) and exa_api_key and not exa_sdk_available:
         logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Exa 兜底将被跳过。")
     elif _should_enable_exa_fallback(args) and not exa_api_key:
         logger.warning("[Stage2] Exa fallback requested but EXA_API_KEY is not set")
-    elif exa_api_key and not AsyncExaClient:
+    elif exa_api_key and not exa_sdk_available:
         logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Tavily quota Exa failover 将被跳过。")
     extractor = DeepSeekExtractionAgent(
         model=args.deepseek_model,

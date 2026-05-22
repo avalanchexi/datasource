@@ -1,5 +1,6 @@
 import asyncio
 
+import datasource.adapters.exa_client as exa_module
 from datasource.adapters.exa_client import AsyncExaClient
 
 
@@ -129,3 +130,24 @@ def test_exa_truncate_respects_small_bounds():
     assert len(AsyncExaClient._truncate(text, 0)) <= 0
     assert len(AsyncExaClient._truncate(text, 1)) <= 1
     assert len(AsyncExaClient._truncate(text, 2)) <= 2
+
+
+def test_exa_sdk_available_reflects_optional_dependency(monkeypatch):
+    monkeypatch.setattr(exa_module, "Exa", None)
+    assert AsyncExaClient.sdk_available() is False
+
+    monkeypatch.setattr(exa_module, "Exa", object)
+    assert AsyncExaClient.sdk_available() is True
+
+
+def test_exa_search_preserves_response_request_id(monkeypatch):
+    class FakeExa:
+        def search(self, **kwargs):
+            return {"results": [], "requestId": "exa-request-123"}
+
+    monkeypatch.setattr(exa_module, "Exa", lambda api_key: FakeExa())
+    client = AsyncExaClient(api_key="test-key")
+
+    result = asyncio.run(client.search(query="request id query"))
+
+    assert result["request_id"] == "exa-request-123"

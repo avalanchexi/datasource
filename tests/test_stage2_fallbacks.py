@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 import pytest
 
-from scripts.stage2_unified_enhancer import _execute_tasks
+from scripts.stage2_unified_enhancer import _execute_tasks, _is_tavily_quota_error
 
 
 class FakeClient422:
@@ -626,6 +626,36 @@ class RecordingExaClient:
         }
 
 
+class MultiQueryExaClient:
+    def __init__(self):
+        self.calls = []
+
+    async def search(self, **kwargs):
+        self.calls.append(kwargs)
+        query = kwargs.get("query") or "quote"
+        if "good" in query:
+            text = "COMEX gold latest futures quote 3300.0 $/oz"
+            score = 0.92
+            url = "https://example.com/good-gold"
+        else:
+            text = "weather and calendar page without the target quote"
+            score = 0.99
+            url = "https://example.com/bad"
+        return {
+            "results": [
+                {
+                    "url": url,
+                    "title": query,
+                    "snippet": text,
+                    "content": text,
+                    "score": score,
+                    "published_date": "2026-05-22",
+                }
+            ],
+            "query": query,
+        }
+
+
 class UnrelatedExaClient:
     def __init__(self):
         self.calls = []
@@ -818,6 +848,41 @@ class ExtractQuotaTavilyClient:
         exc = RuntimeError("429 rate limit exceeded")
         exc.response = type("Response", (), {"status_code": 429})()
         raise exc
+
+
+class ExtractQuotaResponseTavilyClient(ExtractQuotaTavilyClient):
+    async def extract(self, **kwargs):
+        self.extract_calls += 1
+        return {"status": 429, "error": "rate limit exceeded", "results": []}
+
+
+class FailingFallbackExtractor:
+    async def extract(
+        self,
+        snippets,
+        indicator,
+        unit_hint=None,
+        issuer_hint=None,
+        request_timeout=None,
+    ):
+        raise RuntimeError("deepseek unavailable")
+
+    def _fallback_extract(self, snippets, indicator=None, unit_hint=None):
+        return 2400.5, snippets[0].get("url") if snippets else None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "rate-limit exceeded",
+        "rate_limited by provider",
+        "Too Many Requests",
+        "billing quota exhausted",
+        "usage limit reached",
+    ],
+)
+def test_tavily_quota_error_classifier_covers_common_text_variants(message):
+    assert _is_tavily_quota_error(RuntimeError(message)) is True
 
 
 @pytest.mark.anyio("asyncio")
@@ -1920,3 +1985,176 @@ async def test_tavily_extract_quota_switches_current_and_remaining_tasks_to_exa(
     assert stats["tavily_to_exa_failover"] is True
     assert stats["search_backend_final"] == "exa"
     assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_tavily_extract_quota_response_switches_current_and_remaining_tasks_to_exa(tmp_path):
+    client = ExtractQuotaResponseTavilyClient()
+    exa = RecordingExaClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "extract-quota-response-gold",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "COMEX gold latest price",
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+        {
+            "task_id": "extract-quota-response-oil",
+            "indicator_key": "CL=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "WTI crude latest price",
+            "unit": "$/bbl",
+            "created_at": 1700000001,
+            "preferred_domains": [],
+            "extract_policy": {"use_tavily_extract": True, "extract_topk": 1},
+        },
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=False,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert client.search_calls == 1
+    assert client.extract_calls == 1
+    assert len(exa.calls) == 2
+    assert len(completed) == 2
+    assert failures == []
+    assert stats["tavily_unavailable_reason"] == "quota_or_rate_limit"
+    assert stats["search_backend_final"] == "exa"
+    assert all(item["search_backend"] == "exa" for item in websearch_results)
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_active_reuses_query_candidates_and_selects_best_result(tmp_path):
+    client = QuotaTavilyClient()
+    exa = MultiQueryExaClient()
+    stats = {}
+    tasks = [
+        {
+            "task_id": "quota-gold-multi-query",
+            "indicator_key": "GC=F",
+            "stage_phase": "assets",
+            "category": "commodities",
+            "search_backend": "tavily",
+            "query": "bad gold query",
+            "query_families": [
+                {"name": "bad", "queries": ["bad gold query"]},
+                {"name": "good", "queries": ["good gold query"]},
+            ],
+            "max_query_candidates": 2,
+            "required_output_fields": ["value"],
+            "unit": "$/oz",
+            "created_at": 1700000000,
+            "preferred_domains": [],
+        }
+    ]
+
+    completed, failures, websearch_results = await _execute_tasks(
+        tasks,
+        {"commodities": []},
+        client,
+        exa,
+        ValueExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=True,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert [call["query"] for call in exa.calls] == ["bad gold query", "good gold query"]
+    assert completed
+    assert failures == []
+    assert completed[0]["query_used"] == "good gold query"
+    assert completed[0]["query_family_used"] == "good"
+    assert websearch_results[0]["task"]["query_attempts"][0]["query"] == "bad gold query"
+    assert websearch_results[0]["task"]["query_attempts"][1]["query"] == "good gold query"
+
+
+@pytest.mark.anyio("asyncio")
+async def test_exa_deepseek_failure_regex_fallback_is_labeled_exa_regex(tmp_path):
+    client = QuotaTavilyClient()
+    exa = RecordingExaClient()
+    stats = {}
+    market_payload = {"commodities": []}
+    task = {
+        "task_id": "quota-gold-deepseek-fallback",
+        "indicator_key": "GC=F",
+        "stage_phase": "assets",
+        "category": "commodities",
+        "search_backend": "tavily",
+        "query": "COMEX gold latest price",
+        "unit": "$/oz",
+        "created_at": 1700000000,
+        "preferred_domains": [],
+    }
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        market_payload,
+        client,
+        exa,
+        FailingFallbackExtractor(),
+        task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        fund_flow_backend="tavily",
+        forex_backend="tavily",
+        deepseek_timeout=8,
+        extraction_backend="deepseek",
+        deepseek_max_concurrency=1,
+        deepseek_serial_keys=None,
+        stats=stats,
+        use_queue=False,
+        queue_concurrency=1,
+        queue_maxsize=10,
+        queue_retry_limit=0,
+        disable_extract=True,
+        extract_topk=1,
+        llm_hard_timeout=10,
+    )
+
+    assert completed
+    assert failures == []
+    assert websearch_results[0]["extraction"]["source_url"]
+    assert "regex_fallback" in websearch_results[0]["extraction"]["note"]
+    assert market_payload["commodities"][0]["source"] == "exa_regex"
