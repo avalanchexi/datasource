@@ -213,6 +213,30 @@ def test_stage2_summary_includes_exa_failover_diagnostics():
     assert summary["exa_error_breakdown"] == {"rate_limited": 2}
 
 
+def test_stage2_summary_includes_tavily_limit_error_diagnostics():
+    summary = stage2._build_stage2_summary_diagnostics(
+        completed_tasks=[],
+        failures=[],
+        websearch_results=[],
+        exec_stats={
+            "tavily_limit_error_count": 1,
+            "tavily_error_samples": [
+                {
+                    "tavily_http_status": 432,
+                    "tavily_request_id": "tavily-summary-432",
+                    "tavily_error_message": "Key limit exceeded",
+                }
+            ],
+        },
+    )
+
+    assert summary["tavily_limit_error_count"] == 1
+    assert summary["tavily_error_samples"][0]["tavily_http_status"] == 432
+    assert summary["tavily_error_samples"][0]["tavily_request_id"] == "tavily-summary-432"
+    assert "tavily_limit_error_count" in stage2._STAGE2_BACKEND_SUMMARY_KEYS
+    assert "tavily_error_samples" in stage2._STAGE2_BACKEND_SUMMARY_KEYS
+
+
 def test_is_environment_proxy_error_detects_missing_socksio_message():
     exc = RuntimeError("Using SOCKS proxy, but the 'socksio' package is not installed")
 

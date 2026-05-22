@@ -128,6 +128,34 @@ def test_require_data_completeness_blocks_estimated_fund_flow_even_with_allow_es
     assert "estimated_not_allowed" in str(exc.value)
 
 
+def test_require_data_completeness_blocks_etf_missing_windows_even_with_allow_estimated():
+    payload = {
+        "metadata": {"data_completeness": 0.9737},
+        "missing_items": [],
+        "fund_flow": {
+            "etf": {
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "待核查",
+                "source": "异常零值-需核查",
+                "source_url": "https://data.eastmoney.com/etf/",
+                "manual_required": True,
+                "manual_reason": "fund_flow_window_missing",
+                "is_estimated": False,
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+
+    message = str(exc.value)
+    assert "fund_flow.etf" in message
+    assert "fund_flow_window_missing" in message
+    assert "recent_5d" in message
+    assert "total_120d" in message
+
+
 def test_require_data_completeness_fail_on_low_score():
     payload = {
         "metadata": {"data_completeness": 0.5},
