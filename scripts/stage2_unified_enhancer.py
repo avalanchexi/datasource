@@ -308,14 +308,29 @@ def _is_environment_proxy_error(exc: Exception) -> bool:
         return True
     connectivity_markers = [
         "temporary failure in name resolution",
+        "name resolution",
+        "nameresolutionerror",
         "name or service not known",
+        "getaddrinfo failed",
+        "failed to resolve",
         "dns",
+        "connecterror",
+        "connectionerror",
+        "connecttimeout",
+        "readtimeout",
+        "connect timeout",
+        "connection timeout",
+        "read operation timed out",
+        "timed out",
+        "all connection attempts failed",
         "ssl",
         "tls",
         "certificate",
         "connection reset",
         "connection refused",
+        "connection aborted",
         "network is unreachable",
+        "network error",
     ]
     if any(token in msg for token in connectivity_markers):
         return True

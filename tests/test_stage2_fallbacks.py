@@ -755,12 +755,13 @@ class ProxyErrorTavilyClient:
 
 
 class DnsErrorTavilyClient:
-    def __init__(self):
+    def __init__(self, message="Temporary failure in name resolution"):
         self.calls = 0
+        self.message = message
 
     async def search(self, **kwargs):
         self.calls += 1
-        raise RuntimeError("Temporary failure in name resolution")
+        raise RuntimeError(self.message)
 
     async def extract(self, **kwargs):  # pragma: no cover - should not be called
         raise AssertionError("extract should not run after DNS environment failure")
@@ -1506,9 +1507,20 @@ async def test_environment_proxy_error_fast_switches_remaining_tasks_to_manual_r
     assert all(record["manual_reason"] == "environment_proxy_error" for record in task_log_records)
 
 
+@pytest.mark.parametrize(
+    "error_message",
+    [
+        "Temporary failure in name resolution",
+        "getaddrinfo failed",
+        "NameResolutionError: failed to resolve api.tavily.com",
+        "ConnectTimeout: timed out while connecting to api.tavily.com",
+        "ReadTimeout: read operation timed out",
+        "All connection attempts failed",
+    ],
+)
 @pytest.mark.anyio("asyncio")
-async def test_environment_dns_error_does_not_use_non_quota_exa_fallback(tmp_path):
-    client = DnsErrorTavilyClient()
+async def test_environment_dns_error_does_not_use_non_quota_exa_fallback(tmp_path, error_message):
+    client = DnsErrorTavilyClient(error_message)
     exa = RecordingExaClient()
     stats = {}
     tasks = [
