@@ -48,8 +48,9 @@ python3 scripts/stage2_unified_enhancer.py \
 - score_filtered_drop、domain_filtered_drop、extract_calls、tavily_extract_calls、tavily_extract_422_count
 - timeout_count、retry_count、cache_hit_rate、avg_elapsed_ms、p50_elapsed_ms、p95_elapsed_ms
 - success_by_category / total_by_category
-- 真实命中率：优先看 `stage2_effective_hit_rate`，它包含 structured-provider 成功和搜索抽取成功，不包含 `task_skipped_existing` 或 Stage2.5 manual 注入
-- 搜索链路增量命中率：task_search_success、task_search_failed、search_success_rate_incremental
+- Stage2 总命中率：优先看 `stage2_effective_hit_rate`，并用 `stage2_effective_success/stage2_effective_failure/stage2_effective_denominator` 审计分子分母；它包含 structured-provider 成功和搜索抽取成功，不包含 `task_skipped_existing` 或 Stage2.5 manual 注入
+- 搜索链路命中率：看 `task_search_success`、`task_search_failed`、`search_success_rate_incremental`；该口径只诊断 Tavily/Exa 搜索链路
+- 若 `search_success_rate_incremental=0.0` 且 `task_structured_success` 或 `structured_provider_success_count` 大于 0，说明 Stage2 成功主要来自结构化源，不代表 Stage2 总命中率为 0
 
 ## 兼容提醒
 - 无 MCP 跳过逻辑；资金流搜索后端统一 Tavily，ETF structured provider 默认不释放全市场 ETF gate，零值且无方向直接标人工。
