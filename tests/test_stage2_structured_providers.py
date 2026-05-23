@@ -6,6 +6,7 @@ from datasource.providers.stage2_structured.base import (
     StructuredResult,
 )
 from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
+from datasource.providers.stage2_structured.official_china import OfficialChinaProvider
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
@@ -270,3 +271,78 @@ async def test_chinabond_provider_rejects_unreasonable_yield_value():
         await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
 
     assert exc_info.value.reason in {"missing_value", "parse_error"}
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_reverse_repo_fixture():
+    html = "2026年5月22日人民银行以固定利率、数量招标方式开展了7天期逆回购操作1185亿元，中标利率1.40%。"
+
+    async def fetch_text(url, params=None):
+        assert url == OfficialChinaProvider.REVERSE_REPO_URL
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "reverse_repo"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.source_tier == "tier1"
+    assert extraction["value"] == 1.4
+    assert extraction["unit"] == "%"
+    assert extraction["operation_amount"] == 1185.0
+    assert extraction["source_url"].startswith("https://www.pbc.gov.cn/")
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_mlf_fixture():
+    html = "2026年5月15日开展中期借贷便利（MLF）操作1250亿元，中标利率2.00%。"
+
+    async def fetch_text(url, params=None):
+        assert url == OfficialChinaProvider.MLF_URL
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "mlf"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 2.0
+    assert extraction["operation_amount"] == 1250.0
+    assert extraction["unit"] == "%"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_usdcny_fixture():
+    html = "2026-05-22 USD/CNY 人民币汇率中间价 7.1138"
+
+    async def fetch_text(url, params=None):
+        assert url == OfficialChinaProvider.USDCNY_URL
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "USDCNY"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "forex"
+    assert extraction["value"] == 7.1138
+    assert extraction["unit"] == ""
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_industrial_fixture():
+    html = "2026年4月份，规模以上工业增加值同比实际增长6.1%。从环比看，4月份，规模以上工业增加值比上月增长0.22%。"
+
+    async def fetch_text(url, params=None):
+        assert url == OfficialChinaProvider.NBS_URL
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch(
+        {"indicator_key": "industrial", "expected_period": "2026-04"},
+        {},
+        "2026-05-23",
+    )
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "macro_indicators"
+    assert extraction["value"] == 6.1
+    assert extraction["value_type"] == "yoy_month"
+    assert extraction["report_period"] == "2026-04"
