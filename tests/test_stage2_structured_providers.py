@@ -5,8 +5,11 @@ from datasource.providers.stage2_structured.base import (
     StructuredProviderError,
     StructuredResult,
 )
+from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
+from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
+from datasource.providers.stage2_structured.yahoo_finance import YahooFinanceProvider
 
 
 class FakeProvider:
@@ -110,3 +113,71 @@ def test_source_tier_classifier_uses_explicit_allowlists():
     assert classify_structured_source_tier("https://evil.com/?next=stats.gov.cn") == "unknown"
     assert classify_structured_source_tier("https://stats.gov.cn@evil.com/path") == "unknown"
     assert classify_structured_source_tier("https://sub.stats.gov.cn/path") == "tier1"
+
+
+@pytest.mark.asyncio
+async def test_yahoo_finance_provider_parses_chart_quote():
+    async def fetch_json(url, params=None):
+        assert "query1.finance.yahoo.com" in url
+        assert params["range"] == "5d"
+        return {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {
+                            "regularMarketPrice": 3367.8,
+                            "regularMarketTime": 1779480000,
+                        },
+                        "timestamp": [1779393600, 1779480000],
+                    }
+                ]
+            }
+        }
+
+    provider = YahooFinanceProvider(fetch_json=fetch_json)
+    result = await provider.fetch({"indicator_key": "GC=F"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.provider == "yahoo_finance"
+    assert result.source_tier == "tier2"
+    assert extraction["value"] == 3367.8
+    assert extraction["unit"] == "$/oz"
+    assert extraction["source_url"] == "https://finance.yahoo.com/quote/GC=F"
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_parses_bdi_fixture():
+    html = '<html><body><h1>Baltic Dry</h1><span id="p">1,346.00</span><time>2026-05-22</time></body></html>'
+
+    async def fetch_text(url, params=None):
+        assert "tradingeconomics.com" in url
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "bdi"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.provider == "trading_economics"
+    assert result.source_tier == "tier2"
+    assert extraction["value"] == 1346.0
+    assert extraction["unit"] == "points"
+    assert extraction["source_url"] == "https://tradingeconomics.com/commodity/baltic"
+
+
+@pytest.mark.asyncio
+async def test_chinabond_provider_parses_cn10y_cdb_fixture():
+    html = "中债国开债到期收益率曲线 10年 2.0380 2026-05-22"
+
+    async def fetch_text(url, params=None):
+        assert "chinabond.com.cn" in url
+        return html
+
+    provider = ChinaBondProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.provider == "chinabond"
+    assert result.source_tier == "tier1"
+    assert extraction["value"] == 2.038
+    assert extraction["unit"] == "%"
+    assert extraction["source_url"].startswith("https://yield.chinabond.com.cn/")
