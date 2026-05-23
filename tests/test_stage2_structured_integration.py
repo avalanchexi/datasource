@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
+from scripts.stage2_unified_enhancer import _execute_tasks
+
+
+def _commodity_task() -> dict:
+    return {
+        "task_id": "commodity-gold",
+        "indicator_key": "GC=F",
+        "category": "commodities",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "extraction_backend": "deepseek",
+        "query": "COMEX gold close",
+        "unit": "$/oz",
+        "preferred_domains": [],
+        "created_at": 1700000000,
+    }
+
+
+def _commodity_payload() -> dict:
+    return {
+        "metadata": {"date": "2026-05-23", "missing_items": {"commodities": [{"key": "GC=F"}]}},
+        "commodities": [
+            {
+                "symbol": "GC=F",
+                "name": "COMEX黄金",
+                "current_price": None,
+                "unit": "$/oz",
+            }
+        ],
+        "missing_items": ["GC=F"],
+    }
+
+
+class StructuredGoldRegistry:
+    def __init__(self):
+        self.calls = 0
+
+    def provider_for(self, indicator_key):
+        return object() if indicator_key == "GC=F" else None
+
+    async def fetch(self, task, market_payload, reference_date):
+        self.calls += 1
+        return StructuredResult(
+            provider="gold-fixture",
+            indicator_key=task["indicator_key"],
+            category="commodities",
+            payload={"value": 2410.5, "unit": "$/oz"},
+            source="Structured gold fixture",
+            source_url="https://finance.yahoo.com/quote/GC=F",
+            source_tier="tier2",
+            as_of_date=reference_date,
+            confidence=0.98,
+            diagnostics={"fixture": True},
+        )
+
+
+class ParseErrorGoldRegistry:
+    def __init__(self):
+        self.calls = 0
+
+    def provider_for(self, indicator_key):
+        return object() if indicator_key == "GC=F" else None
+
+    async def fetch(self, task, market_payload, reference_date):
+        self.calls += 1
+        raise StructuredProviderError(
+            provider="gold-fixture",
+            indicator_key=task["indicator_key"],
+            reason="parse_error",
+            message="fixture parse error",
+        )
+
+
+class PolicyBlockedETFRegistry:
+    def __init__(self):
+        self.calls = 0
+
+    def provider_for(self, indicator_key):
+        return object() if indicator_key == "etf" else None
+
+    async def fetch(self, task, market_payload, reference_date):
+        self.calls += 1
+        return StructuredResult(
+            provider="etf-fixture",
+            indicator_key=task["indicator_key"],
+            category="fund_flow",
+            payload={
+                "value": 85.0,
+                "recent_5d": 85.0,
+                "total_120d": 1200.0,
+                "trend": "inflow",
+                "unit": "亿元",
+                "metric_basis": "news_net_flow",
+                "window_evidence": "unknown",
+                "is_estimated": False,
+            },
+            source="ETF news fixture",
+            source_url="https://finance.example.com/etf-news",
+            source_tier="tier3",
+            as_of_date=reference_date,
+            confidence=0.9,
+        )
+
+
+class FailingTavilyClient:
+    def __init__(self):
+        self.search_calls = 0
+        self.extract_calls = 0
+
+    async def search(self, **kwargs):  # pragma: no cover - should not be called
+        self.search_calls += 1
+        raise AssertionError("Tavily search should not run after structured success")
+
+    async def extract(self, **kwargs):  # pragma: no cover - should not be called
+        self.extract_calls += 1
+        raise AssertionError("Tavily extract should not run after structured success")
+
+
+class SearchClient:
+    def __init__(self, snippets):
+        self.snippets = snippets
+        self.search_calls = 0
+        self.extract_calls = 0
+
+    async def search(self, **kwargs):
+        self.search_calls += 1
+        return {"results": list(self.snippets), "request_id": "search-fixture"}
+
+    async def extract(self, **kwargs):  # disabled in these tests
+        self.extract_calls += 1
+        return {"results": []}
+
+
+class FailingExtractor:
+    def __init__(self):
+        self.calls = 0
+
+    async def extract(self, *args, **kwargs):  # pragma: no cover - should not be called
+        self.calls += 1
+        raise AssertionError("DeepSeek extractor should not run after structured success")
+
+
+class CommodityExtractor:
+    def __init__(self):
+        self.calls = 0
+
+    async def extract(self, *args, **kwargs):
+        self.calls += 1
+        return {
+            "value": 2420.25,
+            "unit": "$/oz",
+            "source_url": "https://example.com/gold",
+            "confidence": 0.91,
+            "manual_required": False,
+        }
+
+
+class ETFExtractor:
+    async def extract(self, *args, **kwargs):
+        return {
+            "value": 90.0,
+            "recent_5d": 90.0,
+            "total_120d": 1300.0,
+            "trend": "inflow",
+            "unit": "亿元",
+            "source_url": "https://data.eastmoney.com/etf/",
+            "confidence": 0.92,
+            "manual_required": False,
+            "metric_basis": "net_flow_sum",
+            "window_evidence": "direct_daily_series",
+            "is_estimated": False,
+        }
+
+
+@pytest.mark.asyncio
+async def test_execute_tasks_structured_success_writes_back_and_skips_search(tmp_path: Path):
+    payload = _commodity_payload()
+    registry = StructuredGoldRegistry()
+    client = FailingTavilyClient()
+    extractor = FailingExtractor()
+    stats = {}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [_commodity_task()],
+        payload,
+        client,
+        None,
+        extractor,
+        tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        stats=stats,
+        structured_registry=registry,
+    )
+
+    assert len(completed) == 1
+    assert failures == []
+    assert payload["commodities"][0]["current_price"] == 2410.5
+    assert payload["commodities"][0]["source"] == "structured"
+    assert websearch_results[0]["search_backend"] == "structured"
+    assert websearch_results[0]["result_type"] == "structured_success"
+    assert client.search_calls == 0
+    assert client.extract_calls == 0
+    assert extractor.calls == 0
+    assert stats["structured_provider"]["attempt"] == 1
+    assert stats["structured_provider"]["success"] == 1
+    assert stats["structured_provider"]["by_key"]["GC=F"]["attempt"] == 1
+    assert stats["structured_provider"]["by_key"]["GC=F"]["success"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_tasks_structured_parse_error_falls_back_to_search(tmp_path: Path):
+    payload = _commodity_payload()
+    registry = ParseErrorGoldRegistry()
+    client = SearchClient(
+        [
+            {
+                "url": "https://example.com/gold",
+                "title": "Gold close",
+                "snippet": "COMEX gold closed at 2420.25 $/oz",
+                "content": "COMEX gold closed at 2420.25 $/oz",
+                "score": 0.9,
+            }
+        ]
+    )
+    extractor = CommodityExtractor()
+    stats = {}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [_commodity_task()],
+        payload,
+        client,
+        None,
+        extractor,
+        tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        stats=stats,
+        disable_extract=True,
+        structured_registry=registry,
+    )
+
+    assert len(completed) == 1
+    assert failures == []
+    assert payload["commodities"][0]["current_price"] == 2420.25
+    assert client.search_calls == 1
+    assert extractor.calls == 1
+    assert websearch_results[-1]["search_backend"] == "tavily"
+    assert stats["structured_provider"]["fallback"] == 1
+    assert stats["structured_provider"]["error_breakdown"]["parse_error"] == 1
+    assert stats["structured_provider"]["by_key"]["GC=F"]["fallback"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_tasks_structured_fund_flow_gate_block_falls_back_to_search(tmp_path: Path):
+    task = {
+        "task_id": "fund-flow-etf",
+        "indicator_key": "etf",
+        "category": "fund_flow",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "extraction_backend": "deepseek",
+        "query": "A股 ETF 资金流向",
+        "unit": "亿元",
+        "preferred_domains": [],
+        "created_at": 1700000000,
+    }
+    payload = {
+        "metadata": {"date": "2026-05-23", "missing_items": {"fund_flow": [{"key": "etf"}]}},
+        "fund_flow": {"etf": {"recent_5d": None, "total_120d": None, "is_estimated": False}},
+        "missing_items": ["etf"],
+    }
+    client = SearchClient(
+        [
+            {
+                "url": "https://data.eastmoney.com/etf/",
+                "title": "ETF flow",
+                "snippet": "ETF 近5日净流入 90 亿元，近120日累计 1300 亿元",
+                "content": "ETF 近5日净流入 90 亿元，近120日累计 1300 亿元",
+                "score": 0.95,
+            }
+        ]
+    )
+    stats = {}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        payload,
+        client,
+        None,
+        ETFExtractor(),
+        tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        stats=stats,
+        disable_extract=True,
+        structured_registry=PolicyBlockedETFRegistry(),
+    )
+
+    assert len(completed) == 1
+    assert failures == []
+    assert client.search_calls == 1
+    assert payload["fund_flow"]["etf"]["recent_5d"] == 90.0
+    assert payload["fund_flow"]["etf"]["is_estimated"] is False
+    assert websearch_results[-1]["search_backend"] == "tavily"
+    assert stats["structured_policy_gate_blocked"] == 1
+    assert stats["structured_provider"]["fallback"] == 1
+    assert sum(stats["structured_provider"]["error_breakdown"].values()) == 1

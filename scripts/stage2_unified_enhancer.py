@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import inspect
 import json
 import os
@@ -70,6 +71,11 @@ from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
 from datasource.utils.source_trust import should_mark_official_non_estimated, units_compatible
 from datasource.utils.text_markers import contains_ytd_marker
+try:  # pragma: no cover - structured providers are optional for Stage2 wiring
+    from datasource.providers.stage2_structured import StructuredProviderError, build_default_registry  # noqa: F401
+except Exception:  # noqa: W0703
+    StructuredProviderError = None  # type: ignore
+    build_default_registry = None  # type: ignore
 
 try:
     from .stage2_5_injector import (
@@ -1760,6 +1766,8 @@ def _source_label_for_task(
         or " regex_fallback" in note
     )
     is_regex_extraction = extraction_backend == "regex" or is_regex_note
+    if backend == "structured":
+        return "structured"
     if backend == "exa":
         if is_regex_extraction:
             return "exa_regex"
@@ -1989,6 +1997,236 @@ def _apply_extraction(
         "note": note,
     }
     return "fallback_macro"
+
+
+def _structured_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
+    structured = stats.setdefault(
+        "structured_provider",
+        {
+            "attempt": 0,
+            "success": 0,
+            "fallback": 0,
+            "by_key": {},
+            "error_breakdown": {},
+            "latency_ms": [],
+        },
+    )
+    structured.setdefault("attempt", 0)
+    structured.setdefault("success", 0)
+    structured.setdefault("fallback", 0)
+    structured.setdefault("by_key", {})
+    structured.setdefault("error_breakdown", {})
+    structured.setdefault("latency_ms", [])
+    return structured
+
+
+def _structured_key_stats(stats: Dict[str, Any], indicator_key: str) -> Dict[str, Any]:
+    structured = _structured_stats(stats)
+    by_key = structured.setdefault("by_key", {})
+    return by_key.setdefault(indicator_key, {"attempt": 0, "success": 0, "fallback": 0})
+
+
+def _record_structured_attempt(stats: Dict[str, Any], indicator_key: str) -> None:
+    structured = _structured_stats(stats)
+    structured["attempt"] = structured.get("attempt", 0) + 1
+    key_stats = _structured_key_stats(stats, indicator_key)
+    key_stats["attempt"] = key_stats.get("attempt", 0) + 1
+    stats["structured_attempt"] = stats.get("structured_attempt", 0) + 1
+
+
+def _record_structured_success(stats: Dict[str, Any], indicator_key: str, latency_ms: int) -> None:
+    structured = _structured_stats(stats)
+    structured["success"] = structured.get("success", 0) + 1
+    structured.setdefault("latency_ms", []).append(latency_ms)
+    key_stats = _structured_key_stats(stats, indicator_key)
+    key_stats["success"] = key_stats.get("success", 0) + 1
+    stats["structured_success"] = stats.get("structured_success", 0) + 1
+
+
+def _record_structured_fallback(
+    stats: Dict[str, Any],
+    indicator_key: str,
+    reason: str,
+    latency_ms: Optional[int] = None,
+) -> None:
+    structured = _structured_stats(stats)
+    structured["fallback"] = structured.get("fallback", 0) + 1
+    if latency_ms is not None:
+        structured.setdefault("latency_ms", []).append(latency_ms)
+    key_stats = _structured_key_stats(stats, indicator_key)
+    key_stats["fallback"] = key_stats.get("fallback", 0) + 1
+    key_stats["last_fallback_reason"] = reason
+    breakdown = structured.setdefault("error_breakdown", {})
+    breakdown[reason] = breakdown.get(reason, 0) + 1
+    stats["structured_fallback"] = stats.get("structured_fallback", 0) + 1
+
+
+async def _try_structured_provider(
+    *,
+    structured_registry: Any,
+    task: Dict[str, Any],
+    market_payload: Dict[str, Any],
+    task_log_path: Path,
+    stats: Dict[str, Any],
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    if structured_registry is None:
+        return None
+
+    indicator_key = str(task.get("indicator_key") or "")
+    provider_for = getattr(structured_registry, "provider_for", None)
+    if callable(provider_for) and provider_for(indicator_key) is None:
+        structured = _structured_stats(stats)
+        structured["unsupported"] = structured.get("unsupported", 0) + 1
+        return None
+
+    reference_date = (
+        market_payload.get("metadata", {}).get("date")
+        or task.get("reference_date")
+        or task.get("expected_period")
+        or datetime.now().date().isoformat()
+    )
+    started = time.perf_counter()
+    _record_structured_attempt(stats, indicator_key)
+    try:
+        result = await structured_registry.fetch(task, market_payload, reference_date)
+    except Exception as exc:
+        if StructuredProviderError is not None and isinstance(exc, StructuredProviderError):
+            reason = str(getattr(exc, "reason", None) or "provider_error")
+            diagnostics_fn = getattr(exc, "to_diagnostics", None)
+            diagnostics = diagnostics_fn() if callable(diagnostics_fn) else {}
+        else:
+            reason = "provider_exception"
+            diagnostics = {
+                "structured_provider_error": reason,
+                "structured_provider_message": str(exc),
+            }
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        _record_structured_fallback(stats, indicator_key, reason, latency_ms)
+        samples = stats.setdefault("structured_error_samples", [])
+        if isinstance(samples, list) and len(samples) < 5:
+            samples.append({**diagnostics, "indicator_key": indicator_key})
+        return None
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    if result is None:
+        structured = _structured_stats(stats)
+        structured["none"] = structured.get("none", 0) + 1
+        return None
+
+    extraction = result.to_extraction()
+    snippets = list(result.audit_snippets())
+    task_for_log = {
+        **task,
+        "search_backend": "structured",
+        "extraction_backend": "structured",
+        "query_used": task.get("query_used") or task.get("query") or indicator_key,
+    }
+    _augment_extraction_metadata(extraction, task_for_log, snippets)
+    _refine_extraction_value(extraction, task_for_log, snippets)
+
+    is_fund_flow = indicator_key in {"northbound", "southbound", "etf", "margin"}
+    manual_required = bool(extraction.get("manual_required"))
+    if is_fund_flow:
+        adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(
+            extraction,
+            indicator_key=indicator_key,
+        )
+        extraction["value"] = adjusted_value
+        if note_append:
+            extraction["note"] = _append_note(extraction.get("note"), note_append)
+        manual_required = manual_required or unit_manual
+        if unit_manual and _safe_number(extraction.get("recent_5d")) is not None and _safe_number(
+            extraction.get("total_120d")
+        ) is not None:
+            metric_basis = _default_fund_flow_metric_basis(indicator_key, extraction)
+            window_evidence = _infer_fund_flow_window_evidence(indicator_key, extraction, metric_basis)
+            if window_evidence not in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+                extraction["manual_reason"] = _append_note(
+                    extraction.get("manual_reason"),
+                    "fund_flow_window_missing",
+                )
+                manual_required = True
+    else:
+        val_adj, manual2, note_append = _validate_general_extraction(extraction, task_for_log, snippets)
+        extraction["value"] = val_adj
+        if note_append:
+            extraction["note"] = _append_note(extraction.get("note"), note_append)
+        manual_required = manual_required or manual2
+
+    if extraction.get("manual_reason"):
+        extraction["note"] = _append_note(extraction.get("note"), str(extraction.get("manual_reason")))
+    if manual_required:
+        reason = str(extraction.get("manual_reason") or "policy_gate_blocked")
+        _record_structured_fallback(stats, indicator_key, reason, latency_ms)
+        if reason == "policy_gate_blocked" or "fund_flow_window_missing" in reason:
+            stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
+        return None
+
+    snapshot = copy.deepcopy(market_payload)
+    write_target = _apply_extraction(market_payload, task_for_log, extraction, snippets=snippets)
+    if write_target == "skip_no_value":
+        market_payload.clear()
+        market_payload.update(snapshot)
+        _record_structured_fallback(stats, indicator_key, write_target, latency_ms)
+        return None
+    post_writeback_reason = _post_writeback_manual_reason(market_payload, indicator_key)
+    if post_writeback_reason:
+        market_payload.clear()
+        market_payload.update(snapshot)
+        _record_structured_fallback(stats, indicator_key, post_writeback_reason, latency_ms)
+        if post_writeback_reason == "estimated_not_allowed":
+            stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
+        return None
+
+    write_stats = stats.setdefault("write_back_by_category", {})
+    if isinstance(write_stats, dict):
+        write_stats[write_target] = write_stats.get(write_target, 0) + 1
+    if write_target == "fallback_macro":
+        stats["write_back_fallback_count"] = stats.get("write_back_fallback_count", 0) + 1
+    _update_missing_items(market_payload, indicator_key)
+    _record_structured_success(stats, indicator_key, latency_ms)
+
+    now_ts = int(datetime.now().timestamp())
+    task_record = {
+        "task_id": task["task_id"],
+        "indicator_key": indicator_key,
+        "category": task.get("category") or task.get("stage_phase"),
+        "stage_phase": task["stage_phase"],
+        "search_backend": "structured",
+        "fund_flow_backend": task.get("fund_flow_backend") if is_fund_flow else None,
+        "extraction_backend": "structured",
+        "confidence": extraction.get("confidence", 0.0),
+        "source_url": extraction.get("source_url"),
+        "note": extraction.get("note"),
+        "llm_latency_ms": 0,
+        "llm_error": None,
+        "deepseek_error": None,
+        "attempt_index": 0,
+        "elapsed_ms": latency_ms,
+        "created_at": task.get("created_at", now_ts),
+        "finished_at": now_ts,
+        "manual_required": False,
+        "manual_reason": None,
+        "query_used": task_for_log.get("query_used"),
+        "result_type": "structured_success",
+        "write_back_success": True,
+        "write_back_target": write_target,
+        "structured_provider": getattr(result, "provider", None),
+    }
+    websearch_item = result.to_websearch_record(task_for_log)
+    websearch_item.update(
+        {
+            "task": task_for_log,
+            "extraction": extraction,
+            "extraction_backend": "structured",
+            "raw_results": snippets,
+            "manual_required": False,
+            "manual_reason": None,
+            "result_type": "structured_success",
+        }
+    )
+    _append_task_log(task_log_path, task_record)
+    return task_record, websearch_item
 
 
 def _update_missing_items(market_payload: Dict[str, Any], indicator_key: str) -> None:
@@ -2225,6 +2463,9 @@ _STAGE2_BACKEND_SUMMARY_KEYS = (
     "exa_unavailable",
     "exa_error_breakdown",
     "exa_error_samples",
+    "structured_provider",
+    "structured_policy_gate_blocked",
+    "structured_error_samples",
 )
 
 
@@ -2582,6 +2823,7 @@ async def _execute_tasks(
     deepseek_breaker_timeout_rate: float = 0.6,
     deepseek_breaker_min_attempts: int = 8,
     allow_exa_non_quota_fallback: bool = False,
+    structured_registry: Any = None,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
     completed: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
@@ -2637,6 +2879,7 @@ async def _execute_tasks(
     stats.setdefault("exa_unavailable", 0)
     stats.setdefault("exa_error_breakdown", {})
     stats.setdefault("exa_error_samples", [])
+    _structured_stats(stats)
     active_search_backend = "tavily"
     failover_reason = None
     active_tavily_limit_metadata: Dict[str, Any] = {}
@@ -4076,6 +4319,18 @@ async def _execute_tasks(
                         "result_type": "skipped_existing",
                     }
                 )
+                continue
+            structured_records = await _try_structured_provider(
+                structured_registry=structured_registry,
+                task=task,
+                market_payload=market_payload,
+                task_log_path=task_log_path,
+                stats=stats,
+            )
+            if structured_records is not None:
+                task_record, websearch_item = structured_records
+                completed.append(task_record)
+                websearch_results.append(websearch_item)
                 continue
             if tavily_unavailable_reason == "quota_or_rate_limit" and active_search_backend != "exa":
                 if _activate_exa_failover(task, "quota_or_rate_limit"):
@@ -6201,6 +6456,9 @@ async def main() -> int:
         "write_back_by_category": exec_stats.get("write_back_by_category", {}),
         "write_back_fallback_count": exec_stats.get("write_back_fallback_count", 0),
         "write_back_miss_count": exec_stats.get("write_back_miss_count", 0),
+        "structured_provider": exec_stats.get("structured_provider", {}),
+        "structured_policy_gate_blocked": exec_stats.get("structured_policy_gate_blocked", 0),
+        "structured_error_samples": exec_stats.get("structured_error_samples", []),
         "success_by_category": success_by_cat,
         "search_success_by_category": incremental_success_by_cat,
         "total_by_category": total_by_cat,
