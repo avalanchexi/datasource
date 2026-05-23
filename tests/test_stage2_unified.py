@@ -298,7 +298,7 @@ def test_stage2_hit_rate_line_prioritizes_effective_rate_and_labels_search_only_
     assert "增量命中率" not in line
 
 
-def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_path: Path):
+def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_path: Path, capsys):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
@@ -368,8 +368,14 @@ def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_
     )
 
     exit_code = asyncio.run(stage2.main())
+    stdout = capsys.readouterr().out
 
     assert exit_code == 1
+    stdout_lines = stdout.splitlines()
+    summary_index = stdout_lines.index("[Stage2 Summary]")
+    summary_lines = [line for line in stdout_lines[summary_index + 1 :] if line.strip()]
+    assert summary_lines[0].startswith("  Stage2有效命中率:")
+    assert any(line.startswith("  任务总数:") for line in summary_lines[1:])
     summary = json.loads(log_output.read_text(encoding="utf-8"))
     assert summary["task_skipped_existing"] == 1
     assert summary["task_search_success"] == 1

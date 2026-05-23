@@ -6747,6 +6747,7 @@ async def main() -> int:
 
 
     print("\n[Stage2 Summary]")
+    print(_format_stage2_hit_rate_line(summary))
     print(_format_stage2_task_count_line(summary, pending_manual_count=len(pending_manual)))
     if summary["proxy"]["http"] or summary["proxy"]["https"]:
         print(f"  Proxy: http={summary['proxy']['http']} https={summary['proxy']['https']}")
@@ -6778,7 +6779,6 @@ async def main() -> int:
     if summary.get("success_by_category"):
         print(f"  分类型成功: {summary['success_by_category']} / {summary['total_by_category']}")
         print(f"  分类型搜索链路成功: {summary.get('search_success_by_category', {})} / {summary['total_by_category']}")
-    print(_format_stage2_hit_rate_line(summary))
     print(
         f"  stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
         f"(成功 {summary['task_stale_refresh_success']}, 失败 {summary['task_stale_refresh_failed']})"
