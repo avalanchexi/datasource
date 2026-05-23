@@ -261,6 +261,90 @@ def test_stage2_result_count_fields_preserve_search_only_and_effective_metrics()
     assert fields["search_success_rate_incremental"] == 0.0
 
 
+def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+    monkeypatch.delenv("STAGE2_ENABLE_EXA_FALLBACK", raising=False)
+
+    run_dir = tmp_path / "data" / "runs" / "20260524"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data.json"
+    output_path = run_dir / "market_data_stage2.json"
+    task_file = run_dir / "search_tasks_stage2.jsonl"
+    log_output = tmp_path / "logs" / "runs" / "20260524" / "stage2_unified_log.json"
+    gap_monitor = run_dir / "gap_monitor.json"
+    market_path.write_text(
+        json.dumps({"metadata": {"date": "2026-05-24"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    tasks = [
+        {"task_id": "search", "indicator_key": "GC=F", "query": "gold"},
+        {"task_id": "structured-1", "indicator_key": "BCOM", "query": "bcom"},
+        {"task_id": "structured-2", "indicator_key": "GSG", "query": "gsg"},
+        {"task_id": "skipped", "indicator_key": "USDCNY", "query": "usdcny"},
+        {"task_id": "manual", "indicator_key": "CN10Y_CDB", "query": "cn10y_cdb"},
+    ]
+    task_file.write_text(
+        "\n".join(json.dumps(task, ensure_ascii=False) for task in tasks),
+        encoding="utf-8",
+    )
+
+    async def fake_execute_tasks(*args, **kwargs):
+        completed = [
+            {"indicator_key": "GC=F", "result_type": "search_success", "elapsed_ms": 10},
+            {"indicator_key": "BCOM", "result_type": "structured_success", "elapsed_ms": 20},
+            {"indicator_key": "GSG", "result_type": "structured_success", "elapsed_ms": 30},
+            {"indicator_key": "USDCNY", "result_type": "skipped_existing", "elapsed_ms": 0},
+        ]
+        failures = [
+            {
+                "indicator_key": "CN10Y_CDB",
+                "result_type": "manual_required",
+                "manual_required": True,
+            }
+        ]
+        return completed, failures, []
+
+    monkeypatch.setattr(stage2, "_execute_tasks", fake_execute_tasks)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage2_unified_enhancer.py",
+            "--market-data",
+            str(market_path),
+            "--output",
+            str(output_path),
+            "--resume-from-task-file",
+            str(task_file),
+            "--execute-search",
+            "--extraction-backend",
+            "regex",
+            "--no-cache",
+            "--disable-structured-providers",
+            "--log-output",
+            str(log_output),
+            "--gap-monitor",
+            str(gap_monitor),
+        ],
+    )
+
+    exit_code = asyncio.run(stage2.main())
+
+    assert exit_code == 1
+    summary = json.loads(log_output.read_text(encoding="utf-8"))
+    assert summary["task_skipped_existing"] == 1
+    assert summary["task_search_success"] == 1
+    assert summary["task_structured_success"] == 2
+    assert summary["task_search_failed"] == 1
+    assert summary["stage2_effective_success"] == 3
+    assert summary["stage2_effective_failure"] == 1
+    assert summary["stage2_effective_denominator"] == 4
+    assert summary["stage2_effective_hit_rate"] == pytest.approx(0.75)
+    assert summary["search_success_rate_incremental"] == pytest.approx(0.5)
+
+
 def test_is_environment_proxy_error_detects_missing_socksio_message():
     exc = RuntimeError("Using SOCKS proxy, but the 'socksio' package is not installed")
 

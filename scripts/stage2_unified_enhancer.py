@@ -6616,22 +6616,10 @@ async def main() -> int:
         success_by_cat[cat] = success_by_cat.get(cat, 0) + 1
         if t.get("result_type") == "search_success":
             incremental_success_by_cat[cat] = incremental_success_by_cat.get(cat, 0) + 1
-    skipped_existing_count = sum(1 for t in completed_tasks if t.get("result_type") == "skipped_existing")
-    search_success_count = sum(1 for t in completed_tasks if t.get("result_type") == "search_success")
-    structured_success_count = sum(1 for t in completed_tasks if t.get("result_type") == "structured_success")
-    search_failed_count = sum(1 for t in failures if t.get("result_type") == "manual_required")
+    result_count_fields = _build_stage2_result_count_fields(completed_tasks, failures)
     stale_refresh_forced = sum(1 for t in tasks if _is_force_refresh_task(t))
     stale_refresh_success = sum(1 for t in completed_tasks if t.get("force_refresh") and t.get("result_type") == "search_success")
     stale_refresh_failed = sum(1 for t in failures if t.get("force_refresh"))
-    incremental_denominator = search_success_count + search_failed_count
-    search_success_rate_incremental = (
-        search_success_count / incremental_denominator if incremental_denominator else 0.0
-    )
-    stage2_effective_success_count = search_success_count + structured_success_count
-    stage2_effective_hit_rate = _stage2_effective_hit_rate(
-        stage2_effective_success_count,
-        search_failed_count,
-    )
     summary_diagnostics = _build_stage2_summary_diagnostics(
         completed_tasks,
         failures,
@@ -6643,16 +6631,10 @@ async def main() -> int:
         "task_total": len(tasks),
         "task_completed": len(completed_tasks),
         "task_failed": len(failures),
-        "task_skipped_existing": skipped_existing_count,
-        "task_search_success": search_success_count,
-        "task_structured_success": structured_success_count,
-        "task_search_failed": search_failed_count,
-        "stage2_effective_success": stage2_effective_success_count,
-        "stage2_effective_hit_rate": stage2_effective_hit_rate,
+        **result_count_fields,
         "task_stale_refresh_forced": stale_refresh_forced,
         "task_stale_refresh_success": stale_refresh_success,
         "task_stale_refresh_failed": stale_refresh_failed,
-        "search_success_rate_incremental": search_success_rate_incremental,
         "retrieval_diagnostics": summary_diagnostics["retrieval_diagnostics"],
         "manual_reason_breakdown": summary_diagnostics["manual_reason_breakdown"],
         "manual_required": pending_manual,
