@@ -22,15 +22,21 @@ from datasource.utils.key_aliases import canonical_monetary_key
 
 FetchText = Callable[[str, Optional[Dict[str, Any]]], Awaitable[str]]
 
+REVERSE_REPO_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html"
+MLF_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/index.html"
+USDCNY_URL = "https://www.chinamoney.com.cn/chinese/bkccpr/"
+NBS_URL = "https://www.stats.gov.cn/sj/zxfb/"
+RESERVE_RATIO_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/125838/index.html"
+
 
 class OfficialChinaProvider(Stage2StructuredProvider):
     name = "official_china"
 
-    REVERSE_REPO_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html"
-    MLF_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/index.html"
-    USDCNY_URL = "https://www.chinamoney.com.cn/chinese/bkccpr/"
-    NBS_URL = "https://www.stats.gov.cn/sj/zxfb/"
-    RESERVE_RATIO_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/125838/index.html"
+    REVERSE_REPO_URL = REVERSE_REPO_URL
+    MLF_URL = MLF_URL
+    USDCNY_URL = USDCNY_URL
+    NBS_URL = NBS_URL
+    RESERVE_RATIO_URL = RESERVE_RATIO_URL
 
     supported_keys = {
         "reverse_repo",

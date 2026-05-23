@@ -6,7 +6,14 @@ from datasource.providers.stage2_structured.base import (
     StructuredResult,
 )
 from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
-from datasource.providers.stage2_structured.official_china import OfficialChinaProvider
+from datasource.providers.stage2_structured.official_china import (
+    MLF_URL,
+    NBS_URL,
+    RESERVE_RATIO_URL,
+    REVERSE_REPO_URL,
+    USDCNY_URL,
+    OfficialChinaProvider,
+)
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
@@ -271,6 +278,14 @@ async def test_chinabond_provider_rejects_unreasonable_yield_value():
         await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
 
     assert exc_info.value.reason in {"missing_value", "parse_error"}
+
+
+def test_official_china_provider_exposes_module_url_constants():
+    assert OfficialChinaProvider.REVERSE_REPO_URL == REVERSE_REPO_URL
+    assert OfficialChinaProvider.MLF_URL == MLF_URL
+    assert OfficialChinaProvider.USDCNY_URL == USDCNY_URL
+    assert OfficialChinaProvider.NBS_URL == NBS_URL
+    assert OfficialChinaProvider.RESERVE_RATIO_URL == RESERVE_RATIO_URL
 
 
 @pytest.mark.asyncio
