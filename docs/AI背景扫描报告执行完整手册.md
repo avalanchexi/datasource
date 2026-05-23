@@ -81,16 +81,16 @@
 
 > 本节保留历史覆盖口径。当前实际覆盖与缺口处理以 Stage1/Stage2 输出、`gap_monitor.json` 和 Stage2.5 manual 注入为准。
 
-**股票市场** (V2.1增强)：
+**股票市场** (历史 V2.1 增强口径)：
 - **A股**: 沪深300、上证50、创业板指、深证成指、上证指数 (传统API)
 - **美股**: 标普500、纳斯达克 (WebFetch Yahoo Finance) ✨新增
 - 技术指标：MA20/50/200、趋势评分、波动率
 
 **商品与黄金**：
 - 黄金ETF(518880)、能源ETF(159930)、有色ETF(515220)
-- 价格走势、技术分析、趋势判断 (传统API + MCP验证)
+- 价格走势、技术分析、趋势判断；当前按 Stage1/Stage2/Stage2.5 产物验证，不再使用 MCP 作为当前执行入口
 
-**汇率变化** (V2.1 MCP获取)：
+**汇率变化** (历史 V2.1 MCP 获取口径)：
 - USD/CNY、USD/CNH、美元指数(DXY)
 - **100% WebFetch实时获取**，延迟≤5分钟 ✨增强
 - 实时汇率、变动幅度、趋势方向
@@ -522,7 +522,7 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 - ✅ 100%模板化，无任何数据计算
 - ✅ 9个标准章节生成
 - ✅ 自动格式化数值 (百分比、基点、价格)
-- ✅ MCP数据源标注
+- ✅ 当前数据源标注（TuShare、Stage2 structured-provider、Tavily/Exa+DeepSeek、Stage2.5 manual/WebSearch）
 
 ### 归档统一入口 (Unified Entry Point)
 
@@ -949,17 +949,16 @@ bash run_clean.sh python scripts/stage2_5_injector.py --help
 
 ### 数据补充策略
 
-**商品数据优先级**:
-1. Trading Economics
-2. Yahoo Finance
-3. Bloomberg
-4. CME Group
-5. iShares
+**商品数据优先级（当前 Stage2/Stage2.5 口径）**:
+1. Stage2 structured provider：Trading Economics 商品页，`GSG` 使用 Stooq CSV 市价
+2. Tavily/Exa + DeepSeek/regex 搜索抽取
+3. Stage2.5 manual/WebSearch 注入
+4. Bloomberg/CME/iShares 等可信来源仅作为搜索或 manual 证据，不直接绕过注入链路
 
-**汇率数据优先级**:
-1. Yahoo Finance
-2. Bloomberg
-3. investing.com
+**汇率数据优先级（当前 Stage2/Stage2.5 口径）**:
+1. Stage2 structured provider：`USDCNY` 使用 ChinaMoney JSON，`DXY` 使用 Trading Economics
+2. Tavily/Exa + DeepSeek/regex 搜索抽取
+3. Stage2.5 manual/WebSearch 注入
 
 **财经要闻来源**:
 1. Bloomberg
@@ -1019,14 +1018,14 @@ python scripts/utility/data_completion_checker.py
 
 ---
 
-## ✅ 阶段5: MCP数据质量验证与交付
+## ✅ 阶段5: 当前数据质量验证与交付
 
 ### Todo子任务
 - [ ] 检查9个章节完整性
 - [ ] **验证所有表格无"-"、"N/A"、异常"0"值**
 - [ ] **发现数据缺失时,检查并优化Python源代码**
 - [ ] 验证商品标的数量（≥6个）
-- [ ] 验证MCP数据源标注
+- [ ] 验证 TuShare、Stage2 structured-provider、Tavily/Exa+DeepSeek、Stage2.5 manual/WebSearch 数据源标注
 - [ ] 验证数值格式规范
 - [ ] 验证合规声明
 - [ ] 验证资金流向数据
@@ -1385,7 +1384,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 1. **主报告**: `reports/YYYY-MM-DD-背景扫描120cc.md`
 2. **原始报告**: `reports/YYYY-MM-DD-背景扫描120_raw.md`
 3. **执行日志**: Todo列表完成记录
-4. **数据源汇总**: 所有传统API + MCP sources
+4. **数据源汇总**: TuShare、Stage2 structured-provider、Tavily/Exa+DeepSeek、Stage2.5 manual/WebSearch sources
 5. **核心发现**: 3-6条市场核心观点
 
 ---

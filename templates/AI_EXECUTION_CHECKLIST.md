@@ -62,7 +62,7 @@ PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
 - [ ] 输出文件 `data/${DATE}_market_data_stage2.json` 存在
 - [ ] `reports/websearch_results_${DATE}_auto.json` 生成
 - [ ] 检查 `reports/gap_monitor_${DATE}.json` 是否有缺口
-- [ ] 优先查看 `stage2_effective_hit_rate`；排障结构化源时可追加 `--disable-structured-providers`
+- [ ] 优先查看 `stage2_effective_hit_rate`；结构化源同一 key 会顺序兜底，排障时可追加 `--disable-structured-providers`
 
 ---
 

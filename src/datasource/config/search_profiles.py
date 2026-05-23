@@ -385,7 +385,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
     ),
     "GSG": _profile(
         query="GSG ETF 价格 iShares S&P GSCI Commodity-Indexed Trust quote",
-        domains=["ishares.com", "blackrock.com", "finance.yahoo.com", "investing.com"],
+        domains=["ishares.com", "blackrock.com", "stooq.com", "finance.yahoo.com", "investing.com"],
         exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="USD",
         issuer="iShares/BlackRock",
@@ -404,7 +404,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
                     "iShares GSG ETF quote latest",
                     "NYSEARCA:GSG last price",
                 ],
-                "preferred_domains": ["ishares.com", "blackrock.com", "investing.com"],
+                "preferred_domains": ["ishares.com", "blackrock.com", "stooq.com", "investing.com"],
                 "required_keywords": ["gsg", "ishares", "quote"],
             },
         ],

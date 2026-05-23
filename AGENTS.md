@@ -132,7 +132,8 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
   --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 ```
 
-- structured-provider-first 覆盖：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 会先尝试可信结构化源。
+- structured-provider-first 覆盖：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 会先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败后才进入搜索。
+- 当前结构化来源：商品期货优先 Trading Economics，`GSG` 使用 Stooq CSV 市价，`USDCNY` 使用 ChinaMoney JSON，工业/工业营收 follow 国家统计局详情页，逆回购/RRR 可用央行/Trading Economics，`ETF` structured provider 默认仍不释放全市场 ETF gate。
 - 结构化源失败、超时、解析失败或质量 gate 阻断时，继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。
 - 排障可追加 `--disable-structured-providers`，只跑原 Tavily/Exa/DeepSeek 搜索链路。
 - Stage2 真实命中率优先看 `stage2_effective_hit_rate`；它包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。
@@ -221,7 +222,7 @@ if comp < 0.8:
   ```
 
 ## 6. Stage2 搜索/抽取规则
-- Stage2 Unified 默认 structured-provider-first：对 `GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；结构化源失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切到 Exa，`--fund-flow-backend` 参数仍使用 `tavily`。
+- Stage2 Unified 默认 structured-provider-first：对 `GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；同一 key 的多个 provider 会顺序兜底，结构化源全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切到 Exa，`--fund-flow-backend` 参数仍使用 `tavily`。
 - 排障可传 `--disable-structured-providers` 只跑原 Tavily/Exa/DeepSeek 搜索链路。
 - Stage2 真实命中率优先看 `stage2_effective_hit_rate`；该指标包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。搜索链路增量命中率仍可看 `task_search_success/task_search_failed/search_success_rate_incremental`。
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`；宏观/低时效指标用 `time_range=year/month`, `max_results<=6`, `search_depth=basic`。

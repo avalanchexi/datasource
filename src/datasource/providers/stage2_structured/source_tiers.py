@@ -23,6 +23,9 @@ TIER2_DOMAINS = {
     "tradingeconomics.com",
     "data.eastmoney.com",
     "eastmoney.com",
+    "stooq.com",
+    "ishares.com",
+    "blackrock.com",
 }
 
 TIER3_DOMAINS = {

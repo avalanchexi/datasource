@@ -22,10 +22,11 @@ This plan covers one subsystem: Stage2 structured-provider-first execution. It d
 - Create `src/datasource/providers/stage2_structured/source_tiers.py`: explicit Tier 1/Tier 2/Tier 3 source classification for provider audit metadata.
 - Create `src/datasource/providers/stage2_structured/registry.py`: deterministic provider dispatch and default registry construction.
 - Create `src/datasource/providers/stage2_structured/http_fetcher.py`: bounded `httpx` fetch helpers used by live providers and replaced by fixtures in tests.
-- Create `src/datasource/providers/stage2_structured/yahoo_finance.py`: structured daily quote provider for `GC=F`, `CL=F`, `BZ=F`, `HG=F`, `GSG`.
+- Create `src/datasource/providers/stage2_structured/yahoo_finance.py`: legacy structured daily quote provider retained as fallback for `GC=F`, `CL=F`, `BZ=F`, `HG=F`, `GSG`.
+- Create `src/datasource/providers/stage2_structured/stooq.py`: structured CSV quote provider for `GSG`.
 - Create `src/datasource/providers/stage2_structured/official_china.py`: official China provider for `reverse_repo`, `mlf`, `USDCNY`, `industrial`, `industrial_sales`, and `reserve_ratio`.
 - Create `src/datasource/providers/stage2_structured/chinabond.py`: structured provider for `CN10Y_CDB`.
-- Create `src/datasource/providers/stage2_structured/trading_economics.py`: structured provider for `DXY` and `bdi`.
+- Create `src/datasource/providers/stage2_structured/trading_economics.py`: structured provider for `GC=F`, `CL=F`, `BZ=F`, `HG=F`, `USDCNY`, `reserve_ratio`, `reverse_repo`, `DXY`, and `bdi`.
 - Create `src/datasource/providers/stage2_structured/eastmoney_etf.py`: structured provider for `fund_flow.etf` with direct-window-only writeback.
 - Modify `scripts/stage2_unified_enhancer.py`: wire provider registry before search, add diagnostics, add CLI opt-out, include structured successes in effective hit-rate metrics.
 - Modify `AGENTS.md`: update Stage2 collection priority and command notes.
@@ -2036,7 +2037,7 @@ git commit -m "docs: document stage2 structured provider path"
 - No required code changes.
 - Generated data/log files stay ignored unless the user explicitly asks to keep a run artifact.
 
-- [ ] **Step 1: Run preflight**
+- [x] **Step 1: Run preflight**
 
 Run:
 
@@ -2046,7 +2047,7 @@ bash run_preflight.sh
 
 Expected: Tavily, DeepSeek, and TuShare connectivity pass. If Tavily is quota-limited but preflight still reaches the endpoint, continue because structured providers should carry the P0 set and Exa failover covers quota.
 
-- [ ] **Step 2: Run Stage2 against a 2026-05-23 fixture or restored run input**
+- [x] **Step 2: Run Stage2 against a 2026-05-23 fixture or restored run input**
 
 If `data/runs/20260523/market_data.json` exists in the active workspace, run:
 
@@ -2069,7 +2070,9 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 
 Expected: command exits 0 and writes the three structured-suffixed artifacts.
 
-- [ ] **Step 3: Check hit-rate acceptance**
+Actual: command wrote the structured-suffixed artifacts and exited 1 because four tasks remained `manual_required` (`CN10Y_CDB`, `BCOM`, `mlf`, `etf`). This is acceptable for the Stage2 hit-rate objective; ETF remained blocked by the existing fund-flow gate.
+
+- [x] **Step 3: Check hit-rate acceptance**
 
 Run:
 
@@ -2089,7 +2092,9 @@ PY
 
 Expected: assertion passes. If it fails, inspect `structured_provider_error_breakdown` first; do not loosen `fund_flow` gates to raise the number.
 
-- [ ] **Step 4: Final commit if live validation required code/doc corrections**
+Actual: assertion passed with `stage2_effective_hit_rate=0.7058823529411765`, `stage2_effective_success=12`, `structured_provider_success_count=12`, and structured successes for `GC=F`, `CL=F`, `BZ=F`, `HG=F`, `GSG`, `USDCNY`, `DXY`, `industrial`, `industrial_sales`, `bdi`, `reserve_ratio`, and `reverse_repo`.
+
+- [x] **Step 4: Final commit if live validation required code/doc corrections**
 
 If live validation required a code or doc correction, commit only those tracked files:
 

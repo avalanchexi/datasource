@@ -27,14 +27,14 @@ python3 scripts/stage2_unified_enhancer.py \
 ```
   - 速度优先：保持 `--extraction-backend regex --disable-extract`，约 30–60 秒。
   - 精度优先：改为 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro --deepseek-timeout 30 --llm-hard-timeout 35 --deepseek-max-concurrency 3 --queue-concurrency 3`（默认启用 queue）。
-  - 默认先尝试 structured-provider：已知官方或结构化指标成功后不进入搜索；失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索。
+  - 默认先尝试 structured-provider：已知官方或结构化指标成功后不进入搜索；同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索。
   - 排障：追加 `--disable-structured-providers` 可只跑原 Tavily/Exa/DeepSeek 搜索链路。
   - Tavily extract 422/配额压力：保留 `--disable-extract` 或收紧 `--extract-topk 1`，先 search-only 再 regex 兜底。
   - LangChain 默认禁用，如需实验需显式加 `--allow-langchain`。
 
 ## 关键默认值
 - `--fund-flow-backend` 默认 `tavily`
-- Stage2 uses structured-provider-first for known official or structured indicators, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
+- Stage2 uses structured-provider-first for known official or structured indicators, including Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages; then it falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
 - `--deepseek-model` 默认 `deepseek-v4-pro`
 - `--deepseek-timeout` 默认 `30s`
 - `--llm-hard-timeout` 默认 `35s`

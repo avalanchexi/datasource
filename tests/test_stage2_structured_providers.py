@@ -19,6 +19,7 @@ from datasource.providers.stage2_structured.official_china import (
 )
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
+from datasource.providers.stage2_structured.stooq import StooqQuoteProvider
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
 from datasource.providers.stage2_structured.yahoo_finance import YahooFinanceProvider
 
@@ -91,6 +92,29 @@ def test_registry_provider_for_returns_first_registered_provider():
 
 
 @pytest.mark.asyncio
+async def test_registry_falls_back_to_next_supported_provider():
+    class PrimaryFailingProvider(FakeProvider):
+        name = "primary"
+
+        async def fetch(self, task, market_payload, reference_date):
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=task["indicator_key"],
+                reason="fetch_error",
+                message="primary provider failed",
+            )
+
+    registry = StructuredProviderRegistry(
+        [PrimaryFailingProvider(), AlternateFakeProvider()]
+    )
+
+    result = await registry.fetch({"indicator_key": "GC=F"}, {}, "2026-05-23")
+
+    assert result.provider == "alternate_fake"
+    assert result.diagnostics["structured_provider_attempts"][0]["structured_provider"] == "primary"
+
+
+@pytest.mark.asyncio
 async def test_registry_returns_none_for_unsupported_key():
     registry = StructuredProviderRegistry([FakeProvider()])
 
@@ -110,6 +134,22 @@ async def test_registry_surfaces_provider_error_with_diagnostics():
     assert exc_info.value.indicator_key == "CL=F"
     assert exc_info.value.reason == "parse_error"
     assert exc_info.value.to_diagnostics()["structured_provider_error"] == "parse_error"
+
+
+@pytest.mark.asyncio
+async def test_registry_does_not_fallback_on_unexpected_provider_exception():
+    class UnexpectedFailureProvider(FakeProvider):
+        name = "unexpected"
+
+        async def fetch(self, task, market_payload, reference_date):
+            raise RuntimeError("programming error")
+
+    registry = StructuredProviderRegistry(
+        [UnexpectedFailureProvider(), AlternateFakeProvider()]
+    )
+
+    with pytest.raises(RuntimeError, match="programming error"):
+        await registry.fetch({"indicator_key": "GC=F"}, {}, "2026-05-23")
 
 
 @pytest.mark.asyncio
@@ -133,6 +173,7 @@ def test_source_tier_classifier_uses_explicit_allowlists():
     assert classify_structured_source_tier("https://stats.gov.cn@evil.com/path") == "unknown"
     assert classify_structured_source_tier("https://sub.stats.gov.cn/path") == "tier1"
     assert classify_structured_source_tier(OfficialChinaProvider.USDCNY_URL) == "tier1"
+    assert classify_structured_source_tier("https://stooq.com/q/l/?s=gsg.us") == "tier2"
 
 
 @pytest.mark.asyncio
@@ -472,6 +513,181 @@ async def test_trading_economics_provider_parses_bdi_fixture():
     assert extraction["source_url"] == "https://tradingeconomics.com/commodity/baltic"
 
 
+@pytest.mark.parametrize(
+    ("key", "url_fragment", "label", "unit", "value"),
+    [
+        ("GC=F", "/commodity/gold", "Gold", "$/oz", 4516.75),
+        ("CL=F", "/commodity/crude-oil", "Crude Oil", "$/barrel", 97.0),
+        ("BZ=F", "/commodity/brent-crude-oil", "Brent Crude Oil", "$/barrel", 103.94),
+        ("HG=F", "/commodity/copper", "Copper", "$/lb", 6.345),
+    ],
+)
+@pytest.mark.asyncio
+async def test_trading_economics_provider_parses_commodity_chart_meta(
+    key, url_fragment, label, unit, value
+):
+    html = (
+        '<meta id="metaDesc" name="description" content="{label} traded at {value} '
+        'on May 22, 2026." />'
+        '<span id="p">999.00</span>'
+        '<script>TEChartsMeta = [{{"last":{value},"value":{value},'
+        '"name":"{label}","full_name":"{label}"}}];</script>'
+        "<time>2026-05-22</time>"
+    ).format(label=label, value=value)
+
+    async def fetch_text(url, params=None):
+        assert url_fragment in url
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": key}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "commodities"
+    assert extraction["value"] == value
+    assert extraction["unit"] == unit
+    assert extraction["as_of_date"] == "2026-05-22"
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_uses_chart_meta_before_wrong_span():
+    html = (
+        '<meta id="metaDesc" name="description" content="Brent rose to 103.94 USD/Bbl '
+        'on May 22, 2026." />'
+        '<span id="p">97.00</span>'
+        '<script>TEChartsMeta = [{"last":103.94,"value":103.94,'
+        '"name":"Brent","full_name":"Brent Crude Oil"}];</script>'
+        "<time>2026-05-22</time>"
+    )
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "BZ=F"}, {}, "2026-05-23")
+
+    assert result.to_extraction()["value"] == 103.94
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_rejects_brent_meta_for_wti():
+    html = (
+        '<meta id="metaDesc" name="description" content="Crude Oil rose to 97 USD/Bbl '
+        'on May 22, 2026." />'
+        '<script>TEChartsMeta = ['
+        '{"last":103.94,"value":103.94,"name":"Brent","full_name":"Brent Crude Oil"},'
+        '{"last":97.0,"value":97.0,"name":"Crude Oil","full_name":"Crude Oil"}'
+        "];</script>"
+        "<time>2026-05-22</time>"
+    )
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "CL=F"}, {}, "2026-05-23")
+
+    assert result.to_extraction()["value"] == 97.0
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_requires_brent_meta_for_brent():
+    html = (
+        '<meta id="metaDesc" name="description" content="Brent rose to 103.94 USD/Bbl '
+        'on May 22, 2026." />'
+        '<script>TEChartsMeta = ['
+        '{"last":97.0,"value":97.0,"name":"Crude Oil","full_name":"Crude Oil"},'
+        '{"last":103.94,"value":103.94,"name":"Brent","full_name":"Brent Crude Oil"}'
+        "];</script>"
+        "<time>2026-05-22</time>"
+    )
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "BZ=F"}, {}, "2026-05-23")
+
+    assert result.to_extraction()["value"] == 103.94
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_parses_reserve_ratio_meta_description():
+    html = (
+        '<meta id="metaDesc" name="description" content="Cash Reserve Ratio in China '
+        'remained unchanged at 7.50 percent in April." />'
+        "<time>2026-04-30</time>"
+    )
+
+    async def fetch_text(url, params=None):
+        assert "cash-reserve-ratio" in url
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "reserve_ratio"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "monetary_policy"
+    assert extraction["value"] == 7.5
+    assert extraction["unit"] == "%"
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_prefers_te_last_update_for_date():
+    html = (
+        '<meta id="metaDesc" name="description" content="Reverse Repo Rate in China '
+        'remained unchanged at 1.40 percent in April." />'
+        "<script>TELastUpdate = '20260430000000';</script>"
+        "<time>2012-05-31</time>"
+    )
+
+    async def fetch_text(url, params=None):
+        assert "reverse-repo-rate" in url
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "reverse_repo"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 1.4
+    assert extraction["as_of_date"] == "2026-04-30"
+
+
+@pytest.mark.asyncio
+async def test_stooq_quote_provider_parses_gsg_csv_close():
+    csv_text = (
+        "Symbol,Date,Time,Open,High,Low,Close,Volume\n"
+        "GSG.US,2026-05-22,22:00:21,33.27,33.55,32.96,33.25,637017\n"
+    )
+
+    async def fetch_text(url, params=None):
+        assert "stooq.com" in url
+        return csv_text
+
+    provider = StooqQuoteProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "commodities"
+    assert extraction["value"] == 33.25
+    assert extraction["unit"] == "USD"
+    assert extraction["as_of_date"] == "2026-05-22"
+    assert extraction["source_tier"] == "tier2"
+
+
+@pytest.mark.asyncio
+async def test_stooq_quote_provider_rejects_no_data_rows():
+    async def fetch_text(url, params=None):
+        return "Symbol,Date,Time,Open,High,Low,Close,Volume\nGSG.US,N/D,N/D,N/D,N/D,N/D,N/D,N/D\n"
+
+    provider = StooqQuoteProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "GSG"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "missing_value"
+
+
 @pytest.mark.asyncio
 async def test_trading_economics_provider_rejects_unmarked_span_value():
     html = "<html><body><span>999</span></body></html>"
@@ -593,6 +809,38 @@ async def test_official_china_provider_parses_reverse_repo_fixture():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_follows_reverse_repo_list_detail():
+    detail_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    list_html = (
+        '<a href="./2026052208514823570/index.html">'
+        "公开市场业务交易公告 [2026]第96号</a>"
+    )
+    detail_html = (
+        '<meta name="Description" content="2026年5月22日中国人民银行以固定利率、'
+        "数量招标方式开展了1530亿元7天期逆回购操作。"
+        "逆回购操作情况期限操作利率投标量中标量7天1.40%1530亿元1530亿元"
+        '">'
+    )
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.REVERSE_REPO_URL:
+            return list_html
+        assert url == detail_url
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "reverse_repo"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 1.4
+    assert extraction["operation_amount"] == 1530.0
+    assert extraction["source_url"] == detail_url
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_prefixed_reverse_repo_amount():
     html = "2026年5月22日人民银行开展1185亿元7天期逆回购操作，中标利率1.40%。"
 
@@ -661,19 +909,51 @@ async def test_official_china_provider_exposes_mlf_multiple_price_markers():
 
 @pytest.mark.asyncio
 async def test_official_china_provider_parses_usdcny_fixture():
-    html = "2026-05-22 USD/CNY 人民币汇率中间价 7.1138"
+    payload = {
+        "data": {"head": ["USD/CNY"]},
+        "records": [{"date": "2026-05-22", "values": ["7.1138"]}],
+    }
 
     async def fetch_text(url, params=None):
-        assert url == OfficialChinaProvider.USDCNY_URL
-        return html
+        raise AssertionError("USDCNY should use the JSON API")
 
-    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    async def fetch_json(url, params=None):
+        assert url == OfficialChinaProvider.USDCNY_API_URL
+        return payload
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text, fetch_json=fetch_json)
     result = await provider.fetch({"indicator_key": "USDCNY"}, {}, "2026-05-23")
 
     extraction = result.to_extraction()
     assert extraction["category"] == "forex"
     assert extraction["value"] == 7.1138
-    assert extraction["unit"] == ""
+    assert extraction["unit"] == "CNY"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_usdcny_json_by_head_name():
+    payload = {
+        "data": {
+            "head": ["EUR/CNY", "USD/CNY"],
+            "records": [
+                {"date": "2026-05-22", "values": ["7.9193", "6.8373"]},
+            ],
+        }
+    }
+
+    async def fetch_text(url, params=None):
+        raise AssertionError("USDCNY should use the JSON API")
+
+    async def fetch_json(url, params=None):
+        assert "CcprHisNew" in url
+        return payload
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text, fetch_json=fetch_json)
+    result = await provider.fetch({"indicator_key": "USDCNY"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 6.8373
+    assert extraction["as_of_date"] == "2026-05-22"
 
 
 @pytest.mark.asyncio
@@ -696,6 +976,58 @@ async def test_official_china_provider_parses_industrial_fixture():
     assert extraction["value"] == 6.1
     assert extraction["value_type"] == "yoy_month"
     assert extraction["report_period"] == "2026-04"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_follows_nbs_industrial_detail_and_prefers_month():
+    detail_url = "https://www.stats.gov.cn/sj/zxfb/202605/t20260518_1963731.html"
+    list_html = (
+        '<a href="./202605/t20260518_1963731.html" '
+        'title="2026年1—4月份规模以上工业增加值增长5.6%">'
+        "2026年1—4月份规模以上工业增加值增长5.6%</a>"
+    )
+    detail_html = (
+        "<title>2026年1—4月份规模以上工业增加值增长5.6%</title>"
+        "1—4月份，规模以上工业增加值同比实际增长5.6%。"
+        "4月份，规模以上工业增加值同比增长4.1%。"
+    )
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.NBS_URL:
+            return list_html
+        assert url == detail_url
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch(
+        {"indicator_key": "industrial", "expected_period": "2026-04"},
+        {},
+        "2026-05-23",
+    )
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 4.1
+    assert extraction["yoy_month"] == 4.1
+    assert extraction["source_url"] == detail_url
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_rejects_industrial_ytd_without_month_value():
+    html = "2026年1—4月份，规模以上工业增加值同比实际增长5.6%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch(
+            {"indicator_key": "industrial", "expected_period": "2026-04"},
+            {},
+            "2026-05-23",
+        )
+
+    assert exc_info.value.reason == "missing_value"
 
 
 @pytest.mark.asyncio
@@ -751,6 +1083,21 @@ async def test_official_china_provider_parses_reserve_ratio_fixture():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_does_not_treat_rrr_delta_as_current_level():
+    html = "中国人民银行决定下调金融机构存款准备金率0.5个百分点。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "reserve_ratio"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "missing_value"
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_industrial_sales_ytd_fixture():
     html = "规模以上工业企业营业收入同比增长2.5%。"
 
@@ -767,6 +1114,59 @@ async def test_official_china_provider_parses_industrial_sales_ytd_fixture():
     assert extraction["value_type"] == "yoy_ytd"
     assert extraction["yoy_ytd"] == extraction["value"]
     assert extraction["report_period"] == "2026-05"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_follows_nbs_industrial_sales_paginated_detail():
+    first_page = '<a href="./202605/t20260518_1963731.html">规模以上工业增加值</a>'
+    second_page = (
+        '<a href="./202604/t20260427_1963001.html" '
+        'title="2026年1—3月份全国规模以上工业企业利润增长15.5%">'
+        "2026年1—3月份全国规模以上工业企业利润增长15.5%</a>"
+    )
+    detail_url = "https://www.stats.gov.cn/sj/zxfb/202604/t20260427_1963001.html"
+    detail_html = (
+        "<title>2026年1—3月份全国规模以上工业企业利润增长15.5%</title>"
+        "1—3月份，规模以上工业企业营业收入同比增长4.5%。"
+    )
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.NBS_URL:
+            return first_page
+        if url == "https://www.stats.gov.cn/sj/zxfb/index_1.html":
+            return second_page
+        assert url == detail_url
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "industrial_sales"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 4.5
+    assert extraction["yoy_ytd"] == 4.5
+    assert extraction["report_period"] == "2026-03"
+    assert extraction["source_url"] == detail_url
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_reports_mlf_multi_price_without_unified_rate():
+    list_html = (
+        '<a href="./2026052217453752767/index.html">'
+        "2026年5月中期借贷便利招标公告</a>"
+    )
+    detail_html = "开展6000亿元中期借贷便利（MLF）操作，固定数量、利率招标、多重价位中标方式。"
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.MLF_URL:
+            return list_html
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "mlf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "multi_price_no_unified_rate"
 
 
 @pytest.mark.asyncio

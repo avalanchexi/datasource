@@ -16,7 +16,7 @@
 **状态**: ✅ 更新（structured-provider-first + Tavily/DeepSeek，去 MCP，支持队列）
 
 **关键默认**:
-- Stage2 默认 structured-provider-first；已知官方或结构化指标先尝试可信结构化源，失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索
+- Stage2 默认 structured-provider-first；已知官方或结构化指标先尝试可信结构化源，同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索
 - fund_flow_backend=`tavily`；DeepSeek 模型=`deepseek-v4-pro`；timeout=30s；hard timeout=35s；默认并发=3
 - 实时类：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
 - 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
@@ -441,7 +441,7 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 
 
 ### Stage2：统一增强（默认）
-默认 structured-provider-first：已知官方或结构化指标先尝试可信结构化源，失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。真实命中率优先看 `stage2_effective_hit_rate`。
+默认 structured-provider-first：已知官方或结构化指标先尝试可信结构化源（Trading Economics、Stooq GSG、ChinaMoney JSON、NBS/PBC 详情页等），同一 key 支持 provider 级顺序兜底；全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。真实命中率优先看 `stage2_effective_hit_rate`。
 
 `python scripts/stage2_unified_enhancer.py --market-data data/runs/YYYYMMDD/market_data.json --output data/runs/YYYYMMDD/market_data_stage2.json --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json --log-output logs/runs/YYYYMMDD/stage2_unified_log.json --gap-monitor data/runs/YYYYMMDD/gap_monitor.json`
 
