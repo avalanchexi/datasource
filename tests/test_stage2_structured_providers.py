@@ -430,6 +430,26 @@ async def test_official_china_provider_parses_negative_industrial_fixture():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_preserves_actual_negative_industrial_direction():
+    html = "2026年4月份，工业增加值同比实际下降1.2%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch(
+        {"indicator_key": "industrial", "expected_period": "2026-04"},
+        {},
+        "2026-05-23",
+    )
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == -1.2
+    assert extraction["yoy_month"] == -1.2
+    assert extraction["report_period"] == "2026-04"
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_reserve_ratio_fixture():
     html = "中国人民银行决定下调金融机构存款准备金率0.5个百分点，调整后加权平均存款准备金率约为6.2%。"
 
