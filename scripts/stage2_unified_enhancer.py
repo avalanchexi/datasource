@@ -561,6 +561,7 @@ def _build_environment_proxy_error_records(
         "environment_proxy_fast_switch": True,
         "result_type": "manual_required",
     }
+    task_record.update(_structured_audit_fields_from_task(task))
     websearch_item = {
         "task_id": task["task_id"],
         "indicator_key": task["indicator_key"],
@@ -2061,6 +2062,36 @@ def _record_structured_fallback(
     stats["structured_fallback"] = stats.get("structured_fallback", 0) + 1
 
 
+def _structured_audit_fields_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: task[key]
+        for key in (
+            "structured_provider_attempted",
+            "structured_provider_fallback_reason",
+            "structured_provider_latency_ms",
+            "structured_provider_diagnostics",
+            "structured_provider_name",
+        )
+        if key in task
+    }
+
+
+def _mark_structured_fallback_on_task(
+    task: Dict[str, Any],
+    *,
+    reason: str,
+    latency_ms: int,
+    diagnostics: Optional[Dict[str, Any]] = None,
+    provider_name: Optional[Any] = None,
+) -> None:
+    task["structured_provider_attempted"] = True
+    task["structured_provider_fallback_reason"] = reason
+    task["structured_provider_latency_ms"] = latency_ms
+    task["structured_provider_diagnostics"] = diagnostics or {}
+    if provider_name:
+        task["structured_provider_name"] = provider_name
+
+
 async def _try_structured_provider(
     *,
     structured_registry: Any,
@@ -2102,6 +2133,13 @@ async def _try_structured_provider(
             }
         latency_ms = int((time.perf_counter() - started) * 1000)
         _record_structured_fallback(stats, indicator_key, reason, latency_ms)
+        _mark_structured_fallback_on_task(
+            task,
+            reason=reason,
+            latency_ms=latency_ms,
+            diagnostics=diagnostics,
+            provider_name=getattr(exc, "provider", None),
+        )
         samples = stats.setdefault("structured_error_samples", [])
         if isinstance(samples, list) and len(samples) < 5:
             samples.append({**diagnostics, "indicator_key": indicator_key})
@@ -2158,6 +2196,13 @@ async def _try_structured_provider(
     if manual_required:
         reason = str(extraction.get("manual_reason") or "policy_gate_blocked")
         _record_structured_fallback(stats, indicator_key, reason, latency_ms)
+        _mark_structured_fallback_on_task(
+            task,
+            reason=reason,
+            latency_ms=latency_ms,
+            diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
+            provider_name=getattr(result, "provider", None),
+        )
         if reason == "policy_gate_blocked" or "fund_flow_window_missing" in reason:
             stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
         return None
@@ -2168,12 +2213,26 @@ async def _try_structured_provider(
         market_payload.clear()
         market_payload.update(snapshot)
         _record_structured_fallback(stats, indicator_key, write_target, latency_ms)
+        _mark_structured_fallback_on_task(
+            task,
+            reason=write_target,
+            latency_ms=latency_ms,
+            diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
+            provider_name=getattr(result, "provider", None),
+        )
         return None
     post_writeback_reason = _post_writeback_manual_reason(market_payload, indicator_key)
     if post_writeback_reason:
         market_payload.clear()
         market_payload.update(snapshot)
         _record_structured_fallback(stats, indicator_key, post_writeback_reason, latency_ms)
+        _mark_structured_fallback_on_task(
+            task,
+            reason=post_writeback_reason,
+            latency_ms=latency_ms,
+            diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
+            provider_name=getattr(result, "provider", None),
+        )
         if post_writeback_reason == "estimated_not_allowed":
             stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
         return None
@@ -2212,6 +2271,7 @@ async def _try_structured_provider(
         "write_back_success": True,
         "write_back_target": write_target,
         "structured_provider": getattr(result, "provider", None),
+        "structured_provider_latency_ms": latency_ms,
     }
     websearch_item = result.to_websearch_record(task_for_log)
     websearch_item.update(
@@ -2223,6 +2283,10 @@ async def _try_structured_provider(
             "manual_required": False,
             "manual_reason": None,
             "result_type": "structured_success",
+            "write_back_success": True,
+            "write_back_target": write_target,
+            "structured_provider": getattr(result, "provider", None),
+            "structured_provider_latency_ms": latency_ms,
         }
     )
     _append_task_log(task_log_path, task_record)
@@ -3280,6 +3344,7 @@ async def _execute_tasks(
         }
         task_record = {
             **diagnostics,
+            **_structured_audit_fields_from_task(task),
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -3369,6 +3434,7 @@ async def _execute_tasks(
         }
         task_record = {
             **diagnostics,
+            **_structured_audit_fields_from_task(task),
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -4168,6 +4234,7 @@ async def _execute_tasks(
                     "score_filtered_drop": task.get("score_filtered_drop"),
                     "domain_filtered_drop": task.get("domain_filtered_drop"),
                 }
+                task_record.update(_structured_audit_fields_from_task(task))
                 if manual_required:
                     failures.append(task_record)
                     if extraction.get("value") is None:
@@ -4571,6 +4638,7 @@ async def _execute_tasks(
                                     "created_at": task["created_at"],
                                     "finished_at": int(datetime.now().timestamp()),
                                 }
+                                task_record.update(_structured_audit_fields_from_task(task))
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
                                 break
@@ -5061,6 +5129,7 @@ async def _execute_tasks(
                                 "score_filtered_drop": task_for_log.get("score_filtered_drop"),
                                 "domain_filtered_drop": task_for_log.get("domain_filtered_drop"),
                             }
+                            task_record.update(_structured_audit_fields_from_task(task_for_log))
                             failures.append(task_record)
                             manual_required_keys.append(task_record["indicator_key"])
                             _append_task_log(task_log_path, task_record)
@@ -5282,6 +5351,7 @@ async def _execute_tasks(
                             "score_filtered_drop": task_for_log.get("score_filtered_drop"),
                             "domain_filtered_drop": task_for_log.get("domain_filtered_drop"),
                         }
+                        task_record.update(_structured_audit_fields_from_task(task_for_log))
                         if manual_required:
                             failures.append(task_record)
                             if extraction.get("value") is None:
@@ -5373,6 +5443,7 @@ async def _execute_tasks(
                             "created_at": task["created_at"],
                             "finished_at": int(datetime.now().timestamp()),
                         }
+                        task_record.update(_structured_audit_fields_from_task(task))
                         _append_task_log(task_log_path, task_record)
                         failures.append(task_record)
                         break
@@ -5857,6 +5928,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="仅生成任务文件，不执行搜索")
     parser.add_argument("--execute-search", action="store_true", help="立即执行 Tavily+DeepSeek 任务")
     parser.add_argument(
+        "--disable-structured-providers",
+        action="store_true",
+        help="禁用 Stage2 structured provider-first，直接走 Tavily/Exa/DeepSeek 链路",
+    )
+    parser.add_argument(
         "--enable-exa-fallback",
         action="store_true",
         help="显式启用 Exa 作为 Tavily 后备；默认关闭以保持 Tavily-first 执行边界",
@@ -5926,6 +6002,18 @@ def _should_enable_exa_fallback(args: argparse.Namespace) -> bool:
 
 def _should_initialize_exa_client(args: argparse.Namespace) -> bool:
     return bool(os.getenv("EXA_API_KEY")) or _should_enable_exa_fallback(args)
+
+
+def _build_structured_registry_for_args(args: argparse.Namespace) -> Any:
+    if getattr(args, "disable_structured_providers", False):
+        return None
+    if build_default_registry is None:
+        return None
+    try:
+        return build_default_registry()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] structured provider registry init failed, fallback to search: {exc}")
+        return None
 
 
 def _is_exa_sdk_available() -> bool:
@@ -6188,6 +6276,9 @@ async def main() -> int:
     failures: List[Dict[str, Any]] = []
     websearch_results: List[Dict[str, Any]] = []
     exec_stats: Dict[str, int] = {"domain_filtered_drop": 0, "regex_hits": 0}
+    structured_registry = None
+    if args.execute_search and args.extraction_backend != "langchain":
+        structured_registry = _build_structured_registry_for_args(args)
     if args.dry_run:
         logger.info("[Stage2] Dry-run 模式：仅生成任务文件，不执行搜索")
     elif args.execute_search and tasks:
@@ -6240,6 +6331,7 @@ async def main() -> int:
                 deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
                 deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
                 allow_exa_non_quota_fallback=_should_enable_exa_fallback(args),
+                structured_registry=structured_registry,
             )
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
@@ -6278,6 +6370,7 @@ async def main() -> int:
                 deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
                 deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
                 allow_exa_non_quota_fallback=_should_enable_exa_fallback(args),
+                structured_registry=structured_registry,
             )
             completed_tasks.extend(retry_completed)
             failures.extend(retry_failures)

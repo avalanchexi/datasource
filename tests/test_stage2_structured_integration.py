@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
+import scripts.stage2_unified_enhancer as stage2
 from scripts.stage2_unified_enhancer import _execute_tasks
 
 
@@ -205,6 +207,10 @@ async def test_execute_tasks_structured_success_writes_back_and_skips_search(tmp
     assert payload["commodities"][0]["source"] == "structured"
     assert websearch_results[0]["search_backend"] == "structured"
     assert websearch_results[0]["result_type"] == "structured_success"
+    assert websearch_results[0]["write_back_success"] is True
+    assert websearch_results[0]["write_back_target"] == "commodities"
+    assert websearch_results[0]["structured_provider"] == "gold-fixture"
+    assert isinstance(websearch_results[0]["structured_provider_latency_ms"], int)
     assert client.search_calls == 0
     assert client.extract_calls == 0
     assert extractor.calls == 0
@@ -251,6 +257,10 @@ async def test_execute_tasks_structured_parse_error_falls_back_to_search(tmp_pat
     assert client.search_calls == 1
     assert extractor.calls == 1
     assert websearch_results[-1]["search_backend"] == "tavily"
+    assert completed[0]["structured_provider_attempted"] is True
+    assert completed[0]["structured_provider_fallback_reason"] == "parse_error"
+    assert websearch_results[-1]["task"]["structured_provider_attempted"] is True
+    assert websearch_results[-1]["task"]["structured_provider_fallback_reason"] == "parse_error"
     assert stats["structured_provider"]["fallback"] == 1
     assert stats["structured_provider"]["error_breakdown"]["parse_error"] == 1
     assert stats["structured_provider"]["by_key"]["GC=F"]["fallback"] == 1
@@ -311,3 +321,37 @@ async def test_execute_tasks_structured_fund_flow_gate_block_falls_back_to_searc
     assert stats["structured_policy_gate_blocked"] == 1
     assert stats["structured_provider"]["fallback"] == 1
     assert sum(stats["structured_provider"]["error_breakdown"].values()) == 1
+
+
+def test_build_structured_registry_for_args_defaults_to_registry(monkeypatch):
+    registry = object()
+    monkeypatch.setattr(stage2, "build_default_registry", lambda: registry)
+
+    result = stage2._build_structured_registry_for_args(
+        SimpleNamespace(disable_structured_providers=False)
+    )
+
+    assert result is registry
+
+
+def test_build_structured_registry_for_args_disable_returns_none(monkeypatch):
+    monkeypatch.setattr(stage2, "build_default_registry", lambda: object())
+
+    result = stage2._build_structured_registry_for_args(
+        SimpleNamespace(disable_structured_providers=True)
+    )
+
+    assert result is None
+
+
+def test_build_structured_registry_for_args_failure_returns_none(monkeypatch):
+    def boom():
+        raise RuntimeError("registry failed")
+
+    monkeypatch.setattr(stage2, "build_default_registry", boom)
+
+    result = stage2._build_structured_registry_for_args(
+        SimpleNamespace(disable_structured_providers=False)
+    )
+
+    assert result is None
