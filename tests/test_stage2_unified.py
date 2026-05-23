@@ -261,6 +261,43 @@ def test_stage2_result_count_fields_preserve_search_only_and_effective_metrics()
     assert fields["search_success_rate_incremental"] == 0.0
 
 
+def test_stage2_task_count_line_labels_effective_and_search_success_separately():
+    line = stage2._format_stage2_task_count_line(
+        {
+            "task_total": 18,
+            "task_completed": 14,
+            "stage2_effective_success": 12,
+            "task_structured_success": 12,
+            "task_search_success": 0,
+            "task_search_failed": 5,
+            "task_skipped_existing": 2,
+        },
+        pending_manual_count=4,
+    )
+
+    assert line == (
+        "  任务总数: 18, legacy完成: 14, Stage2有效成功: 12, "
+        "结构化源成功: 12, 搜索链路成功: 0, 搜索失败: 5, 跳过已有值: 2, 待人工: 4"
+    )
+    assert "真实搜索成功" not in line
+
+
+def test_stage2_hit_rate_line_prioritizes_effective_rate_and_labels_search_only_rate():
+    line = stage2._format_stage2_hit_rate_line(
+        {
+            "stage2_effective_success": 12,
+            "stage2_effective_denominator": 17,
+            "stage2_effective_hit_rate": 12 / 17,
+            "task_search_success": 0,
+            "task_search_failed": 5,
+            "search_success_rate_incremental": 0.0,
+        }
+    )
+
+    assert line == "  Stage2有效命中率: 70.6% (12/17); 搜索链路命中率: 0.0% (0/5)"
+    assert "增量命中率" not in line
+
+
 def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_path: Path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")

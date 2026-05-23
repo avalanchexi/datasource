@@ -2643,6 +2643,34 @@ def _build_stage2_result_count_fields(
     return fields
 
 
+def _format_stage2_task_count_line(
+    summary: Dict[str, Any],
+    *,
+    pending_manual_count: int,
+) -> str:
+    return (
+        f"  任务总数: {summary['task_total']}, legacy完成: {summary['task_completed']}, "
+        f"Stage2有效成功: {summary['stage2_effective_success']}, "
+        f"结构化源成功: {summary['task_structured_success']}, "
+        f"搜索链路成功: {summary['task_search_success']}, "
+        f"搜索失败: {summary['task_search_failed']}, "
+        f"跳过已有值: {summary['task_skipped_existing']}, 待人工: {pending_manual_count}"
+    )
+
+
+def _format_stage2_hit_rate_line(summary: Dict[str, Any]) -> str:
+    effective_success = summary["stage2_effective_success"]
+    effective_denominator = summary["stage2_effective_denominator"]
+    search_success = summary["task_search_success"]
+    search_denominator = summary["task_search_success"] + summary["task_search_failed"]
+    return (
+        f"  Stage2有效命中率: {summary['stage2_effective_hit_rate'] * 100:.1f}% "
+        f"({effective_success}/{effective_denominator}); "
+        f"搜索链路命中率: {summary['search_success_rate_incremental'] * 100:.1f}% "
+        f"({search_success}/{search_denominator})"
+    )
+
+
 def _structured_provider_summary_fields(exec_stats: Dict[str, Any]) -> Dict[str, Any]:
     structured = exec_stats.get("structured_provider")
     if not isinstance(structured, dict):
@@ -6719,11 +6747,7 @@ async def main() -> int:
 
 
     print("\n[Stage2 Summary]")
-    print(
-        f"  任务总数: {summary['task_total']}, legacy完成: {summary['task_completed']}, "
-        f"真实搜索成功: {summary['task_search_success']}, 搜索失败: {summary['task_search_failed']}, "
-        f"跳过已有值: {summary['task_skipped_existing']}, 待人工: {len(pending_manual)}"
-    )
+    print(_format_stage2_task_count_line(summary, pending_manual_count=len(pending_manual)))
     if summary["proxy"]["http"] or summary["proxy"]["https"]:
         print(f"  Proxy: http={summary['proxy']['http']} https={summary['proxy']['https']}")
     print(f"  输出: {output_path}")
@@ -6753,10 +6777,10 @@ async def main() -> int:
     )
     if summary.get("success_by_category"):
         print(f"  分类型成功: {summary['success_by_category']} / {summary['total_by_category']}")
-        print(f"  分类型真实搜索成功: {summary.get('search_success_by_category', {})} / {summary['total_by_category']}")
+        print(f"  分类型搜索链路成功: {summary.get('search_success_by_category', {})} / {summary['total_by_category']}")
+    print(_format_stage2_hit_rate_line(summary))
     print(
-        f"  增量命中率: {summary['search_success_rate_incremental']*100:.1f}% ; "
-        f"stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
+        f"  stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
         f"(成功 {summary['task_stale_refresh_success']}, 失败 {summary['task_stale_refresh_failed']})"
     )
     if pending_manual or summary["task_failed"] > 0:
