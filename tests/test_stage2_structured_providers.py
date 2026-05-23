@@ -6,6 +6,7 @@ from datasource.providers.stage2_structured.base import (
     StructuredResult,
 )
 from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
+from datasource.providers.stage2_structured.eastmoney_etf import EastMoneyETFProvider
 from datasource.providers.stage2_structured.official_china import (
     MLF_URL,
     NBS_URL,
@@ -115,6 +116,7 @@ async def test_base_provider_fetch_must_be_implemented():
 def test_source_tier_classifier_uses_explicit_allowlists():
     assert classify_structured_source_tier("https://www.stats.gov.cn/sj/zxfb/202605/t.html") == "tier1"
     assert classify_structured_source_tier("https://finance.yahoo.com/quote/GC=F") == "tier2"
+    assert classify_structured_source_tier("https://data.eastmoney.com/etf/") == "tier2"
     assert classify_structured_source_tier("https://finance.sina.com.cn/a/20260523.html") == "tier3"
     assert classify_structured_source_tier("https://example.com/quote") == "unknown"
     assert classify_structured_source_tier("https://stats.gov.cn.evil.com/path") == "unknown"
@@ -167,6 +169,120 @@ async def test_yahoo_finance_provider_wraps_fetch_errors():
     assert exc_info.value.reason == "fetch_error"
     assert "query1.finance.yahoo.com" in exc_info.value.diagnostics["url"]
     assert exc_info.value.diagnostics["params"]["range"] == "5d"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_computes_direct_daily_windows():
+    rows = [
+        {"date": "2026-01-{0:02d}".format(day), "net_flow": "1.0"}
+        for day in range(1, 121)
+    ]
+
+    async def fetch_json(url, params=None):
+        assert "push2his.eastmoney.com" in url
+        return {"data": {"klines": rows}}
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.provider == "eastmoney_etf"
+    assert result.source_tier == "tier2"
+    assert extraction["category"] == "fund_flow"
+    assert extraction["recent_5d"] == 5.0
+    assert extraction["total_120d"] == 120.0
+    assert extraction["metric_basis"] == "net_flow_sum"
+    assert extraction["window_evidence"] == "direct_daily_series"
+    assert extraction["is_estimated"] is False
+    assert extraction["source_url"] == "https://data.eastmoney.com/etf/"
+    assert extraction["diagnostics"]["row_count"] == 120
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_rejects_short_window():
+    rows = [
+        {"date": "2026-01-{0:02d}".format(day), "net_flow": "1.0"}
+        for day in range(1, 11)
+    ]
+
+    async def fetch_json(url, params=None):
+        return {"data": {"klines": rows}}
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["row_count"] == 10
+    assert exc_info.value.diagnostics["source_url"] == "https://data.eastmoney.com/etf/"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_rejects_unsupported_key():
+    provider = EastMoneyETFProvider()
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "northbound"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "unsupported_key"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_wraps_fetch_errors():
+    async def fetch_json(url, params=None):
+        raise RuntimeError("network down")
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "fetch_error"
+    assert exc_info.value.diagnostics["api_url"].startswith(
+        "https://push2his.eastmoney.com/"
+    )
+    assert exc_info.value.diagnostics["source_url"] == "https://data.eastmoney.com/etf/"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_malformed_rows_do_not_pass_policy_gate():
+    rows = [
+        {"date": "2026-01-{0:02d}".format(day), "net_flow": "1.0"}
+        for day in range(1, 119)
+    ]
+    rows.extend(
+        [
+            {"date": "2026-05-21", "net_flow": "not-a-number"},
+            "2026-05-22,1,2,3,4,5",
+        ]
+    )
+
+    async def fetch_json(url, params=None):
+        return {"data": {"klines": rows}}
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["row_count"] == 118
+    assert exc_info.value.diagnostics["malformed_row_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_all_malformed_rows_parse_error():
+    async def fetch_json(url, params=None):
+        return {"data": {"klines": ["2026-05-22,1,2,3,4,5"]}}
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "parse_error"
+    assert exc_info.value.diagnostics["row_count"] == 0
 
 
 @pytest.mark.asyncio
