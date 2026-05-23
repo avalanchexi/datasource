@@ -355,3 +355,45 @@ def test_build_structured_registry_for_args_failure_returns_none(monkeypatch):
     )
 
     assert result is None
+
+
+def test_stage2_effective_hit_rate():
+    assert stage2._stage2_effective_hit_rate(2, 1) == pytest.approx(2 / 3)
+    assert stage2._stage2_effective_hit_rate(0, 0) == 0.0
+
+
+def test_stage2_summary_includes_structured_provider_diagnostics():
+    completed = [
+        {
+            "task_id": "structured-gold",
+            "indicator_key": "GC=F",
+            "result_type": "structured_success",
+            "write_back_success": True,
+        }
+    ]
+    summary = stage2._build_stage2_summary_diagnostics(
+        completed,
+        failures=[],
+        websearch_results=[],
+        exec_stats={
+            "structured_provider": {
+                "attempt": 2,
+                "success": 1,
+                "fallback": 1,
+                "by_key": {
+                    "GC=F": {"attempt": 1, "success": 1, "fallback": 0},
+                    "CL=F": {"attempt": 1, "success": 0, "fallback": 1},
+                },
+                "error_breakdown": {"parse_error": 1},
+                "latency_ms_by_provider": {"gold-fixture": [12]},
+            }
+        },
+    )
+
+    assert summary["structured_provider_attempt_count"] == 2
+    assert summary["structured_provider_success_count"] == 1
+    assert summary["structured_provider_fallback_to_search_count"] == 1
+    assert summary["structured_provider_success_by_key"] == {"GC=F": 1}
+    assert summary["structured_provider_error_breakdown"] == {"parse_error": 1}
+    assert summary["structured_provider_latency_ms_by_provider"] == {"gold-fixture": [12]}
+    assert summary["retrieval_diagnostics"]["writeback_success_count"] == 1

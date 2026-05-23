@@ -2010,6 +2010,7 @@ def _structured_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
             "by_key": {},
             "error_breakdown": {},
             "latency_ms": [],
+            "latency_ms_by_provider": {},
         },
     )
     structured.setdefault("attempt", 0)
@@ -2018,6 +2019,7 @@ def _structured_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
     structured.setdefault("by_key", {})
     structured.setdefault("error_breakdown", {})
     structured.setdefault("latency_ms", [])
+    structured.setdefault("latency_ms_by_provider", {})
     return structured
 
 
@@ -2035,10 +2037,29 @@ def _record_structured_attempt(stats: Dict[str, Any], indicator_key: str) -> Non
     stats["structured_attempt"] = stats.get("structured_attempt", 0) + 1
 
 
-def _record_structured_success(stats: Dict[str, Any], indicator_key: str, latency_ms: int) -> None:
+def _record_structured_latency_by_provider(
+    structured: Dict[str, Any],
+    provider_name: Optional[str],
+    latency_ms: Optional[int],
+) -> None:
+    if latency_ms is None:
+        return
+    provider_key = str(provider_name or "unknown")
+    by_provider = structured.setdefault("latency_ms_by_provider", {})
+    if isinstance(by_provider, dict):
+        by_provider.setdefault(provider_key, []).append(latency_ms)
+
+
+def _record_structured_success(
+    stats: Dict[str, Any],
+    indicator_key: str,
+    latency_ms: int,
+    provider_name: Optional[str] = None,
+) -> None:
     structured = _structured_stats(stats)
     structured["success"] = structured.get("success", 0) + 1
     structured.setdefault("latency_ms", []).append(latency_ms)
+    _record_structured_latency_by_provider(structured, provider_name, latency_ms)
     key_stats = _structured_key_stats(stats, indicator_key)
     key_stats["success"] = key_stats.get("success", 0) + 1
     stats["structured_success"] = stats.get("structured_success", 0) + 1
@@ -2049,11 +2070,13 @@ def _record_structured_fallback(
     indicator_key: str,
     reason: str,
     latency_ms: Optional[int] = None,
+    provider_name: Optional[str] = None,
 ) -> None:
     structured = _structured_stats(stats)
     structured["fallback"] = structured.get("fallback", 0) + 1
     if latency_ms is not None:
         structured.setdefault("latency_ms", []).append(latency_ms)
+    _record_structured_latency_by_provider(structured, provider_name, latency_ms)
     key_stats = _structured_key_stats(stats, indicator_key)
     key_stats["fallback"] = key_stats.get("fallback", 0) + 1
     key_stats["last_fallback_reason"] = reason
@@ -2132,13 +2155,20 @@ async def _try_structured_provider(
                 "structured_provider_message": str(exc),
             }
         latency_ms = int((time.perf_counter() - started) * 1000)
-        _record_structured_fallback(stats, indicator_key, reason, latency_ms)
+        provider_name = getattr(exc, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            reason,
+            latency_ms,
+            provider_name=provider_name,
+        )
         _mark_structured_fallback_on_task(
             task,
             reason=reason,
             latency_ms=latency_ms,
             diagnostics=diagnostics,
-            provider_name=getattr(exc, "provider", None),
+            provider_name=provider_name,
         )
         samples = stats.setdefault("structured_error_samples", [])
         if isinstance(samples, list) and len(samples) < 5:
@@ -2195,13 +2225,20 @@ async def _try_structured_provider(
         extraction["note"] = _append_note(extraction.get("note"), str(extraction.get("manual_reason")))
     if manual_required:
         reason = str(extraction.get("manual_reason") or "policy_gate_blocked")
-        _record_structured_fallback(stats, indicator_key, reason, latency_ms)
+        provider_name = getattr(result, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            reason,
+            latency_ms,
+            provider_name=provider_name,
+        )
         _mark_structured_fallback_on_task(
             task,
             reason=reason,
             latency_ms=latency_ms,
             diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
-            provider_name=getattr(result, "provider", None),
+            provider_name=provider_name,
         )
         if reason == "policy_gate_blocked" or "fund_flow_window_missing" in reason:
             stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
@@ -2212,26 +2249,40 @@ async def _try_structured_provider(
     if write_target == "skip_no_value":
         market_payload.clear()
         market_payload.update(snapshot)
-        _record_structured_fallback(stats, indicator_key, write_target, latency_ms)
+        provider_name = getattr(result, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            write_target,
+            latency_ms,
+            provider_name=provider_name,
+        )
         _mark_structured_fallback_on_task(
             task,
             reason=write_target,
             latency_ms=latency_ms,
             diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
-            provider_name=getattr(result, "provider", None),
+            provider_name=provider_name,
         )
         return None
     post_writeback_reason = _post_writeback_manual_reason(market_payload, indicator_key)
     if post_writeback_reason:
         market_payload.clear()
         market_payload.update(snapshot)
-        _record_structured_fallback(stats, indicator_key, post_writeback_reason, latency_ms)
+        provider_name = getattr(result, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            post_writeback_reason,
+            latency_ms,
+            provider_name=provider_name,
+        )
         _mark_structured_fallback_on_task(
             task,
             reason=post_writeback_reason,
             latency_ms=latency_ms,
             diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
-            provider_name=getattr(result, "provider", None),
+            provider_name=provider_name,
         )
         if post_writeback_reason == "estimated_not_allowed":
             stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
@@ -2243,7 +2294,8 @@ async def _try_structured_provider(
     if write_target == "fallback_macro":
         stats["write_back_fallback_count"] = stats.get("write_back_fallback_count", 0) + 1
     _update_missing_items(market_payload, indicator_key)
-    _record_structured_success(stats, indicator_key, latency_ms)
+    provider_name = getattr(result, "provider", None)
+    _record_structured_success(stats, indicator_key, latency_ms, provider_name=provider_name)
 
     now_ts = int(datetime.now().timestamp())
     task_record = {
@@ -2533,6 +2585,48 @@ _STAGE2_BACKEND_SUMMARY_KEYS = (
 )
 
 
+def _stage2_effective_hit_rate(success_count: int, failure_count: int) -> float:
+    denominator = success_count + failure_count
+    return success_count / denominator if denominator else 0.0
+
+
+def _structured_provider_summary_fields(exec_stats: Dict[str, Any]) -> Dict[str, Any]:
+    structured = exec_stats.get("structured_provider")
+    if not isinstance(structured, dict):
+        structured = {}
+    by_key = structured.get("by_key", {})
+    if not isinstance(by_key, dict):
+        by_key = {}
+    success_by_key = {
+        str(indicator_key): key_stats.get("success", 0)
+        for indicator_key, key_stats in by_key.items()
+        if isinstance(key_stats, dict) and key_stats.get("success", 0)
+    }
+    error_breakdown = structured.get("error_breakdown", {})
+    if not isinstance(error_breakdown, dict):
+        error_breakdown = {}
+    latency_by_provider = structured.get("latency_ms_by_provider", {})
+    if not isinstance(latency_by_provider, dict):
+        latency_by_provider = {}
+    return {
+        "structured_provider_attempt_count": structured.get(
+            "attempt",
+            exec_stats.get("structured_attempt", 0),
+        ),
+        "structured_provider_success_count": structured.get(
+            "success",
+            exec_stats.get("structured_success", 0),
+        ),
+        "structured_provider_fallback_to_search_count": structured.get(
+            "fallback",
+            exec_stats.get("structured_fallback", 0),
+        ),
+        "structured_provider_success_by_key": success_by_key,
+        "structured_provider_error_breakdown": dict(error_breakdown),
+        "structured_provider_latency_ms_by_provider": dict(latency_by_provider),
+    }
+
+
 def _build_stage2_summary_diagnostics(
     completed_tasks: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
@@ -2554,6 +2648,7 @@ def _build_stage2_summary_diagnostics(
         "deepseek_breaker_attempts": exec_stats.get("deepseek_breaker_attempts", 0),
         "deepseek_breaker_timeouts": exec_stats.get("deepseek_breaker_timeouts", 0),
     }
+    payload.update(_structured_provider_summary_fields(exec_stats))
     unavailable_reason = exec_stats.get("tavily_unavailable_reason")
     if unavailable_reason:
         payload["tavily_unavailable_reason"] = unavailable_reason
@@ -6470,6 +6565,7 @@ async def main() -> int:
             incremental_success_by_cat[cat] = incremental_success_by_cat.get(cat, 0) + 1
     skipped_existing_count = sum(1 for t in completed_tasks if t.get("result_type") == "skipped_existing")
     search_success_count = sum(1 for t in completed_tasks if t.get("result_type") == "search_success")
+    structured_success_count = sum(1 for t in completed_tasks if t.get("result_type") == "structured_success")
     search_failed_count = sum(1 for t in failures if t.get("result_type") == "manual_required")
     stale_refresh_forced = sum(1 for t in tasks if _is_force_refresh_task(t))
     stale_refresh_success = sum(1 for t in completed_tasks if t.get("force_refresh") and t.get("result_type") == "search_success")
@@ -6477,6 +6573,11 @@ async def main() -> int:
     incremental_denominator = search_success_count + search_failed_count
     search_success_rate_incremental = (
         search_success_count / incremental_denominator if incremental_denominator else 0.0
+    )
+    stage2_effective_success_count = search_success_count + structured_success_count
+    stage2_effective_hit_rate = _stage2_effective_hit_rate(
+        stage2_effective_success_count,
+        search_failed_count,
     )
     summary_diagnostics = _build_stage2_summary_diagnostics(
         completed_tasks,
@@ -6491,7 +6592,10 @@ async def main() -> int:
         "task_failed": len(failures),
         "task_skipped_existing": skipped_existing_count,
         "task_search_success": search_success_count,
+        "task_structured_success": structured_success_count,
         "task_search_failed": search_failed_count,
+        "stage2_effective_success": stage2_effective_success_count,
+        "stage2_effective_hit_rate": stage2_effective_hit_rate,
         "task_stale_refresh_forced": stale_refresh_forced,
         "task_stale_refresh_success": stale_refresh_success,
         "task_stale_refresh_failed": stale_refresh_failed,
@@ -6561,6 +6665,8 @@ async def main() -> int:
     for key in _STAGE2_BACKEND_SUMMARY_KEYS:
         if key in summary_diagnostics:
             summary[key] = summary_diagnostics[key]
+    for key in _structured_provider_summary_fields({}).keys():
+        summary[key] = summary_diagnostics.get(key, summary.get(key))
     _dump_json(summary, log_output)
 
     try:
