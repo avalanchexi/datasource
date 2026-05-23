@@ -118,4 +118,6 @@ class Stage2StructuredProvider:
         market_payload: Mapping[str, Any],
         reference_date: str,
     ) -> StructuredResult:
-        ...
+        raise NotImplementedError(
+            "Stage2StructuredProvider.fetch must be implemented by subclasses"
+        )

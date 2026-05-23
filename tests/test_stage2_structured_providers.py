@@ -1,6 +1,7 @@
 import pytest
 
 from datasource.providers.stage2_structured.base import (
+    Stage2StructuredProvider,
     StructuredProviderError,
     StructuredResult,
 )
@@ -40,6 +41,10 @@ class FailingProvider:
         )
 
 
+class AlternateFakeProvider(FakeProvider):
+    name = "alternate_fake"
+
+
 @pytest.mark.asyncio
 async def test_registry_dispatches_supported_provider():
     registry = StructuredProviderRegistry([FakeProvider()])
@@ -54,6 +59,14 @@ async def test_registry_dispatches_supported_provider():
     assert result.to_extraction()["source_url"] == "https://finance.yahoo.com/quote/GC=F"
     assert result.to_websearch_record(task)["search_backend"] == "structured"
     assert result.to_websearch_record(task)["result_type"] == "structured_success"
+
+
+def test_registry_provider_for_returns_first_registered_provider():
+    first = FakeProvider()
+    second = AlternateFakeProvider()
+    registry = StructuredProviderRegistry([first, second])
+
+    assert registry.provider_for("GC=F") is first
 
 
 @pytest.mark.asyncio
@@ -78,8 +91,22 @@ async def test_registry_surfaces_provider_error_with_diagnostics():
     assert exc_info.value.to_diagnostics()["structured_provider_error"] == "parse_error"
 
 
+@pytest.mark.asyncio
+async def test_base_provider_fetch_must_be_implemented():
+    provider = Stage2StructuredProvider()
+
+    with pytest.raises(NotImplementedError) as exc_info:
+        await provider.fetch({"indicator_key": "GC=F"}, {}, "2026-05-23")
+
+    assert str(exc_info.value) == "Stage2StructuredProvider.fetch must be implemented by subclasses"
+
+
 def test_source_tier_classifier_uses_explicit_allowlists():
     assert classify_structured_source_tier("https://www.stats.gov.cn/sj/zxfb/202605/t.html") == "tier1"
     assert classify_structured_source_tier("https://finance.yahoo.com/quote/GC=F") == "tier2"
     assert classify_structured_source_tier("https://finance.sina.com.cn/a/20260523.html") == "tier3"
     assert classify_structured_source_tier("https://example.com/quote") == "unknown"
+    assert classify_structured_source_tier("https://stats.gov.cn.evil.com/path") == "unknown"
+    assert classify_structured_source_tier("https://evil.com/?next=stats.gov.cn") == "unknown"
+    assert classify_structured_source_tier("https://stats.gov.cn@evil.com/path") == "unknown"
+    assert classify_structured_source_tier("https://sub.stats.gov.cn/path") == "tier1"
