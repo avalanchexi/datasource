@@ -1457,7 +1457,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 4. **完整性验证** - 阶段5严格检查验证清单
 5. **格式规范** - 百分比、基点、斜率、价格格式统一
 6. **透明可追溯** - 数据来源、时点、方法完整记录
-7. **资金流向完整** - 北向/南向/ETF/融资融券全部由 WebSearch 注入，异常零值自动检测 (V2.2更新)
+7. **资金流向完整** - 北向/南向/ETF/融资融券按当前 gate 处理：TuShare 可得字段、Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual/WebSearch 注入；ETF structured provider 不默认释放全市场 ETF gate，0/None/窗口缺失进入 manual_required
 8. **智能容错机制** - WebSearch失败记录提示，等待人工补数（AKShare 通道已停用）
 9. **Pring数据验证** - 自动三阶段验证，数据不足时拒绝执行 (V4.1新增) ⭐
 10. **数据质量透明** - Pring章节自动显示数据完整性状态 (V4.1新增) ⭐
