@@ -57,8 +57,9 @@ cp .env.example .env
 # 可运行 `python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
 ```
 
-## 快速运行 Stage2（Tavily + DeepSeek/Regex）
+## 快速运行 Stage2（structured-provider-first + Tavily + DeepSeek/Regex）
 - 运行前：`bash run_preflight.sh`；可选健康检查 `PYTHONPATH=./src python3 scripts/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
+- Stage2 uses structured-provider-first for known official or structured indicators, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction. 排障可加 `--disable-structured-providers` 回到原搜索链路。
 - 速度优先（regex，无 LLM）：
 ```bash
 PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
@@ -72,7 +73,7 @@ PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
   --gap-monitor data/runs/${DATE_NH}/gap_monitor.json \
   --websearch-results data/runs/${DATE_NH}/websearch_results_auto.json
 ```
-- 精度模式：改用 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
+- 精度模式：保留 structured-provider-first，改用 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
 - Tavily extract 422/配额：可保留 `--disable-extract` 或调低 `--extract-topk 1`，先 search-only 再 regex 兜底。
 
 ## 测试
@@ -169,7 +170,7 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 # 历史扫描器（已迁入 legacy，如需回溯老流程）
 python scripts/legacy/market_scanner_unified.py
 
-# Stage2 一体化增强（Tavily + DeepSeek 骨架）
+# Stage2 一体化增强（structured-provider-first + Tavily + DeepSeek 骨架）
 python scripts/stage2_unified_enhancer.py --market-data data/runs/${DATE_NH}/market_data.json --phase all --execute-search \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite
 
@@ -499,12 +500,12 @@ datasource/
 - 支持 AKShare 和 TuShare 数据源
 - 实现统一的数据接口
 - 提供故障转移和缓存功能
-# 资金流向后端固定为 tavily；缺口转 Stage2.5 manual/WebSearch 注入
+# 资金流向后端固定为 tavily；ETF structured provider 不默认释放全市场 ETF gate，缺口转 Stage2.5 manual/WebSearch 注入
 PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
   --market-data data/runs/${DATE_NH}/market_data.json \
   --execute-search \
   --fund-flow-backend tavily
-# Datasource Stage2 快速运行（Tavily + DeepSeek）
+# Datasource Stage2 快速运行（structured-provider-first + Tavily + DeepSeek）
 
 ## 环境准备
 - Python 3.10+
@@ -532,6 +533,7 @@ python3 scripts/stage2_unified_enhancer.py \
 ```
 
 ## 关键默认值
+- Stage2 uses structured-provider-first for known official or structured indicators, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
 - fund_flow_backend: `tavily`
 - deepseek_model: `deepseek-v4-pro`
 - deepseek_timeout: 30s；llm_hard_timeout: 35s；DeepSeek 默认并发 3，extraction queue 默认开启
@@ -542,8 +544,8 @@ python3 scripts/stage2_unified_enhancer.py \
 - score_filtered_drop, domain_filtered_drop, extract_calls, tavily_extract_calls
 - timeout_count, retry_count, queue_requeued, queue_dead_letters
 - cache_hit_rate, avg_elapsed_ms, success_by_category / total_by_category
-- 增量命中率请优先看 task_search_success / task_search_failed / task_skipped_existing / search_success_rate_incremental
+- 真实命中率请优先看 `stage2_effective_hit_rate`；它包含 structured-provider 成功和搜索抽取成功，不包含 `task_skipped_existing` 或 Stage2.5 manual 注入。搜索链路增量命中率看 task_search_success / task_search_failed / search_success_rate_incremental
 
 ## 兼容说明
-- 无 MCP 跳过逻辑，资金流统一 Tavily，零值且无方向直接标人工。
+- 无 MCP 跳过逻辑；Stage2 默认 structured-provider-first，排障可传 `--disable-structured-providers`；资金流搜索后端统一 Tavily，零值且无方向直接标人工。
 - LangChain 分支需安装 `langchain-core`，否则使用 deepseek 默认抽取。

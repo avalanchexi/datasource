@@ -5,9 +5,9 @@
 **适用场景**: 历史背景扫描生成器参考，不作为当前日报执行手册
 **文档定位**: 已归档手册；当前权威流程以 `AGENTS.md` 为准
 
-> 当前生产流水线为 Stage1 → Stage2 unified → Stage2.5 → Stage3 → Stage4。
+> 当前生产流水线为 Stage1 → Stage2 unified（structured-provider-first + Tavily-first 搜索，必要时 Exa quota failover）→ Stage2.5 → Stage3 → Stage4。
 > `scripts/utility/background_scan_120d_generator.py` 仅保留历史/手工分析用途，不作为报告主入口或补数入口。
-> 当前补数优先级为 TuShare(Stage1) → Stage2 Tavily/DeepSeek → Stage2.5 WebSearch/manual 注入。
+> 当前补数优先级为 TuShare(Stage1) → Stage2 structured-provider-first + Tavily/DeepSeek → Stage2.5 WebSearch/manual 注入；具体参数和质量 gate 以 `AGENTS.md` 为准。
 
 **版本历程**:
 - V2.1 (2025-10-22): MCP增强，资金流向优化，异常零值检测
@@ -64,14 +64,14 @@
 | 阶段 | 脚本 | 时间 | 主要任务 | 输出 |
 |------|------|------|----------|------|
 | 1️⃣ | `scripts/stage1_data_collector.py` | 30-40s | API数据收集（TuShare first） | `market_data.json` |
-| 2️⃣ | `scripts/stage2_unified_enhancer.py` | 90-150s | Tavily+DeepSeek增强（forex/bonds/commodities/fund_flow） | `market_data_stage2.json` |
+| 2️⃣ | `scripts/stage2_unified_enhancer.py` | 90-150s | structured-provider-first + Tavily/DeepSeek 增强（forex/bonds/commodities/fund_flow） | `market_data_stage2.json` |
 | 2+️⃣ | `scripts/stage2_5_injector.py` | 10-20s | WebSearch结果注入（补完缺口） | `market_data_complete.json` |
 | 3️⃣ | `scripts/stage3_pring_analyzer.py` | 15-25s | Pring三层框架分析 | `pring_result.json` |
 | 4️⃣ | `scripts/stage4_report_generator.py` | 10-15s | Markdown报告生成 | `DATE背景扫描120.md` |
 
 **当前总时间**: 3-5分钟 | **数据完整度**: 85-95% | **自动化程度**: 高
 
-> **注意**: 如需更快速度，Stage2可使用 `--extraction-backend regex --disable-extract`（30-60s完成）
+> **注意**: 如需更快速度，Stage2可使用 `--extraction-backend regex --disable-extract`（30-60s完成）；如需排查结构化源，可追加 `--disable-structured-providers` 只跑原搜索链路。
 
 ---
 
@@ -191,7 +191,7 @@ reports/
 
 ## 🔧 V2.1 AI执行特色 (MCP增强，历史记录)
 
-> 本节仅解释 V2.1 历史设计，不是当前执行指令。当前日报不自动运行旧 MCP/generator flow；按 `AGENTS.md` 使用 TuShare(Stage1) → Stage2 Tavily/DeepSeek → Stage2.5 WebSearch/manual 注入。
+> 本节仅解释 V2.1 历史设计，不是当前执行指令。当前日报不自动运行旧 MCP/generator flow；按 `AGENTS.md` 使用 TuShare(Stage1) → Stage2 structured-provider-first + Tavily/DeepSeek → Stage2.5 WebSearch/manual 注入。
 
 ### 历史 MCP服务智能数据补充
 - **历史策略**：WebFetch直接API调用，WebSearch智能识别；当前不作为优先级口径
@@ -391,7 +391,7 @@ DATE_NH=20250926
 - **数据完整性**: 汇率、美股、债券数据100%覆盖
 - **实时性强**: WebFetch/WebSearch数据延迟≤5分钟
 - **智能容错**: <5秒故障转移，用户无感知
-- **质量保证**: Tavily+DeepSeek 搜索抽取，必要时人工校验，支持队列限流，准确性取决于搜索与抽取质量
+- **质量保证**: Stage2 structured-provider-first + Tavily/DeepSeek 搜索抽取，必要时人工校验，支持队列限流，准确性取决于结构化源、搜索与抽取质量
 - **透明追溯**: 完整记录MCP工具使用和数据来源
 
 ---
@@ -403,7 +403,7 @@ DATE_NH=20250926
 
 ---
 
-## 🎯 AI快速启动指令（三阶段，资金流默认 tavily）
+## 🎯 AI快速启动指令（三阶段，资金流搜索默认 tavily）
 
 ```
 执行背景扫描报告生成：YYYYMMDD
@@ -411,7 +411,7 @@ DATE_NH=20250926
 
 **示例**: `执行背景扫描报告生成：20251124`
 
-AI 将自动按照 3 个主要阶段执行（Stage1→Stage2→Stage3，资金流 backend=tavily，遇失败可标人工），总时间约 30-45 分钟。
+AI 将自动按照当前 Stage1→Stage2→Stage2.5→Stage3→Stage4 流程执行；Stage2 默认 structured-provider-first，资金流搜索 backend=tavily，遇失败可标人工。
 
 ---
 
@@ -470,7 +470,7 @@ python scripts/stage1_data_collector.py \
 
 **核心特性**:
 - ✅ 使用Pydantic模型严格验证数据结构
-- ✅ 当前口径：Stage1 TuShare first，Stage2 使用 Tavily/DeepSeek，Stage2.5 处理 manual_required 缺口
+- ✅ 当前口径：Stage1 TuShare first，Stage2 使用 structured-provider-first + Tavily/DeepSeek，Stage2.5 处理 manual_required 缺口
 - ✅ 计算技术指标 (MA20/50/200, 波动率, 趋势评分)
 - ✅ 为缺失数据创建 manual_required/占位符，后续通过 Stage2.5 注入
 
@@ -815,7 +815,7 @@ if overall_completeness < 60.0:
 - [ ] 创建Todo任务列表
 - [ ] 验证项目目录结构
 - [ ] 检查.env环境配置
-- [ ] 测试数据源连接（TuShare + Tavily/DeepSeek）
+- [ ] 测试数据源连接（TuShare + Stage2 structured providers + Tavily/DeepSeek）
 - [ ] 验证 `scripts/stage2_unified_enhancer.py` 与 `scripts/stage2_5_injector.py` 可用
 - [ ] 确认Python依赖完整
 
@@ -823,7 +823,7 @@ if overall_completeness < 60.0:
 - [ ] `.env`文件存在且配置正确
 - [ ] `scripts/stage1_data_collector.py`、`scripts/stage2_unified_enhancer.py`、`scripts/stage2_5_injector.py`、`scripts/stage3_pring_analyzer.py`、`scripts/stage4_report_generator.py`存在
 - [ ] TuShare数据源连接正常
-- [ ] Tavily/DeepSeek key 可用；Stage2 若失败，缺口进入 Stage2.5 manual_required
+- [ ] Tavily/DeepSeek key 可用；Stage2 structured provider 或搜索链路若失败，缺口进入 Stage2.5 manual_required
 
 ### AI执行指令
 
@@ -853,11 +853,11 @@ async def validate_strict_data_policy():
     print(f'   TuShare状态: {tushare_status}')
 
     print('2. Stage2/Stage2.5策略检查...')
-    print('   当前策略: Stage2 Tavily/DeepSeek，失败后进入 Stage2.5 manual_required')
+    print('   当前策略: Stage2 structured-provider-first + Tavily/DeepSeek，失败后进入 Stage2.5 manual_required')
 
     print('=== 当前数据源策略确认 ===')
     print('✅ 已启用严格数据源管理')
-    print('✅ 优先级: TuShare -> Stage2 Tavily/DeepSeek -> Stage2.5 manual injection')
+    print('✅ 优先级: TuShare -> Stage2 structured-provider-first + Tavily/DeepSeek -> Stage2.5 manual injection')
     print('✅ 已配置 Stage2.5 manual_required 补数机制')
 
 asyncio.run(validate_strict_data_policy())
@@ -865,7 +865,7 @@ asyncio.run(validate_strict_data_policy())
 ```
 
 ### 完成标志
-✅ 所有验证清单通过，TuShare/Tavily/DeepSeek 或 Stage2.5 manual 补数路径已准备
+✅ 所有验证清单通过，TuShare/Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual 补数路径已准备
 
 **预计时间**: 8分钟
 
@@ -1006,11 +1006,11 @@ python scripts/utility/data_completion_checker.py
 
 ### 优化重点
 
-1. **数据说明**: 当前标注 TuShare、Tavily+DeepSeek、Stage2.5 manual/WebSearch 及具体 source_url；MCP 标注仅保留为历史口径
+1. **数据说明**: 当前标注 TuShare、Stage2 structured-provider、Tavily+DeepSeek、Stage2.5 manual/WebSearch 及具体 source_url；MCP 标注仅保留为历史口径
 2. **市场结论**: 基于完整数据生成3-6条核心观点
 3. **财经要闻**: 按类别组织（中国市场/美国及全球/大宗商品）
 4. **时效性**: 确保数据时点标注准确
-5. **资金流向**: 标注数据来源（Stage2 Tavily/DeepSeek、Stage2.5 manual source_url、异常零值-需核查）
+5. **资金流向**: 标注数据来源（Stage2 structured-provider/Tavily/DeepSeek、Stage2.5 manual source_url、异常零值-需核查）
 
 ### 完成标志
 ✅ 报告结构完整，当前数据源标注清晰，格式规范，资金流向章节数据完整
@@ -1148,13 +1148,13 @@ python scripts/utility/data_completion_checker.py
 - [ ] 资金流向: 4类资金数据完整，0/None/窗口缺失均进入 Stage2.5 manual_required
   - 北向资金（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
   - 南向资金（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
-  - ETF资金流（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
+  - ETF资金流（Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual 注入；structured provider 不默认释放全市场 ETF gate）
   - 融资融券余额（TuShare 可得字段或 Stage2.5 manual 注入）
 
 #### 当前数据质量
-- [ ] 商品数据: 标注 Tavily/DeepSeek 或 Stage2.5 `source_url`
-- [ ] 汇率数据: 标注 Tavily/DeepSeek 或 Stage2.5 `source_url`
-- [ ] 债券数据: 标注 Tavily/DeepSeek 或 Stage2.5 `source_url`
+- [ ] 商品数据: 标注 Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 `source_url`
+- [ ] 汇率数据: 标注 Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 `source_url`
+- [ ] 债券数据: 标注 Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 `source_url`
 - [ ] 财经要闻: 标注来源网站与发布时间
 - [ ] 资金流向: 标注 `source_url`，异常零值标记为 `异常零值-需核查`
 - [ ] 资讯来源: 标注具体网站（Trading Economics, Bloomberg等）
@@ -1452,7 +1452,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 ### 核心执行要点
 
 1. **Always Create Todo List First** - 在PHASE_1立即创建5阶段Todo
-2. **数据源优先级** - 当前按 TuShare(Stage1) → Stage2 Tavily/DeepSeek → Stage2.5 WebSearch/manual 注入执行
+2. **数据源优先级** - 当前按 TuShare(Stage1) → Stage2 structured-provider-first + Tavily/DeepSeek → Stage2.5 WebSearch/manual 注入执行
 3. **实时标注来源** - Stage2.5 手工补数必须带 `source_url` 或在 `source`/`note` 中包含 URL
 4. **完整性验证** - 阶段5严格检查验证清单
 5. **格式规范** - 百分比、基点、斜率、价格格式统一

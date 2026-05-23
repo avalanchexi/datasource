@@ -1,4 +1,4 @@
-# Stage2 快速运行说明（Tavily + DeepSeek / Regex 快速模式）
+# Stage2 快速运行说明（structured-provider-first + Tavily + DeepSeek / Regex 快速模式）
 
 ## 依赖
 - Python 3.10+
@@ -27,11 +27,14 @@ python3 scripts/stage2_unified_enhancer.py \
 ```
   - 速度优先：保持 `--extraction-backend regex --disable-extract`，约 30–60 秒。
   - 精度优先：改为 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro --deepseek-timeout 30 --llm-hard-timeout 35 --deepseek-max-concurrency 3 --queue-concurrency 3`（默认启用 queue）。
+  - 默认先尝试 structured-provider：已知官方或结构化指标成功后不进入搜索；失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索。
+  - 排障：追加 `--disable-structured-providers` 可只跑原 Tavily/Exa/DeepSeek 搜索链路。
   - Tavily extract 422/配额压力：保留 `--disable-extract` 或收紧 `--extract-topk 1`，先 search-only 再 regex 兜底。
   - LangChain 默认禁用，如需实验需显式加 `--allow-langchain`。
 
 ## 关键默认值
 - `--fund-flow-backend` 默认 `tavily`
+- Stage2 uses structured-provider-first for known official or structured indicators, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
 - `--deepseek-model` 默认 `deepseek-v4-pro`
 - `--deepseek-timeout` 默认 `30s`
 - `--llm-hard-timeout` 默认 `35s`
@@ -45,8 +48,9 @@ python3 scripts/stage2_unified_enhancer.py \
 - score_filtered_drop、domain_filtered_drop、extract_calls、tavily_extract_calls、tavily_extract_422_count
 - timeout_count、retry_count、cache_hit_rate、avg_elapsed_ms、p50_elapsed_ms、p95_elapsed_ms
 - success_by_category / total_by_category
-- 增量命中率：task_search_success、task_search_failed、task_skipped_existing、search_success_rate_incremental
+- 真实命中率：优先看 `stage2_effective_hit_rate`，它包含 structured-provider 成功和搜索抽取成功，不包含 `task_skipped_existing` 或 Stage2.5 manual 注入
+- 搜索链路增量命中率：task_search_success、task_search_failed、search_success_rate_incremental
 
 ## 兼容提醒
-- 无 MCP 跳过逻辑；资金流统一 Tavily，零值且无方向直接标人工。
+- 无 MCP 跳过逻辑；资金流搜索后端统一 Tavily，ETF structured provider 默认不释放全市场 ETF gate，零值且无方向直接标人工。
 - 默认禁用 LangChain；需显式传 `--extraction-backend langchain` 且依赖齐全才启用。

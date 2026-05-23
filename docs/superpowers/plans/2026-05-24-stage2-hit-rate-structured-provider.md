@@ -1935,7 +1935,7 @@ git commit -m "test: guard stage2 structured golden hit rate"
 - Modify if audit finds live-current drift: other non-historical `*.md` files that describe the active Stage1-4 pipeline
 - Do not rewrite dated historical plans/specs solely because they describe the old state; treat files under `docs/superpowers/plans/` and `docs/superpowers/specs/` as historical unless they are this implementation plan or the current approved spec.
 
-- [ ] **Step 1: Audit all Markdown docs for active Stage2 references**
+- [x] **Step 1: Audit all Markdown docs for active Stage2 references**
 
 Run:
 
@@ -1954,7 +1954,9 @@ generated or archived docs to update only if they claim to be current operating 
 
 The implementation summary must include the audit result: which Markdown files were checked, which were updated, and which were intentionally left as historical records.
 
-- [ ] **Step 2: Update AGENTS Stage2 rules**
+Audit result: 137 Markdown files checked. Updated living/current runbook files: `AGENTS.md`, `CLAUDE.md`, `README.md`, `README_STAGE2_SNIPPET.md`, `SCRIPTS.md`, `docs/AI背景扫描报告执行完整手册.md`, and `templates/AI_EXECUTION_CHECKLIST.md`. Left dated plans/specs, archive folders, optimization retrospectives, generated reports, and standalone outputs intact as historical context.
+
+- [x] **Step 2: Update AGENTS Stage2 rules**
 
 Modify `AGENTS.md` section 5.3 and section 6 so the Stage2 description says:
 
@@ -1968,7 +1970,7 @@ Also add this summary rule:
 Stage2 真实命中率优先看 `stage2_effective_hit_rate`；该指标包含 structured-provider 成功和搜索抽取成功，不包含 skipped_existing，也不包含 Stage2.5 manual 注入。
 ```
 
-- [ ] **Step 3: Update CLAUDE quick summary**
+- [x] **Step 3: Update CLAUDE quick summary**
 
 Modify `CLAUDE.md` Project Overview and Critical Constraints so the core data flow says:
 
@@ -1982,7 +1984,7 @@ Modify the collection priority bullet so it says:
 - **采集优先级固定**: `TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover) -> Stage2.5`；排障可用 `--disable-structured-providers` 回到搜索-only 诊断路径
 ```
 
-- [ ] **Step 4: Update other living Markdown docs found by the audit**
+- [x] **Step 4: Update other living Markdown docs found by the audit**
 
 If `README.md` or another non-historical Markdown file describes Stage2 as only Tavily/Exa/DeepSeek, update the active-flow sentence to:
 
@@ -1998,7 +2000,7 @@ If a Markdown file is a dated historical plan, dated spec, generated report, arc
 
 Do not add that pointer to every historical file automatically; only add it where the audit shows likely operator confusion.
 
-- [ ] **Step 5: Run focused verification**
+- [x] **Step 5: Run focused verification**
 
 Run:
 
@@ -2009,7 +2011,7 @@ Run:
 
 Expected: PASS.
 
-- [ ] **Step 6: Run full verification**
+- [x] **Step 6: Run full verification**
 
 Run:
 
@@ -2019,7 +2021,7 @@ Run:
 
 Expected: `595 passed` or higher, `4 skipped`, and no failures. Warning count can change if dependencies emit additional deprecation warnings; list the final warning count in the implementation summary.
 
-- [ ] **Step 7: Commit documentation**
+- [x] **Step 7: Commit documentation**
 
 Run:
 

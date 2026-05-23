@@ -21,8 +21,8 @@
 ## 2. 不可破坏约束
 - 严禁从历史 `reports/*.md` 抓取或复用数据；报告只能来自 TuShare、Tavily/AI WebSearch 实时获取结果或各 stage 计算产出。
 - `trend_history` 禁止从 `reports/*.md` 反向回填；只允许 Stage1/Stage2.5 写入或 TuShare 回补。
-- 当日 Stage2 Tavily search/extract 只跑 1 次。Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切换 Exa；422、低分或网络类错误不要反复消耗 Tavily，缺口转 Stage2.5 `_manual.json` 注入。
-- 采集优先级固定：TuShare(Stage1) -> Stage2(Tavily-first，必要时 Exa quota failover + DeepSeek) -> Stage2.5(manual/WebSearch 注入)。旧版 Yahoo/AKShare 外部补数链路仅作为 legacy 应急。
+- 当日 Stage2 Tavily search/extract 只跑 1 次。Stage2 默认先跑 structured-provider；结构化源失败、超时、解析失败或质量 gate 阻断后才进入 Tavily-first 搜索。Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切换 Exa；422、低分或网络类错误不要反复消耗 Tavily，缺口转 Stage2.5 `_manual.json` 注入。
+- 采集优先级固定：TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover + DeepSeek/regex) -> Stage2.5(manual/WebSearch 注入)。排障可传 `--disable-structured-providers` 只跑原搜索链路；旧版 Yahoo/AKShare 外部补数链路仅作为 legacy 应急。
 - 手工填写的数值必须有实时来源证据；`_manual.json` 中凡填写数值的条目必须带 `source_url`，或在 `source`/`note` 中包含 URL。
 - `0/None`、窗口值缺失、`no_value/deepseek_no_value/no_deepseek_key` 一律进入 `manual_required`；零值标记为 `异常零值-需核查`。
 - Stage3 的 `--allow-estimated` 只允许 `is_estimated=True` 数据参与评分，不绕过 `compare_gaps`、`stale_redlist` 或 policy gate。
@@ -112,8 +112,8 @@ bash run_clean.sh python scripts/stage1_data_collector.py \
   ```
 - 若输出 `STALE/MISSING`（典型：`cpi/ppi/pmi/m1/m2/tsf`），必须继续 Stage2/Stage2.5 覆盖，未清零不得进入 Stage3。
 
-### 5.3 Stage2 Tavily+DeepSeek 增强
-首次运行推荐精度优先；同日只跑一次 Tavily。
+### 5.3 Stage2 structured-provider-first + Tavily/DeepSeek 增强
+首次运行推荐精度优先；Stage2 默认先尝试可信结构化源，随后再走 Tavily-first 搜索链路；同日只跑一次 Tavily。
 
 ```bash
 bash run_clean.sh python scripts/stage2_unified_enhancer.py \
@@ -131,6 +131,11 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
   --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
   --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 ```
+
+- structured-provider-first 覆盖：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 会先尝试可信结构化源。
+- 结构化源失败、超时、解析失败或质量 gate 阻断时，继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。
+- 排障可追加 `--disable-structured-providers`，只跑原 Tavily/Exa/DeepSeek 搜索链路。
+- Stage2 真实命中率优先看 `stage2_effective_hit_rate`；它包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。
 
 仅补缺时可走快速模式，通常要配合 `--tasks`：
 ```bash
@@ -216,7 +221,9 @@ if comp < 0.8:
   ```
 
 ## 6. Stage2 搜索/抽取规则
-- Stage2 Unified 保持 Tavily-first；fund flow 与 forex 默认走 Tavily，Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切到 Exa，`--fund-flow-backend` 参数仍使用 `tavily`。
+- Stage2 Unified 默认 structured-provider-first：对 `GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；结构化源失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切到 Exa，`--fund-flow-backend` 参数仍使用 `tavily`。
+- 排障可传 `--disable-structured-providers` 只跑原 Tavily/Exa/DeepSeek 搜索链路。
+- Stage2 真实命中率优先看 `stage2_effective_hit_rate`；该指标包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。搜索链路增量命中率仍可看 `task_search_success/task_search_failed/search_success_rate_incremental`。
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`；宏观/低时效指标用 `time_range=year/month`, `max_results<=6`, `search_depth=basic`。
 - `search_profiles` 支持 `query_families`、`queries`、`field_queries`、`exclude_domains`、`max_query_candidates`、`extract_policy`；Stage2 记录 `query_used/query_family_used/query_attempts`。
 - Stage2 query context 区分 `daily_quote` 与 `monthly_period`：日频 quote 类任务（商品、DXY、BDI、BCOM/GSG 等）使用 `closing_date/ref_date` 模板，不继承宏观 `expected_period_tokens`；月度宏观/政策任务才使用 `expected_period/report_period` 期次 token。
@@ -232,6 +239,7 @@ if comp < 0.8:
 - Tavily search/extract 遇到 quota/rate limit/payment/plan limit 后（含 HTTP `402/403/429/432/433`），本轮立即切换搜索后端状态：有 Exa 时 `tavily_active -> exa_active` 并由 Exa 接管当前与后续任务；无 Exa 或 Exa 失败时写 `manual_required` skeleton。不新增 quota probe，不重跑当日 Tavily。排查看 summary 的 `tavily_unavailable_reason=quota_or_rate_limit`、`tavily_limit_error_count`、`tavily_error_samples`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - 环境/proxy/SOCKS/DNS/TLS 等运行环境错误不触发 Exa failover；先修复 preflight、代理或证书问题。非 quota 类 Exa fallback 仍为显式 opt-in，只在传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时启用。
 - 资金流缺 `recent_5d/total_120d` 时，优先按 `field_queries` 仅补缺字段，并统计 `field_retry_count/field_retry_merged_count/field_retry_missing_fields`。
+- ETF structured provider 默认不释放全市场 ETF gate；只有已验证全市场 direct daily series `secid` 且 `window_evidence=direct_daily_series`、`metric_basis` 满足 fund_flow gate 时，才允许作为非估算窗口值。
 - DeepSeek 抽取 schema 已减负，默认只要求报告写回所需字段；JSON 解析失败区分 `deepseek_json_truncated` 与 `deepseek_json_parse_error`，避免把模型输出截断误判为网页无数据。`source_url` 必须来自 snippets，否则强制 `manual_required`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时追加一次定向检索，补充单位、发布机构以及任务已有的日期/期次上下文；`daily_quote` 不强行追加宏观月份 token。
 - LangChain 默认禁用；实验时必须显式传 `--allow-langchain` 并自备依赖。
@@ -293,7 +301,7 @@ if comp < 0.8:
 
 ## 10. 数据口径
 - TuShare first: Stage1 优先采 TuShare 可得字段（宏观、股指日线、两融余额等）。
-- Stage2 Tavily second: TuShare 不可得或缺失字段统一走 Stage2。
+- Stage2 structured/search second: TuShare 不可得或缺失字段统一走 Stage2；已知官方或结构化指标先尝试 structured-provider，失败后再走 Tavily-first 搜索与 Exa quota failover。
 - Stage2.5 last resort: 用 `data/runs/${DATE_NH}/websearch_results_manual.json` 或手工 `_manual.json` 注入。
 - Market fallback: legacy-only path，必要时运行 `scripts/legacy/fill_market_data_from_yahoo.py`，再通过 Stage2.5 注入补 commodities/bonds/forex 缺口。
 - `fund_flow.etf`: Stage1 可用 TuShare `etf_share_size.total_size` 计算全市场规模窗口变化，`metric_basis=etf_total_size_delta`；该口径是 ETF 规模 delta，不等同于新闻口径净流入。若 TuShare 不可得、窗口不完整或质量阻断，继续 Stage2/Stage2.5 补数。
@@ -322,7 +330,7 @@ if comp < 0.8:
 | Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
 | Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 
-Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；真实命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，并结合 `retrieval_diagnostics`、`manual_reason_breakdown` 判断失败来源；已有值跳过看 `task_skipped_existing`，quota/rate/payment failover 看 `search_backend_final`、`tavily_to_exa_failover`、`tavily_to_exa_failover_count`、`exa_failover_success`、`exa_failover_empty`、`exa_failover_error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`，同时保留查看 `tavily_unavailable_reason=quota_or_rate_limit`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated/deepseek_json_parse_error`、`field_retry_merged_count`、`field_retry_missing_fields`。
+Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；真实命中率优先看 `stage2_effective_hit_rate`（structured-provider 成功 + 搜索抽取成功，不含 `skipped_existing` 与 Stage2.5 manual 注入）。搜索链路增量命中率看 `task_search_success/task_search_failed/search_success_rate_incremental`，并结合 `structured_provider_attempt_count/structured_provider_success_count/structured_provider_fallback_to_search_count/structured_provider_error_breakdown`、`retrieval_diagnostics`、`manual_reason_breakdown` 判断失败来源；已有值跳过看 `task_skipped_existing`，quota/rate/payment failover 看 `search_backend_final`、`tavily_to_exa_failover`、`tavily_to_exa_failover_count`、`exa_failover_success`、`exa_failover_empty`、`exa_failover_error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`，同时保留查看 `tavily_unavailable_reason=quota_or_rate_limit`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated/deepseek_json_parse_error`、`field_retry_merged_count`、`field_retry_missing_fields`。
 
 ## 12. Troubleshooting
 | 问题 | 原因 | 解决方案 |
