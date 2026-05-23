@@ -110,6 +110,23 @@ TASK_CATEGORIES = {
 }
 
 
+WRITEBACK_TARGETS = {
+    "GC=F": "commodities",
+    "CL=F": "commodities",
+    "BZ=F": "commodities",
+    "HG=F": "commodities",
+    "GSG": "commodities",
+    "USDCNY": "forex",
+    "DXY": "forex",
+    "CN10Y_CDB": "bonds",
+    "industrial": "macro_indicators",
+    "industrial_sales": "macro_indicators",
+    "bdi": "macro_indicators",
+    "reverse_repo": "monetary_policy",
+    "mlf": "monetary_policy",
+}
+
+
 class GoldenRegistry:
     async def fetch(self, task, market_payload, reference_date):
         key = task["indicator_key"]
@@ -252,6 +269,90 @@ def _unit_for_key(key):
     return ""
 
 
+def _by_field(rows, field, value):
+    return next(row for row in rows if row.get(field) == value)
+
+
+def _assert_completed_structured_rows(completed):
+    completed_by_key = {row.get("indicator_key"): row for row in completed}
+    for key in P0_SUCCESS:
+        row = completed_by_key[key]
+        assert row["result_type"] == "structured_success"
+        assert row["indicator_key"] == key
+        assert row.get("category") == TASK_CATEGORIES[key]
+        assert row["write_back_success"] is True
+        assert row["write_back_target"] == WRITEBACK_TARGETS[key]
+        assert row["write_back_target"] != "fallback_macro"
+
+
+def _assert_structured_websearch_items(websearch):
+    structured_items = {
+        item["task"]["indicator_key"]: item
+        for item in websearch
+        if item.get("result_type") == "structured_success"
+    }
+    for key in P0_SUCCESS:
+        item = structured_items[key]
+        extraction = item["extraction"]
+        assert item["search_backend"] == "structured"
+        assert item["result_type"] == "structured_success"
+        assert item["task"]["indicator_key"] == key
+        assert extraction["indicator_key"] == key
+        assert extraction["category"] == TASK_CATEGORIES[key]
+        assert item["write_back_success"] is True
+
+
+def _assert_payload_writeback(payload):
+    for key, (category, fixture_payload, _source_url) in P0_SUCCESS.items():
+        expected_value = fixture_payload["value"]
+        if category == "commodities":
+            entry = _by_field(payload["commodities"], "symbol", key)
+            assert entry["current_price"] == expected_value
+            assert entry["source"] == "structured"
+            assert entry["source_url"]
+        elif category == "forex":
+            entry = _by_field(payload["forex"], "pair", key)
+            assert entry["current_rate"] == expected_value
+            assert entry["source"] == "structured"
+            assert entry["source_url"]
+        elif category == "bonds":
+            entry = _by_field(payload["bonds"], "symbol", key)
+            assert entry["current_yield"] == expected_value
+            assert entry["source"] == "structured"
+            assert entry["source_url"]
+        elif category == "macro_indicators":
+            entry = payload["macro_indicators"][key]
+            assert entry["current_value"] == expected_value
+            assert entry["source"] == "structured"
+            assert entry["source_url"]
+            if fixture_payload.get("report_period"):
+                assert entry["report_period"] == "2026-04"
+        elif category == "monetary_policy":
+            entry = payload["monetary_policy"][key]
+            assert entry["current_value"] == expected_value
+            assert entry["source"] == "structured"
+            assert entry["source_url"]
+        else:  # pragma: no cover - P0_SUCCESS should stay on report-consumed categories.
+            raise AssertionError("unsupported golden category: " + category)
+
+
+def _assert_manual_required_fallbacks(completed, failures):
+    structured_success_keys = {
+        row.get("indicator_key")
+        for row in completed
+        if row.get("result_type") == "structured_success"
+    }
+    manual_required_keys = {
+        row.get("indicator_key")
+        for row in failures
+        if row.get("result_type") == "manual_required"
+    }
+
+    assert "BCOM" not in structured_success_keys
+    assert "etf" not in structured_success_keys
+    assert {"BCOM", "etf"} <= manual_required_keys
+
+
 def test_golden_20260523_structured_path_reaches_minimum_hit_rate(tmp_path: Path):
     payload = _market_payload()
     stats = {}
@@ -295,3 +396,7 @@ def test_golden_20260523_structured_path_reaches_minimum_hit_rate(tmp_path: Path
     assert len(summary["structured_provider_success_by_key"]) == 13
     assert "BCOM" not in summary["structured_provider_success_by_key"]
     assert "etf" not in summary["structured_provider_success_by_key"]
+    _assert_completed_structured_rows(completed)
+    _assert_structured_websearch_items(websearch)
+    _assert_payload_writeback(payload)
+    _assert_manual_required_fallbacks(completed, failures)
