@@ -1,3 +1,5 @@
+from datetime import date, timedelta
+
 import pytest
 
 from datasource.providers.stage2_structured.base import (
@@ -19,6 +21,13 @@ from datasource.providers.stage2_structured.registry import StructuredProviderRe
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
 from datasource.providers.stage2_structured.yahoo_finance import YahooFinanceProvider
+
+
+ALLOWED_ETF_SECID = "90.BKETF_FULL_MARKET_FIXTURE"
+
+
+def _date_texts(count, start=date(2026, 1, 1)):
+    return [(start + timedelta(days=offset)).isoformat() for offset in range(count)]
 
 
 class FakeProvider:
@@ -174,16 +183,21 @@ async def test_yahoo_finance_provider_wraps_fetch_errors():
 @pytest.mark.asyncio
 async def test_eastmoney_etf_provider_computes_direct_daily_windows():
     rows = [
-        {"date": "2026-01-{0:02d}".format(day), "net_flow": "1.0"}
-        for day in range(1, 121)
+        {"date": date_text, "net_flow_yi": "1.0"} for date_text in _date_texts(120)
     ]
 
     async def fetch_json(url, params=None):
         assert "stock/fflow/daykline/get" in url
+        assert params["secid"] == ALLOWED_ETF_SECID
         return {"data": {"klines": rows}}
 
-    provider = EastMoneyETFProvider(fetch_json=fetch_json)
-    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
+    result = await provider.fetch(
+        {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+    )
 
     extraction = result.to_extraction()
     assert result.provider == "eastmoney_etf"
@@ -196,15 +210,15 @@ async def test_eastmoney_etf_provider_computes_direct_daily_windows():
     assert extraction["is_estimated"] is False
     assert extraction["source_url"] == "https://data.eastmoney.com/etf/"
     assert extraction["diagnostics"]["row_count"] == 120
-    assert extraction["diagnostics"]["net_flow_field"] == "f52"
-    assert extraction["diagnostics"]["net_flow_unit"] == "yuan_to_yi"
+    assert extraction["diagnostics"]["net_flow_field"] == "net_flow_yi"
+    assert extraction["diagnostics"]["net_flow_unit"] == "yi"
 
 
 @pytest.mark.asyncio
 async def test_eastmoney_etf_provider_parses_fflow_daykline_strings():
     rows = [
-        "2026-01-{0:02d},100000000,0,0,0,0,0,0,0,0,0,0,0,0,0".format(day)
-        for day in range(1, 121)
+        "{0},100000000,0,0,0,0,0,0,0,0,0,0,0,0,0".format(date_text)
+        for date_text in _date_texts(120)
     ]
 
     async def fetch_json(url, params=None):
@@ -213,30 +227,111 @@ async def test_eastmoney_etf_provider_parses_fflow_daykline_strings():
         assert params["lmt"] == "0"
         return {"data": {"klines": rows}}
 
-    provider = EastMoneyETFProvider(fetch_json=fetch_json)
-    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
+    result = await provider.fetch(
+        {"indicator_key": "etf", "eastmoney_secid": ALLOWED_ETF_SECID},
+        {},
+        "2026-05-23",
+    )
 
     extraction = result.to_extraction()
     assert extraction["recent_5d"] == 5.0
     assert extraction["total_120d"] == 120.0
     assert extraction["unit"] == "亿元"
     assert extraction["is_estimated"] is False
+    assert extraction["diagnostics"]["net_flow_field"] == "f52"
+    assert extraction["diagnostics"]["net_flow_unit"] == "yuan_to_yi"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_sorts_rows_by_date_for_windows():
+    rows = [
+        "{0},{1},0,0,0,0,0,0,0,0,0,0,0,0,0".format(
+            date_text,
+            100000000 if index < 115 else 200000000,
+        )
+        for index, date_text in enumerate(_date_texts(120))
+    ]
+    rows = list(reversed(rows))
+
+    async def fetch_json(url, params=None):
+        return {"data": {"klines": rows}}
+
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
+    result = await provider.fetch(
+        {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+    )
+
+    extraction = result.to_extraction()
+    assert extraction["recent_5d"] == 10.0
+    assert extraction["total_120d"] == 125.0
+    assert extraction["as_of_date"] == _date_texts(120)[-1]
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_blocks_unverified_secid_without_fetch():
+    called = {"fetch": False}
+
+    async def fetch_json(url, params=None):
+        called["fetch"] = True
+        return {"data": {"klines": []}}
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf", "secid": "1.515000"}, {}, "2026-05-23")
+
+    assert called["fetch"] is False
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["policy_gate"] == "unverified_full_market_etf_scope"
+    assert exc_info.value.diagnostics["secid"] == "1.515000"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_blocks_missing_secid_without_fetch():
+    called = {"fetch": False}
+
+    async def fetch_json(url, params=None):
+        called["fetch"] = True
+        return {"data": {"klines": []}}
+
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert called["fetch"] is False
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["secid"] is None
 
 
 @pytest.mark.asyncio
 async def test_eastmoney_etf_provider_rejects_short_window():
     rows = [
-        {"date": "2026-01-{0:02d}".format(day), "net_flow": "1.0"}
-        for day in range(1, 11)
+        {"date": date_text, "net_flow_yi": "1.0"} for date_text in _date_texts(10)
     ]
 
     async def fetch_json(url, params=None):
         return {"data": {"klines": rows}}
 
-    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
 
     with pytest.raises(StructuredProviderError) as exc_info:
-        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+        await provider.fetch(
+            {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+        )
 
     assert exc_info.value.reason == "policy_gate_blocked"
     assert exc_info.value.diagnostics["row_count"] == 10
@@ -258,10 +353,15 @@ async def test_eastmoney_etf_provider_wraps_fetch_errors():
     async def fetch_json(url, params=None):
         raise RuntimeError("network down")
 
-    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
 
     with pytest.raises(StructuredProviderError) as exc_info:
-        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+        await provider.fetch(
+            {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+        )
 
     assert exc_info.value.reason == "fetch_error"
     assert exc_info.value.diagnostics["api_url"].startswith(
@@ -273,8 +373,7 @@ async def test_eastmoney_etf_provider_wraps_fetch_errors():
 @pytest.mark.asyncio
 async def test_eastmoney_etf_provider_malformed_rows_do_not_pass_policy_gate():
     rows = [
-        {"date": "2026-01-{0:02d}".format(day), "net_flow": "1.0"}
-        for day in range(1, 119)
+        {"date": date_text, "net_flow_yi": "1.0"} for date_text in _date_texts(118)
     ]
     rows.extend(
         [
@@ -287,14 +386,45 @@ async def test_eastmoney_etf_provider_malformed_rows_do_not_pass_policy_gate():
     async def fetch_json(url, params=None):
         return {"data": {"klines": rows}}
 
-    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
 
     with pytest.raises(StructuredProviderError) as exc_info:
-        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+        await provider.fetch(
+            {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+        )
 
     assert exc_info.value.reason == "policy_gate_blocked"
     assert exc_info.value.diagnostics["row_count"] == 118
     assert exc_info.value.diagnostics["malformed_row_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_latest_malformed_row_blocks_full_window():
+    rows = [
+        "{0},100000000,0,0,0,0,0,0,0,0,0,0,0,0,0".format(date_text)
+        for date_text in _date_texts(120)
+    ]
+    rows.append("2026-05-31,not-a-number,0,0,0,0,0,0,0,0,0,0,0,0,0")
+
+    async def fetch_json(url, params=None):
+        return {"data": {"klines": rows}}
+
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch(
+            {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+        )
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["row_count"] == 120
+    assert exc_info.value.diagnostics["malformed_row_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -309,10 +439,15 @@ async def test_eastmoney_etf_provider_all_malformed_rows_parse_error():
             }
         }
 
-    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+    provider = EastMoneyETFProvider(
+        fetch_json=fetch_json,
+        allowed_full_market_secids={ALLOWED_ETF_SECID},
+    )
 
     with pytest.raises(StructuredProviderError) as exc_info:
-        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+        await provider.fetch(
+            {"indicator_key": "etf", "secid": ALLOWED_ETF_SECID}, {}, "2026-05-23"
+        )
 
     assert exc_info.value.reason == "parse_error"
     assert exc_info.value.diagnostics["row_count"] == 0

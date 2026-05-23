@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
+from datetime import datetime
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 from datasource.providers.stage2_structured.base import (
     Stage2StructuredProvider,
@@ -29,8 +30,13 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
     name = "eastmoney_etf"
     supported_keys = {"etf"}
 
-    def __init__(self, fetch_json: FetchJson = default_fetch_json) -> None:
+    def __init__(
+        self,
+        fetch_json: FetchJson = default_fetch_json,
+        allowed_full_market_secids: Optional[Iterable[str]] = None,
+    ) -> None:
         self._fetch_json = fetch_json
+        self._allowed_full_market_secids = set(allowed_full_market_secids or [])
 
     async def fetch(self, task, market_payload, reference_date):
         key = str(task.get("indicator_key") or "")
@@ -42,16 +48,32 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
                 message="EastMoney ETF provider does not support {0}".format(key),
             )
 
+        secid = _resolve_secid(task, market_payload)
+        if not secid or secid not in self._allowed_full_market_secids:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="policy_gate_blocked",
+                message="EastMoney ETF secid is not verified as a full-market ETF scope",
+                diagnostics={
+                    "api_url": API_URL,
+                    "secid": secid,
+                    "allowed_full_market_secids": sorted(
+                        self._allowed_full_market_secids
+                    ),
+                    "source_url": SOURCE_URL,
+                    "policy_gate": "unverified_full_market_etf_scope",
+                },
+            )
+
         params = {
+            "secid": secid,
             "lmt": "0",
             "klt": "101",
             "fields1": "f1,f2,f3,f7",
             "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
             "ut": "b2884a393a59ad64002292a3e90d46a5",
         }
-        secid = _resolve_secid(task, market_payload)
-        if secid:
-            params["secid"] = secid
         try:
             data = await self._fetch_json(API_URL, params)
         except StructuredProviderError:
@@ -70,7 +92,9 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
             )
 
         rows = _extract_rows(data)
-        usable_rows, malformed_count = _parse_daily_rows(rows)
+        usable_rows, malformed_count, net_flow_fields, net_flow_units = _parse_daily_rows(
+            rows
+        )
         row_count = len(usable_rows)
         diagnostics = {
             "api_url": API_URL,
@@ -80,8 +104,8 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
             "raw_row_count": len(rows),
             "malformed_row_count": malformed_count,
             "evidence": "direct_daily_series",
-            "net_flow_field": "f52",
-            "net_flow_unit": "yuan_to_yi",
+            "net_flow_field": _diagnostic_value(net_flow_fields),
+            "net_flow_unit": _diagnostic_value(net_flow_units),
         }
 
         if row_count == 0:
@@ -90,6 +114,15 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
                 indicator_key=key,
                 reason="parse_error",
                 message="EastMoney ETF response did not contain usable daily net-flow rows",
+                diagnostics=diagnostics,
+            )
+
+        if malformed_count > 0:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="policy_gate_blocked",
+                message="EastMoney ETF direct daily series contains malformed rows",
                 diagnostics=diagnostics,
             )
 
@@ -102,9 +135,10 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
                 diagnostics=diagnostics,
             )
 
-        latest_120 = usable_rows[-MIN_DAILY_ROWS:]
-        recent_5d = round(sum(value for _, value in latest_120[-5:]), 4)
-        total_120d = round(sum(value for _, value in latest_120), 4)
+        sorted_rows = sorted(usable_rows, key=lambda row: row[0])
+        latest_120 = sorted_rows[-MIN_DAILY_ROWS:]
+        recent_5d = round(sum(value for _, value, _, _ in latest_120[-5:]), 4)
+        total_120d = round(sum(value for _, value, _, _ in latest_120), 4)
         as_of_date = latest_120[-1][0]
 
         return StructuredResult(
@@ -153,48 +187,92 @@ def _resolve_secid(
     return None
 
 
-def _parse_daily_rows(rows: Iterable[Any]) -> Tuple[List[Tuple[str, float]], int]:
+def _parse_daily_rows(
+    rows: Iterable[Any],
+) -> Tuple[List[Tuple[str, float, str, str]], int, Set[str], Set[str]]:
     usable_rows = []
     malformed_count = 0
+    net_flow_fields = set()
+    net_flow_units = set()
     for row in rows:
         parsed = _parse_daily_row(row)
         if parsed is None:
             malformed_count += 1
             continue
+        net_flow_fields.add(parsed[2])
+        net_flow_units.add(parsed[3])
         usable_rows.append(parsed)
-    return usable_rows, malformed_count
+    return usable_rows, malformed_count, net_flow_fields, net_flow_units
 
 
-def _parse_daily_row(row: Any) -> Optional[Tuple[str, float]]:
+def _parse_daily_row(row: Any) -> Optional[Tuple[str, float, str, str]]:
     if isinstance(row, Mapping):
         date = row.get("date") or row.get("trade_date")
-        net_flow = row.get("net_flow")
-        if date is None or net_flow is None:
-            net_flow_yuan = row.get("main_net_inflow_yuan")
-            if net_flow_yuan is None:
-                net_flow_yuan = row.get("MAIN_NETINFLOW")
-            if date is None or net_flow_yuan is None:
-                return None
-            try:
-                return str(date), float(str(net_flow_yuan).replace(",", "")) / 100000000
-            except (TypeError, ValueError):
-                return None
-        try:
-            return str(date), float(str(net_flow).replace(",", ""))
-        except (TypeError, ValueError):
+        if date is None:
             return None
+        date_text = _parse_date_text(date)
+        if date_text is None:
+            return None
+
+        for field in ("net_flow_yi", "NET_FLOW_YI"):
+            net_flow_yi = row.get(field)
+            if net_flow_yi is not None:
+                try:
+                    return date_text, _parse_number(net_flow_yi), field, "yi"
+                except ValueError:
+                    return None
+
+        for field in ("main_net_inflow_yuan", "MAIN_NETINFLOW"):
+            net_flow_yuan = row.get(field)
+            if net_flow_yuan is not None:
+                try:
+                    return (
+                        date_text,
+                        _parse_number(net_flow_yuan) / 100000000,
+                        field,
+                        "yuan_to_yi",
+                    )
+                except ValueError:
+                    return None
+
+        return None
 
     if isinstance(row, str):
         # fflow/daykline fields2 maps f51=date and f52=MAIN_NETINFLOW in yuan.
         parts = [part.strip() for part in row.split(",")]
         if len(parts) < 15 or not parts[0] or not parts[1]:
             return None
+        date_text = _parse_date_text(parts[0])
+        if date_text is None:
+            return None
         try:
-            return parts[0], float(parts[1].replace(",", "")) / 100000000
-        except (TypeError, ValueError):
+            return date_text, _parse_number(parts[1]) / 100000000, "f52", "yuan_to_yi"
+        except ValueError:
             return None
 
     return None
+
+
+def _parse_date_text(value: Any) -> Optional[str]:
+    text = str(value)
+    try:
+        datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return text
+
+
+def _parse_number(value: Any) -> float:
+    return float(str(value).replace(",", ""))
+
+
+def _diagnostic_value(values: Iterable[str]) -> Optional[str]:
+    sorted_values = sorted(values)
+    if not sorted_values:
+        return None
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    return ",".join(sorted_values)
 
 
 def _trend(value: float) -> str:
