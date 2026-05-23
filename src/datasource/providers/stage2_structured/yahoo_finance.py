@@ -51,7 +51,19 @@ class YahooFinanceProvider(Stage2StructuredProvider):
         url = "https://query1.finance.yahoo.com/v8/finance/chart/{0}".format(
             yahoo_symbol
         )
-        data = await self._fetch_json(url, {"range": "5d", "interval": "1d"})
+        params = {"range": "5d", "interval": "1d"}
+        try:
+            data = await self._fetch_json(url, params)
+        except StructuredProviderError:
+            raise
+        except Exception as exc:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="fetch_error",
+                message=str(exc),
+                diagnostics={"url": url, "params": params},
+            )
 
         try:
             result = data["chart"]["result"][0]
@@ -65,7 +77,7 @@ class YahooFinanceProvider(Stage2StructuredProvider):
                 indicator_key=key,
                 reason="parse_error",
                 message=str(exc),
-                diagnostics={"url": url},
+                diagnostics={"url": url, "params": params},
             )
 
         source_url = "https://finance.yahoo.com/quote/{0}".format(yahoo_symbol)
@@ -84,6 +96,8 @@ class YahooFinanceProvider(Stage2StructuredProvider):
             diagnostics={
                 "label": label,
                 "yahoo_symbol": yahoo_symbol,
+                "api_url": url,
+                "params": params,
                 "evidence_text": "{0} {1} {2}".format(key, price, unit),
             },
         )

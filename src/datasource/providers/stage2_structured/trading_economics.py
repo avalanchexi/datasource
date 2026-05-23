@@ -53,7 +53,19 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
             )
 
         url, unit, label = URLS[key]
-        html = await self._fetch_text(url, None)
+        params = None
+        try:
+            html = await self._fetch_text(url, params)
+        except StructuredProviderError:
+            raise
+        except Exception as exc:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="fetch_error",
+                message=str(exc),
+                diagnostics={"url": url, "params": params},
+            )
         value = self._parse_value(html)
         if value is None:
             raise StructuredProviderError(
@@ -86,7 +98,6 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
         patterns = [
             r'id=["\']p["\'][^>]*>\s*([0-9,]+(?:\.\d+)?)',
             r'data-last=["\']([0-9,]+(?:\.\d+)?)["\']',
-            r'([0-9,]+(?:\.\d+)?)\s*</span>',
         ]
         for pattern in patterns:
             match = re.search(pattern, html, flags=re.IGNORECASE)

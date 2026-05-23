@@ -39,7 +39,19 @@ class ChinaBondProvider(Stage2StructuredProvider):
                 message="ChinaBond provider does not support {0}".format(key),
             )
 
-        html = await self._fetch_text(self.source_url, None)
+        params = None
+        try:
+            html = await self._fetch_text(self.source_url, params)
+        except StructuredProviderError:
+            raise
+        except Exception as exc:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="fetch_error",
+                message=str(exc),
+                diagnostics={"url": self.source_url, "params": params},
+            )
         value = self._parse_value(html)
         if value is None:
             raise StructuredProviderError(
@@ -65,18 +77,26 @@ class ChinaBondProvider(Stage2StructuredProvider):
 
     @staticmethod
     def _parse_value(html: str) -> Optional[float]:
-        match = re.search(
-            r"(?:国开|政策性金融债|CDB).*?(?:10年|10\s*Y).*?([0-9]+(?:\.[0-9]+)?)",
-            html,
-            flags=re.IGNORECASE | re.DOTALL,
-        )
-        if not match:
-            match = re.search(
-                r"(?:10年|10\s*Y).*?([0-9]+(?:\.[0-9]+)?)",
-                html,
-                flags=re.IGNORECASE | re.DOTALL,
-            )
-        return float(match.group(1)) if match else None
+        for match in re.finditer(r"(?:10年|10\s*Y)", html, flags=re.IGNORECASE):
+            context = html[match.end() : match.end() + 80]
+            value = ChinaBondProvider._parse_yield_from_context(context)
+            if value is not None:
+                return value
+        return None
+
+    @staticmethod
+    def _parse_yield_from_context(context: str) -> Optional[float]:
+        cleaned = re.sub(r"20\d{2}-\d{1,2}-\d{1,2}", " ", context)
+        number_patterns = [
+            r"(?<![\d.-])([0-9]+\.[0-9]+)(?![\d.-])",
+            r"(?<![\d.-])([0-9]+)(?![\d.-])",
+        ]
+        for pattern in number_patterns:
+            for match in re.finditer(pattern, cleaned):
+                value = float(match.group(1))
+                if 0 < value < 20:
+                    return value
+        return None
 
     @staticmethod
     def _parse_date(html: str) -> Optional[str]:

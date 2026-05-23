@@ -146,6 +146,21 @@ async def test_yahoo_finance_provider_parses_chart_quote():
 
 
 @pytest.mark.asyncio
+async def test_yahoo_finance_provider_wraps_fetch_errors():
+    async def fetch_json(url, params=None):
+        raise RuntimeError("network down")
+
+    provider = YahooFinanceProvider(fetch_json=fetch_json)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "GC=F"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "fetch_error"
+    assert "query1.finance.yahoo.com" in exc_info.value.diagnostics["url"]
+    assert exc_info.value.diagnostics["params"]["range"] == "5d"
+
+
+@pytest.mark.asyncio
 async def test_trading_economics_provider_parses_bdi_fixture():
     html = '<html><body><h1>Baltic Dry</h1><span id="p">1,346.00</span><time>2026-05-22</time></body></html>'
 
@@ -165,6 +180,36 @@ async def test_trading_economics_provider_parses_bdi_fixture():
 
 
 @pytest.mark.asyncio
+async def test_trading_economics_provider_rejects_unmarked_span_value():
+    html = "<html><body><span>999</span></body></html>"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "bdi"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "missing_value"
+
+
+@pytest.mark.asyncio
+async def test_trading_economics_provider_wraps_fetch_errors():
+    async def fetch_text(url, params=None):
+        raise RuntimeError("timeout")
+
+    provider = TradingEconomicsProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "bdi"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "fetch_error"
+    assert exc_info.value.diagnostics["url"] == "https://tradingeconomics.com/commodity/baltic"
+    assert exc_info.value.diagnostics["params"] is None
+
+
+@pytest.mark.asyncio
 async def test_chinabond_provider_parses_cn10y_cdb_fixture():
     html = "中债国开债到期收益率曲线 10年 2.0380 2026-05-22"
 
@@ -181,3 +226,47 @@ async def test_chinabond_provider_parses_cn10y_cdb_fixture():
     assert extraction["value"] == 2.038
     assert extraction["unit"] == "%"
     assert extraction["source_url"].startswith("https://yield.chinabond.com.cn/")
+
+
+@pytest.mark.asyncio
+async def test_chinabond_provider_parses_reordered_date_fixture():
+    html = "中债国开债到期收益率曲线 10年 2026-05-22 2.0380"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = ChinaBondProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 2.038
+
+
+@pytest.mark.asyncio
+async def test_chinabond_provider_wraps_fetch_errors():
+    async def fetch_text(url, params=None):
+        raise RuntimeError("timeout")
+
+    provider = ChinaBondProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "fetch_error"
+    assert exc_info.value.diagnostics["url"].startswith("https://yield.chinabond.com.cn/")
+    assert exc_info.value.diagnostics["params"] is None
+
+
+@pytest.mark.asyncio
+async def test_chinabond_provider_rejects_unreasonable_yield_value():
+    html = "中债国开债到期收益率曲线 10年 2026.0 2026-05-22"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = ChinaBondProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason in {"missing_value", "parse_error"}
