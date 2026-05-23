@@ -20,7 +20,7 @@ from datasource.providers.stage2_structured.source_tiers import (
 FetchJson = Callable[[str, Optional[Dict[str, Any]]], Awaitable[Dict[str, Any]]]
 
 
-API_URL = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+API_URL = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
 SOURCE_URL = "https://data.eastmoney.com/etf/"
 MIN_DAILY_ROWS = 120
 
@@ -43,14 +43,15 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
             )
 
         params = {
-            "secid": "90.BKETF",
+            "lmt": "0",
             "klt": "101",
-            "fqt": "1",
-            "lmt": "120",
-            "end": reference_date.replace("-", ""),
-            "fields1": "f1,f2,f3,f4,f5,f6",
-            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+            "ut": "b2884a393a59ad64002292a3e90d46a5",
         }
+        secid = _resolve_secid(task, market_payload)
+        if secid:
+            params["secid"] = secid
         try:
             data = await self._fetch_json(API_URL, params)
         except StructuredProviderError:
@@ -79,6 +80,8 @@ class EastMoneyETFProvider(Stage2StructuredProvider):
             "raw_row_count": len(rows),
             "malformed_row_count": malformed_count,
             "evidence": "direct_daily_series",
+            "net_flow_field": "f52",
+            "net_flow_unit": "yuan_to_yi",
         }
 
         if row_count == 0:
@@ -139,6 +142,17 @@ def _extract_rows(data: Mapping[str, Any]) -> List[Any]:
     return []
 
 
+def _resolve_secid(
+    task: Mapping[str, Any], market_payload: Mapping[str, Any]
+) -> Optional[str]:
+    for payload in (task, market_payload):
+        for key in ("secid", "eastmoney_secid"):
+            value = payload.get(key)
+            if value:
+                return str(value)
+    return None
+
+
 def _parse_daily_rows(rows: Iterable[Any]) -> Tuple[List[Tuple[str, float]], int]:
     usable_rows = []
     malformed_count = 0
@@ -156,17 +170,28 @@ def _parse_daily_row(row: Any) -> Optional[Tuple[str, float]]:
         date = row.get("date") or row.get("trade_date")
         net_flow = row.get("net_flow")
         if date is None or net_flow is None:
-            return None
+            net_flow_yuan = row.get("main_net_inflow_yuan")
+            if net_flow_yuan is None:
+                net_flow_yuan = row.get("MAIN_NETINFLOW")
+            if date is None or net_flow_yuan is None:
+                return None
+            try:
+                return str(date), float(str(net_flow_yuan).replace(",", "")) / 100000000
+            except (TypeError, ValueError):
+                return None
         try:
             return str(date), float(str(net_flow).replace(",", ""))
         except (TypeError, ValueError):
             return None
 
     if isinstance(row, str):
-        # EastMoney kline strings do not expose field names. Avoid guessing which
-        # numeric column is net flow, because close/volume/amount fields may be present.
+        # fflow/daykline fields2 maps f51=date and f52=MAIN_NETINFLOW in yuan.
         parts = [part.strip() for part in row.split(",")]
-        if len(parts) >= 2 and parts[0]:
+        if len(parts) < 15 or not parts[0] or not parts[1]:
+            return None
+        try:
+            return parts[0], float(parts[1].replace(",", "")) / 100000000
+        except (TypeError, ValueError):
             return None
 
     return None

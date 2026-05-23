@@ -179,7 +179,7 @@ async def test_eastmoney_etf_provider_computes_direct_daily_windows():
     ]
 
     async def fetch_json(url, params=None):
-        assert "push2his.eastmoney.com" in url
+        assert "stock/fflow/daykline/get" in url
         return {"data": {"klines": rows}}
 
     provider = EastMoneyETFProvider(fetch_json=fetch_json)
@@ -196,6 +196,31 @@ async def test_eastmoney_etf_provider_computes_direct_daily_windows():
     assert extraction["is_estimated"] is False
     assert extraction["source_url"] == "https://data.eastmoney.com/etf/"
     assert extraction["diagnostics"]["row_count"] == 120
+    assert extraction["diagnostics"]["net_flow_field"] == "f52"
+    assert extraction["diagnostics"]["net_flow_unit"] == "yuan_to_yi"
+
+
+@pytest.mark.asyncio
+async def test_eastmoney_etf_provider_parses_fflow_daykline_strings():
+    rows = [
+        "2026-01-{0:02d},100000000,0,0,0,0,0,0,0,0,0,0,0,0,0".format(day)
+        for day in range(1, 121)
+    ]
+
+    async def fetch_json(url, params=None):
+        assert "stock/fflow/daykline/get" in url
+        assert params["fields2"].startswith("f51,f52")
+        assert params["lmt"] == "0"
+        return {"data": {"klines": rows}}
+
+    provider = EastMoneyETFProvider(fetch_json=fetch_json)
+    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["recent_5d"] == 5.0
+    assert extraction["total_120d"] == 120.0
+    assert extraction["unit"] == "亿元"
+    assert extraction["is_estimated"] is False
 
 
 @pytest.mark.asyncio
@@ -254,7 +279,8 @@ async def test_eastmoney_etf_provider_malformed_rows_do_not_pass_policy_gate():
     rows.extend(
         [
             {"date": "2026-05-21", "net_flow": "not-a-number"},
-            "2026-05-22,1,2,3,4,5",
+            "2026-05-22,100000000,2,3,4,5",
+            "2026-05-23,not-a-number,0,0,0,0,0,0,0,0,0,0,0,0,0",
         ]
     )
 
@@ -268,13 +294,20 @@ async def test_eastmoney_etf_provider_malformed_rows_do_not_pass_policy_gate():
 
     assert exc_info.value.reason == "policy_gate_blocked"
     assert exc_info.value.diagnostics["row_count"] == 118
-    assert exc_info.value.diagnostics["malformed_row_count"] == 2
+    assert exc_info.value.diagnostics["malformed_row_count"] == 3
 
 
 @pytest.mark.asyncio
 async def test_eastmoney_etf_provider_all_malformed_rows_parse_error():
     async def fetch_json(url, params=None):
-        return {"data": {"klines": ["2026-05-22,1,2,3,4,5"]}}
+        return {
+            "data": {
+                "klines": [
+                    "2026-05-22,100000000,2,3,4,5",
+                    "2026-05-23,not-a-number,0,0,0,0,0,0,0,0,0,0,0,0,0",
+                ]
+            }
+        }
 
     provider = EastMoneyETFProvider(fetch_json=fetch_json)
 
