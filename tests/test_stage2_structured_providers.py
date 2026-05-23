@@ -325,6 +325,26 @@ async def test_official_china_provider_parses_mlf_fixture():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_exposes_mlf_multiple_price_markers():
+    html = "2026年5月15日开展中期借贷便利（MLF）操作1250亿元，多重价位，中标利率2.00%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "mlf"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    marker_text = "{0} {1}".format(
+        extraction.get("policy_name", ""),
+        extraction.get("manual_reason", ""),
+    )
+    assert extraction["source"] == "Official China structured source"
+    assert "多重价位" in marker_text
+    assert "参考值" in marker_text
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_usdcny_fixture():
     html = "2026-05-22 USD/CNY 人民币汇率中间价 7.1138"
 
@@ -361,3 +381,77 @@ async def test_official_china_provider_parses_industrial_fixture():
     assert extraction["value"] == 6.1
     assert extraction["value_type"] == "yoy_month"
     assert extraction["report_period"] == "2026-04"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_reserve_ratio_fixture():
+    html = "中国人民银行决定下调金融机构存款准备金率0.5个百分点，调整后加权平均存款准备金率约为6.2%。"
+
+    async def fetch_text(url, params=None):
+        assert url == OfficialChinaProvider.RESERVE_RATIO_URL
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "reserve_ratio"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "monetary_policy"
+    assert extraction["value"] == 6.2
+    assert extraction["unit"] == "%"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_industrial_sales_ytd_fixture():
+    html = "规模以上工业企业营业收入同比增长2.5%。"
+
+    async def fetch_text(url, params=None):
+        assert url == OfficialChinaProvider.NBS_URL
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "industrial_sales"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["category"] == "macro_indicators"
+    assert extraction["value"] == 2.5
+    assert extraction["value_type"] == "yoy_ytd"
+    assert extraction["yoy_ytd"] == extraction["value"]
+    assert extraction["report_period"] == "2026-05"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_wraps_fetch_errors():
+    async def fetch_text(url, params=None):
+        raise RuntimeError("network down")
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "reverse_repo"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "fetch_error"
+    assert exc_info.value.diagnostics["url"] == OfficialChinaProvider.REVERSE_REPO_URL
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_rejects_unsupported_key():
+    provider = OfficialChinaProvider()
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "BCOM"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "unsupported_key"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_rejects_missing_value():
+    async def fetch_text(url, params=None):
+        return "央行公告未包含可解析利率。"
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "reverse_repo"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "missing_value"
+    assert exc_info.value.diagnostics["url"] == OfficialChinaProvider.REVERSE_REPO_URL

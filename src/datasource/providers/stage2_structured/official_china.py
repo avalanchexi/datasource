@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from datasource.providers.stage2_structured.base import (
@@ -139,6 +138,8 @@ class OfficialChinaProvider(Stage2StructuredProvider):
             "canonical_indicator_key": key,
         }
         if key == "mlf" and "多重价位" in html:
+            payload["policy_name"] = "MLF多重价位参考值"
+            payload["manual_reason"] = "多重价位，参考值，口径不适用"
             diagnostics["note"] = "MLF公告包含多重价位，利率按公告参考/中标利率语境解析。"
 
         return StructuredResult(
@@ -187,6 +188,8 @@ class OfficialChinaProvider(Stage2StructuredProvider):
         }
         if key == "industrial" and value_type == "yoy_month":
             payload["yoy_month"] = value
+        if key == "industrial_sales" and value_type == "yoy_ytd":
+            payload["yoy_ytd"] = value
 
         return StructuredResult(
             provider=self.name,
@@ -281,16 +284,7 @@ class OfficialChinaProvider(Stage2StructuredProvider):
         if parsed is not None:
             return parsed
 
-        try:
-            ref = datetime.strptime(reference_date, "%Y-%m-%d")
-            month = ref.month - 1
-            year = ref.year
-            if month == 0:
-                year -= 1
-                month = 12
-            return "{0}-{1:02d}".format(year, month)
-        except ValueError:
-            return reference_date[:7]
+        return reference_date[:7]
 
     @staticmethod
     def _parse_year_month(html):
