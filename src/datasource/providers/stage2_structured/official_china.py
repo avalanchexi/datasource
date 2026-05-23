@@ -223,6 +223,7 @@ class OfficialChinaProvider(Stage2StructuredProvider):
     def _parse_operation_amount(html):
         patterns = [
             r"(?:逆回购操作|MLF\）操作|MLF\)操作|中期借贷便利（MLF）操作|中期借贷便利\(MLF\)操作)([0-9,]+(?:\.[0-9]+)?)\s*亿元",
+            r"开展\s*([0-9,]+(?:\.[0-9]+)?)\s*亿元[^，。；;]{0,40}(?:逆回购操作|MLF\）操作|MLF\)操作|中期借贷便利（MLF）操作|中期借贷便利\(MLF\)操作)",
             r"操作([0-9,]+(?:\.[0-9]+)?)\s*亿元",
         ]
         for pattern in patterns:
@@ -247,19 +248,33 @@ class OfficialChinaProvider(Stage2StructuredProvider):
     def _parse_macro_value(key, html):
         if key == "industrial":
             patterns = [
-                r"规模以上工业增加值同比实际增长\s*([0-9]+(?:\.[0-9]+)?)\s*%",
-                r"工业增加值同比[^0-9]{0,20}([0-9]+(?:\.[0-9]+)?)\s*%",
+                r"规模以上工业增加值同比(?:实际)?\s*(增长|下降|减少|回落)?\s*(-?[0-9]+(?:\.[0-9]+)?)\s*%",
+                r"工业增加值同比[^-0-9]{0,20}(增长|下降|减少|回落)?\s*(-?[0-9]+(?:\.[0-9]+)?)\s*%",
             ]
         else:
             patterns = [
-                r"营业收入[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?)\s*%",
-                r"销售收入[^0-9]{0,30}([0-9]+(?:\.[0-9]+)?)\s*%",
+                r"营业收入[^。；;]*?(增长|下降|减少|回落)\s*(-?[0-9]+(?:\.[0-9]+)?)\s*%",
+                r"销售收入[^。；;]*?(增长|下降|减少|回落)\s*(-?[0-9]+(?:\.[0-9]+)?)\s*%",
+                r"营业收入[^-0-9]{0,30}()(-?[0-9]+(?:\.[0-9]+)?)\s*%",
+                r"销售收入[^-0-9]{0,30}()(-?[0-9]+(?:\.[0-9]+)?)\s*%",
             ]
         for pattern in patterns:
             match = re.search(pattern, html)
             if match:
-                return float(match.group(1))
+                return OfficialChinaProvider._signed_percent_value(
+                    match.group(1),
+                    match.group(2),
+                )
         return None
+
+    @staticmethod
+    def _signed_percent_value(direction, value_text):
+        value = float(value_text)
+        if value < 0:
+            return value
+        if direction in {"下降", "减少", "回落"}:
+            return -value
+        return value
 
     @staticmethod
     def _parse_date(html):

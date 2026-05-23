@@ -10,6 +10,7 @@ TIER1_DOMAINS = {
     "stats.gov.cn",
     "pbc.gov.cn",
     "chinabond.com.cn",
+    "chinamoney.com.cn",
     "chinaforeignexchange.com.cn",
     "cfets.com.cn",
     "hkex.com.hk",

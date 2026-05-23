@@ -121,6 +121,7 @@ def test_source_tier_classifier_uses_explicit_allowlists():
     assert classify_structured_source_tier("https://evil.com/?next=stats.gov.cn") == "unknown"
     assert classify_structured_source_tier("https://stats.gov.cn@evil.com/path") == "unknown"
     assert classify_structured_source_tier("https://sub.stats.gov.cn/path") == "tier1"
+    assert classify_structured_source_tier(OfficialChinaProvider.USDCNY_URL) == "tier1"
 
 
 @pytest.mark.asyncio
@@ -308,6 +309,21 @@ async def test_official_china_provider_parses_reverse_repo_fixture():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_parses_prefixed_reverse_repo_amount():
+    html = "2026年5月22日人民银行开展1185亿元7天期逆回购操作，中标利率1.40%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "reverse_repo"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 1.4
+    assert extraction["operation_amount"] == 1185.0
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_mlf_fixture():
     html = "2026年5月15日开展中期借贷便利（MLF）操作1250亿元，中标利率2.00%。"
 
@@ -322,6 +338,21 @@ async def test_official_china_provider_parses_mlf_fixture():
     assert extraction["value"] == 2.0
     assert extraction["operation_amount"] == 1250.0
     assert extraction["unit"] == "%"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_prefixed_mlf_amount():
+    html = "2026年5月15日开展3000亿元中期借贷便利（MLF）操作，中标利率2.00%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "mlf"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 2.0
+    assert extraction["operation_amount"] == 3000.0
 
 
 @pytest.mark.asyncio
@@ -384,6 +415,21 @@ async def test_official_china_provider_parses_industrial_fixture():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_parses_negative_industrial_fixture():
+    html = "2026年4月份，规模以上工业增加值同比下降1.2%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "industrial"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == -1.2
+    assert extraction["yoy_month"] == -1.2
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_reserve_ratio_fixture():
     html = "中国人民银行决定下调金融机构存款准备金率0.5个百分点，调整后加权平均存款准备金率约为6.2%。"
 
@@ -417,6 +463,21 @@ async def test_official_china_provider_parses_industrial_sales_ytd_fixture():
     assert extraction["value_type"] == "yoy_ytd"
     assert extraction["yoy_ytd"] == extraction["value"]
     assert extraction["report_period"] == "2026-05"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_parses_negative_industrial_sales_fixture():
+    html = "规模以上工业企业营业收入同比减少0.8%。"
+
+    async def fetch_text(url, params=None):
+        return html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "industrial_sales"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == -0.8
+    assert extraction["yoy_ytd"] == -0.8
 
 
 @pytest.mark.asyncio
