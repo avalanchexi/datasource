@@ -2590,6 +2590,59 @@ def _stage2_effective_hit_rate(success_count: int, failure_count: int) -> float:
     return success_count / denominator if denominator else 0.0
 
 
+def _stage2_summary_metric_fields(
+    *,
+    search_success_count: int,
+    structured_success_count: int,
+    search_failed_count: int,
+) -> Dict[str, Any]:
+    search_denominator = search_success_count + search_failed_count
+    search_success_rate_incremental = (
+        search_success_count / search_denominator if search_denominator else 0.0
+    )
+    stage2_effective_success = search_success_count + structured_success_count
+    stage2_effective_failure = search_failed_count
+    stage2_effective_denominator = stage2_effective_success + stage2_effective_failure
+    return {
+        "task_search_success": search_success_count,
+        "task_structured_success": structured_success_count,
+        "task_search_failed": search_failed_count,
+        "stage2_effective_success": stage2_effective_success,
+        "stage2_effective_failure": stage2_effective_failure,
+        "stage2_effective_denominator": stage2_effective_denominator,
+        "stage2_effective_hit_rate": _stage2_effective_hit_rate(
+            stage2_effective_success,
+            stage2_effective_failure,
+        ),
+        "search_success_rate_incremental": search_success_rate_incremental,
+    }
+
+
+def _build_stage2_result_count_fields(
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    skipped_existing_count = sum(
+        1 for task in completed_tasks if task.get("result_type") == "skipped_existing"
+    )
+    search_success_count = sum(
+        1 for task in completed_tasks if task.get("result_type") == "search_success"
+    )
+    structured_success_count = sum(
+        1 for task in completed_tasks if task.get("result_type") == "structured_success"
+    )
+    search_failed_count = sum(
+        1 for task in failures if task.get("result_type") == "manual_required"
+    )
+    fields = _stage2_summary_metric_fields(
+        search_success_count=search_success_count,
+        structured_success_count=structured_success_count,
+        search_failed_count=search_failed_count,
+    )
+    fields["task_skipped_existing"] = skipped_existing_count
+    return fields
+
+
 def _structured_provider_summary_fields(exec_stats: Dict[str, Any]) -> Dict[str, Any]:
     structured = exec_stats.get("structured_provider")
     if not isinstance(structured, dict):

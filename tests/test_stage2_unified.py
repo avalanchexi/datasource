@@ -237,6 +237,30 @@ def test_stage2_summary_includes_tavily_limit_error_diagnostics():
     assert "tavily_error_samples" in stage2._STAGE2_BACKEND_SUMMARY_KEYS
 
 
+def test_stage2_effective_hit_rate_uses_success_plus_failure_denominator():
+    assert stage2._stage2_effective_hit_rate(12, 5) == pytest.approx(12 / 17)
+
+
+def test_stage2_result_count_fields_preserve_search_only_and_effective_metrics():
+    completed = (
+        [{"result_type": "structured_success"} for _ in range(12)]
+        + [{"result_type": "skipped_existing"} for _ in range(2)]
+    )
+    failures = [{"result_type": "manual_required"} for _ in range(5)]
+
+    fields = stage2._build_stage2_result_count_fields(completed, failures)
+
+    assert fields["task_search_success"] == 0
+    assert fields["task_structured_success"] == 12
+    assert fields["task_search_failed"] == 5
+    assert fields["task_skipped_existing"] == 2
+    assert fields["stage2_effective_success"] == 12
+    assert fields["stage2_effective_failure"] == 5
+    assert fields["stage2_effective_denominator"] == 17
+    assert fields["stage2_effective_hit_rate"] == pytest.approx(12 / 17)
+    assert fields["search_success_rate_incremental"] == 0.0
+
+
 def test_is_environment_proxy_error_detects_missing_socksio_message():
     exc = RuntimeError("Using SOCKS proxy, but the 'socksio' package is not installed")
 
