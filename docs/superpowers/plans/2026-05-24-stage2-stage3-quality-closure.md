@@ -985,7 +985,7 @@ git commit -m "fix: merge stage25 same-value compare fields"
 - Modify: `src/datasource/providers/stage2_structured/source_tiers.py`
 - Test: `tests/test_stage2_structured_providers.py`
 
-- [ ] **Step 1: Add failing TuShare ETF provider tests**
+- [x] **Step 1: Add failing TuShare ETF provider tests**
 
 Add `import pandas as pd` near the imports in `tests/test_stage2_structured_providers.py`.
 
@@ -1059,7 +1059,7 @@ def test_source_tier_classifier_marks_tushare_pro_as_tier2():
     assert classify_structured_source_tier("https://tushare.pro/document/2") == "tier2"
 ```
 
-- [ ] **Step 2: Run provider tests and verify failure**
+- [x] **Step 2: Run provider tests and verify failure**
 
 Run:
 
@@ -1072,7 +1072,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: import fails because `tushare_etf.py` does not exist, and source-tier test fails because `tushare.pro` is not Tier2.
 
-- [ ] **Step 3: Implement provider**
+- [x] **Step 3: Implement provider**
 
 Create `src/datasource/providers/stage2_structured/tushare_etf.py`:
 
@@ -1285,7 +1285,7 @@ Modify `src/datasource/providers/stage2_structured/source_tiers.py` and add `tus
     "tushare.pro",
 ```
 
-- [ ] **Step 4: Run provider tests and verify pass**
+- [x] **Step 4: Run provider tests and verify pass**
 
 Run:
 
@@ -1298,7 +1298,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all three tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add \
