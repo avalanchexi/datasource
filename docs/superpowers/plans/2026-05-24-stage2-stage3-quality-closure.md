@@ -1441,7 +1441,7 @@ git commit -m "test: cover quality gap structured refresh"
 - Modify: `AGENTS.md`
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Update `AGENTS.md` Stage2 rules**
+- [x] **Step 1: Update `AGENTS.md` Stage2 rules**
 
 In `AGENTS.md`, update the Stage2 section with this text:
 
@@ -1452,7 +1452,7 @@ In `AGENTS.md`, update the Stage2 section with this text:
 - ETF Stage2 structured source order includes TuShare `etf_share_size` before EastMoney/search. TuShare ETF windows use SSE+SZSE `total_size` deltas with `metric_basis=etf_total_size_delta`, `window_evidence=direct_balance_delta`, and `is_estimated=false` only when the full 121-trading-day window is available for both exchanges.
 ```
 
-- [ ] **Step 2: Update `CLAUDE.md` quick reminders**
+- [x] **Step 2: Update `CLAUDE.md` quick reminders**
 
 In `CLAUDE.md`, update the Stage2/Stage2.5 reminders with this text:
 
@@ -1463,7 +1463,7 @@ In `CLAUDE.md`, update the Stage2/Stage2.5 reminders with this text:
 - ETF fund-flow can pass only through direct window evidence. TuShare `etf_share_size` is accepted as `etf_total_size_delta` scale-window evidence when SSE+SZSE full windows are present; EastMoney remains blocked unless full-market scope is verified.
 ```
 
-- [ ] **Step 3: Run doc checks**
+- [x] **Step 3: Run doc checks**
 
 Run:
 
@@ -1474,7 +1474,7 @@ git diff --check -- AGENTS.md CLAUDE.md
 
 Expected: `rg` shows the new guidance in both files, and `git diff --check` exits 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add AGENTS.md CLAUDE.md
