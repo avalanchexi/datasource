@@ -59,7 +59,7 @@
 - Modify: `src/datasource/engines/stage2_task_planner.py`
 - Test: `tests/test_stage2_unified.py`
 
-- [ ] **Step 1: Add failing planner tests**
+- [x] **Step 1: Add failing planner tests**
 
 Append these tests near the existing `Stage2TaskPlanner` tests in `tests/test_stage2_unified.py`:
 
@@ -208,7 +208,7 @@ def test_task_planner_quality_gap_wins_dedup_over_missing_item(tmp_path: Path):
     assert industrial_tasks[0]["force_refresh"] is True
 ```
 
-- [ ] **Step 2: Run planner tests and verify failure**
+- [x] **Step 2: Run planner tests and verify failure**
 
 Run:
 
@@ -222,7 +222,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all four tests fail because `trigger_reason` is not `quality_gap` or no task is generated for existing current values.
 
-- [ ] **Step 3: Implement quality-gap scanner in Stage2 planner**
+- [x] **Step 3: Implement quality-gap scanner in Stage2 planner**
 
 In `src/datasource/engines/stage2_task_planner.py`, add these imports:
 
@@ -380,7 +380,7 @@ In `build_tasks()`, prepend `_scan_quality_gaps(payload)` and update priority:
         priority = {"quality_gap": 5, "stale_data": 4, "placeholder": 3, "missing": 2, "estimated_fallback": 1}
 ```
 
-- [ ] **Step 4: Run planner tests and verify pass**
+- [x] **Step 4: Run planner tests and verify pass**
 
 Run:
 
@@ -394,7 +394,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all four tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/datasource/engines/stage2_task_planner.py tests/test_stage2_unified.py
