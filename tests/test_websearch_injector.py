@@ -1163,6 +1163,38 @@ def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manu
     assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
 
 
+def test_apply_monetary_entry_trusted_reserve_ratio_rrr_type_conflict_keeps_estimated():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "rrr_type": "statutory",
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["rrr_type"] == "statutory"
+    assert entry["is_estimated"] is True
+
+
 def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_without_explicit_source_url():
     entry = {
         "policy_name": "reserve_ratio",
@@ -1258,6 +1290,44 @@ def test_apply_monetary_entry_non_manual_same_value_does_not_clear_estimated():
     assert entry["is_estimated"] is True
     assert entry["rrr_type"] == "weighted"
     assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_macro_entry_same_value_no_override_stale_preserves_stale_flag():
+    entry = {
+        "indicator_name": "industrial",
+        "current_value": 4.1,
+        "previous_value": None,
+        "change_rate": None,
+        "value_type": None,
+        "is_stale": True,
+        "stale_reason": "monthly data stale",
+    }
+    payload = {
+        "current_value": 4.1,
+        "previous_value": 5.7,
+        "change_rate": -28.07,
+        "value_type": "yoy_month",
+        "yoy_month": 4.1,
+        "source": "manual",
+        "source_url": "https://www.stats.gov.cn/industrial",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_macro_entry(
+        "industrial",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        override_stale=False,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["previous_value"] == pytest.approx(5.7)
+    assert entry["change_rate"] == pytest.approx(-28.07)
+    assert entry["is_stale"] is True
+    assert entry["stale_reason"] == "monthly data stale"
 
 
 def test_pipeline_quality_state_clears_after_same_value_stage25_merge():

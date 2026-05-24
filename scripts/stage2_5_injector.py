@@ -2199,6 +2199,7 @@ def _merge_same_value_report_fields(
     category: str,
     key: str,
     is_manual: bool = False,
+    override_stale: bool = True,
 ) -> bool:
     metadata_payload = payload
     if category == "monetary_policy" and "is_estimated" in payload:
@@ -2228,8 +2229,10 @@ def _merge_same_value_report_fields(
             change_value = payload.get("change_rate")
         set_if_changed("change_from_120d", _coerce_float(change_value))
 
+        rrr_type_conflict = _has_rrr_type_conflict(entry, payload) if key in {"rrr", "reserve_ratio"} else False
         incoming_rrr_type = _normalize_rrr_type(payload.get("rrr_type") or payload.get("value_type"))
-        set_if_changed("rrr_type", incoming_rrr_type)
+        if not rrr_type_conflict:
+            set_if_changed("rrr_type", incoming_rrr_type)
 
         if is_manual:
             before_estimated = entry.get("is_estimated")
@@ -2250,9 +2253,21 @@ def _merge_same_value_report_fields(
             )
 
     if changed and entry.get("current_value") is not None:
-        entry["is_stale"] = False
-        entry["stale_reason"] = None
+        if override_stale or not bool(entry.get("is_stale")):
+            entry["is_stale"] = False
+            entry["stale_reason"] = None
     return changed
+
+
+def _has_rrr_type_conflict(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    existing_rrr_type = _normalize_rrr_type(entry.get("rrr_type"))
+    incoming_rrr_type = _normalize_rrr_type(payload.get("rrr_type") or payload.get("value_type"))
+    return bool(
+        existing_rrr_type
+        and incoming_rrr_type
+        and incoming_rrr_type != existing_rrr_type
+        and entry.get("current_value") is not None
+    )
 
 
 def _is_trusted_monetary_manual_quality_override(
@@ -2265,6 +2280,8 @@ def _is_trusted_monetary_manual_quality_override(
 ) -> bool:
     key = "reserve_ratio" if indicator_key in {"rrr", "reserve_ratio"} else indicator_key
     if not is_manual or key not in TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS:
+        return False
+    if _has_rrr_type_conflict(entry, payload):
         return False
     if incoming_current_value is None:
         return False
@@ -2326,6 +2343,7 @@ def _apply_macro_entry(
                 category="macro_indicators",
                 key=indicator_key,
                 is_manual=is_manual,
+                override_stale=override_stale,
             ):
                 if summary is not None:
                     summary.metadata_updated(
@@ -2583,6 +2601,7 @@ def _apply_monetary_entry(
                 category="monetary_policy",
                 key=indicator_key,
                 is_manual=is_manual,
+                override_stale=override_stale,
             ):
                 if summary is not None:
                     summary.metadata_updated(
