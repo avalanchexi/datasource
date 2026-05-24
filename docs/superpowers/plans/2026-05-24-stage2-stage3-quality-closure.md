@@ -581,7 +581,7 @@ git commit -m "fix: write stage2 compare fields"
 - Modify: `scripts/stage2_5_injector.py`
 - Test: `tests/test_websearch_injector.py`
 
-- [ ] **Step 1: Add failing Stage2.5 merge tests**
+- [x] **Step 1: Add failing Stage2.5 merge tests**
 
 Append these tests after `_has_quality_blocker()` in `tests/test_websearch_injector.py`:
 
@@ -779,7 +779,7 @@ def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
     assert {"category": "monetary_policy", "key": "reserve_ratio", "reason": "estimated_not_allowed"} not in blockers
 ```
 
-- [ ] **Step 2: Run merge tests and verify failure**
+- [x] **Step 2: Run merge tests and verify failure**
 
 Run:
 
@@ -793,7 +793,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: tests fail because same-value updates do not merge compare fields, and trusted manual reserve-ratio evidence cannot replace an existing estimated fallback without `--force-override`.
 
-- [ ] **Step 3: Implement same-value partial merge**
+- [x] **Step 3: Implement same-value partial merge**
 
 In `scripts/stage2_5_injector.py`, add this helper after `_update_metadata_only()`:
 
@@ -844,7 +844,7 @@ def _merge_same_value_report_fields(
 
 
 TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS = {
-    "reserve_ratio": ("pbc.gov.cn", "chinamoney.com.cn"),
+    "reserve_ratio": ("pbc.gov.cn",),
 }
 
 
@@ -954,7 +954,7 @@ Then replace the existing-value guard:
             return False
 ```
 
-- [ ] **Step 4: Run merge tests and verify pass**
+- [x] **Step 4: Run merge tests and verify pass**
 
 Run:
 
@@ -968,7 +968,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all four tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/stage2_5_injector.py tests/test_websearch_injector.py
@@ -1448,7 +1448,7 @@ In `AGENTS.md`, update the Stage2 section with this text:
 ```markdown
 - Stage2 task planner is quality-gap aware: it reuses the same quality state used by Stage2.5/Stage3 and creates `force_refresh` tasks for `missing_compare_values`, `estimated_not_allowed`, and `fund_flow_window_missing` even when `current_value` already exists. These tasks request report-ready compare/window fields, not only current values.
 - Stage2.5 same-value merge can update `previous_value/change_rate/change_from_120d/value_type/rrr_type/is_estimated/source_url` without `--force-override` when the incoming current value equals the existing Stage2 value. This is for closing Stage3 quality blockers; it does not count as Stage2 effective hit-rate success.
-- Stage2.5 may replace an existing estimated `reserve_ratio` fallback without `--force-override` only when the manual payload is explicitly `is_estimated=false` and the source URL belongs to `pbc.gov.cn` or `chinamoney.com.cn`. This is an estimated-fallback replacement rule, not a general official override allowlist expansion.
+- Stage2.5 may replace an existing estimated `reserve_ratio` fallback without `--force-override` only when the manual payload is explicitly `is_estimated=false` and the single explicit HTTPS source URL belongs to `pbc.gov.cn`; text URLs may only provide matching evidence and multiple/conflicting text URLs are rejected. This is an estimated-fallback replacement rule, not a general official override allowlist expansion.
 - ETF Stage2 structured source order includes TuShare `etf_share_size` before EastMoney/search. TuShare ETF windows use SSE+SZSE `total_size` deltas with `metric_basis=etf_total_size_delta`, `window_evidence=direct_balance_delta`, and `is_estimated=false` only when the full 121-trading-day window is available for both exchanges.
 ```
 
@@ -1459,7 +1459,7 @@ In `CLAUDE.md`, update the Stage2/Stage2.5 reminders with this text:
 ```markdown
 - Stage2 quality-gap tasks: existing current values no longer imply the task can be skipped when Stage2.5/Stage3 still reports compare/window blockers. Check `trigger_reason=quality_gap`, `quality_gap_reason`, `force_refresh=true`, and `required_output_fields`.
 - Stage2.5 same-value manual updates merge report-readiness fields. Use this for compare-field closure; do not use it to bypass ETF/fund-flow window evidence.
-- Stage2.5 can replace an estimated `reserve_ratio` fallback only with explicit non-estimated manual evidence from PBoC/ChinaMoney URL evidence; keep ETF/fund-flow strict.
+- Stage2.5 can replace an estimated `reserve_ratio` fallback only with explicit non-estimated manual evidence from a single PBoC HTTPS URL; keep ETF/fund-flow strict.
 - ETF fund-flow can pass only through direct window evidence. TuShare `etf_share_size` is accepted as `etf_total_size_delta` scale-window evidence when SSE+SZSE full windows are present; EastMoney remains blocked unless full-market scope is verified.
 ```
 
@@ -1704,7 +1704,7 @@ Spec coverage:
 - Stage2.5 quality-state feedback into Stage2 retrieval tasks: Task 1 implements quality-gap task planning and `force_refresh`.
 - Stage2 writes compare/window fields: Task 2 implements macro/monetary compare writeback; Task 4/5 cover ETF windows.
 - Stage2.5 same-value compare merge: Task 3 implements and tests it.
-- Stage2.5 trusted estimated-fallback replacement: Task 3 implements and tests reserve-ratio replacement only with explicit non-estimated PBoC/ChinaMoney evidence.
+- Stage2.5 trusted estimated-fallback replacement: Task 3 implements and tests reserve-ratio replacement only with explicit non-estimated single PBoC HTTPS evidence.
 - ETF TuShare direct window evidence: Task 4 implements the provider and fails closed on missing exchange/date data.
 - EastMoney strict scope is preserved: Task 4 registers TuShare before EastMoney and does not relax EastMoney allowlist.
 - Documentation sync: Task 6 updates `AGENTS.md` and `CLAUDE.md`.
