@@ -1326,6 +1326,42 @@ def test_apply_monetary_entry_trusted_reserve_ratio_rrr_type_conflict_keeps_esti
     assert entry["is_estimated"] is True
 
 
+def test_apply_monetary_entry_stale_rrr_type_conflict_keeps_estimated_and_stale():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "rrr_type": "statutory",
+        "is_estimated": True,
+        "is_stale": True,
+        "stale_reason": "old",
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["rrr_type"] == "statutory"
+    assert entry["is_estimated"] is True
+    assert entry["is_stale"] is True
+    assert entry["stale_reason"] == "old"
+
+
 def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_without_explicit_source_url():
     entry = {
         "policy_name": "reserve_ratio",
@@ -2175,6 +2211,17 @@ def test_manual_official_helper_trusted_explicit_source_url_is_official():
             "source": "PBOC official",
         },
     ) is True
+
+
+def test_manual_official_helper_explicit_trusted_url_with_conflicting_note_url_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "source_url": "https://www.pbc.gov.cn/official",
+            "note": "conflict https://evil.com/x",
+        },
+    ) is False
 
 
 def test_manual_official_helper_bcom_decimal_note_does_not_count_as_url_evidence():

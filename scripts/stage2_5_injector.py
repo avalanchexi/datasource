@@ -595,21 +595,9 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         return False
     if _has_multi_value_explicit_url_evidence(payload):
         return False
-    url_like_evidence = _iter_explicit_url_evidence(payload)
-    if url_like_evidence:
-        if not trusted_domains:
-            return False
-        if not all(_is_https_url_evidence(value) for value in url_like_evidence):
-            return False
-        payload_domains = _extract_domains_from_evidence(url_like_evidence)
-        if len(payload_domains) != len(url_like_evidence):
-            return False
-        return all(
-            any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains)
-            for domain in payload_domains
-        )
-
-    return False
+    if not trusted_domains:
+        return False
+    return _single_trusted_explicit_https_url(payload, trusted_domains) is not None
 
 
 def _apply_manual_official_estimation_rule(
@@ -2614,6 +2602,19 @@ def _apply_monetary_entry(
     existing_stale = bool(entry.get("is_stale"))
     preserve_stale = existing_stale and not override_stale
     original_stale_reason = entry.get("stale_reason")
+    rrr_type_conflict = (
+        indicator_key in {"rrr", "reserve_ratio"} and _has_rrr_type_conflict(entry, payload)
+    )
+    if rrr_type_conflict:
+        if summary is not None:
+            summary.skipped_existing(
+                "monetary_policy",
+                indicator_key,
+                "rrr_type_conflict",
+                original_current_value,
+                incoming_current_value,
+            )
+        return False
     trusted_quality_override = _is_trusted_monetary_manual_quality_override(
         indicator_key,
         entry,
