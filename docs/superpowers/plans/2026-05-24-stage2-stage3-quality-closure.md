@@ -1566,7 +1566,7 @@ If no files changed, do not create an empty commit.
 - Verify generated artifacts under `data/runs/20260523/` and `logs/runs/20260523/`.
 - Do not commit generated run artifacts unless explicitly requested.
 
-- [ ] **Step 1: Run Stage2 with Exa fallback enabled**
+- [x] **Step 1: Run Stage2 with Exa fallback enabled**
 
 Run:
 
@@ -1596,7 +1596,7 @@ Expected:
 - Stage2 summary includes `stage2_effective_hit_rate >= 0.70`.
 - Quality-gap tasks appear with `trigger_reason=quality_gap` when compare/window gaps exist.
 
-- [ ] **Step 2: Inspect Stage2 metrics**
+- [x] **Step 2: Inspect Stage2 metrics**
 
 Run:
 
@@ -1620,7 +1620,7 @@ Expected:
 - If Tavily returns quota/rate/payment errors, `search_backend_final` is `"exa"` and `tavily_to_exa_failover` is `true`.
 - `structured_provider_success_by_key` includes stable structured successes.
 
-- [ ] **Step 3: Run Stage2.5 manual injection**
+- [x] **Step 3: Run Stage2.5 manual injection**
 
 Run:
 
@@ -1638,7 +1638,7 @@ Expected:
 - Compare blockers for `industrial`, `industrial_sales`, `bdi`, `reverse_repo`, and `reserve_ratio` are cleared when manual compare fields are present.
 - Any remaining blocker is real and visible in the printed quality-blocker list.
 
-- [ ] **Step 4: Inspect Stage2.5 quality state**
+- [x] **Step 4: Inspect Stage2.5 quality state**
 
 Run:
 
@@ -1653,7 +1653,7 @@ Expected:
 - `fund_flow.etf` has real `recent_5d` and `total_120d` if TuShare full-window data was available.
 - If TuShare full-window data was unavailable, ETF remains blocked with `fund_flow_window_missing`.
 
-- [ ] **Step 5: Run Stage3**
+- [x] **Step 5: Run Stage3**
 
 Run:
 
@@ -1669,7 +1669,7 @@ Expected:
 - If ETF TuShare full-window data is available, command exits 0 and writes `data/runs/20260523/pring_result_quality_closure.json`.
 - If ETF TuShare full-window data is unavailable, command exits 1 and the only blocker is `fund_flow.etf fund_flow_window_missing`. This is an acceptable strict-gate result.
 
-- [ ] **Step 6: Run full test suite**
+- [x] **Step 6: Run full test suite**
 
 Run:
 
@@ -1679,7 +1679,7 @@ bash run_clean.sh python -m pytest -q
 
 Expected: all tests pass, allowing existing skipped tests and warnings.
 
-- [ ] **Step 7: Check working tree**
+- [x] **Step 7: Check working tree**
 
 Run:
 
