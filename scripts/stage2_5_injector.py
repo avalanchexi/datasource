@@ -494,6 +494,13 @@ def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
     return evidence
 
 
+def _iter_explicit_url_evidence(payload: Dict[str, Any]) -> List[str]:
+    evidence: List[str] = []
+    for field in EXPLICIT_URL_FIELDS:
+        evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
+    return evidence
+
+
 def _has_multi_value_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
     for field in EXPLICIT_URL_FIELDS:
         if len(_iter_http_like_evidence(payload.get(field), fallback_raw=True)) > 1:
@@ -529,8 +536,13 @@ def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
     return domains
 
 
-def _payload_has_url_like_evidence(payload: Dict[str, Any]) -> bool:
-    return bool(_iter_url_like_evidence(payload))
+def _extract_domains_from_evidence(url_like_evidence: List[str]) -> List[str]:
+    domains: List[str] = []
+    for value in url_like_evidence:
+        domain = _extract_domain(value)
+        if domain:
+            domains.append(domain)
+    return domains
 
 
 def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
@@ -552,13 +564,13 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         return False
     if _has_multi_value_explicit_url_evidence(payload):
         return False
-    if _payload_has_url_like_evidence(payload):
-        url_like_evidence = _iter_url_like_evidence(payload)
+    url_like_evidence = _iter_explicit_url_evidence(payload)
+    if url_like_evidence:
         if not trusted_domains:
             return False
         if not all(_is_https_url_evidence(value) for value in url_like_evidence):
             return False
-        payload_domains = _extract_domains_from_payload(payload)
+        payload_domains = _extract_domains_from_evidence(url_like_evidence)
         if len(payload_domains) != len(url_like_evidence):
             return False
         return all(
@@ -2189,7 +2201,7 @@ def _merge_same_value_report_fields(
     is_manual: bool = False,
 ) -> bool:
     metadata_payload = payload
-    if category == "monetary_policy" and is_manual and "is_estimated" in payload:
+    if category == "monetary_policy" and "is_estimated" in payload:
         metadata_payload = dict(payload)
         metadata_payload.pop("is_estimated", None)
     changed = _update_metadata_only(entry, metadata_payload)

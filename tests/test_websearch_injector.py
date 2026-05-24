@@ -1228,6 +1228,38 @@ def test_apply_monetary_entry_same_value_does_not_clear_estimated_without_explic
     assert entry["rrr_type"] == "weighted"
 
 
+def test_apply_monetary_entry_non_manual_same_value_does_not_clear_estimated():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 6.3,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=False,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is True
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
 def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
     market_data = {
         "metadata": {"date": "2026-04-30"},
@@ -1917,6 +1949,17 @@ def test_manual_official_helper_malformed_http_token_blocks_issuer_fallback():
             "policy_name": "MLF rate",
             "source": "http PBOC official",
             "note": "",
+        },
+    ) is False
+
+
+def test_manual_official_helper_source_url_text_does_not_count_as_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF",
+            "source": "https://www.pbc.gov.cn/official",
         },
     ) is False
 
