@@ -1339,6 +1339,42 @@ def test_task_planner_quality_gap_wins_dedup_over_missing_item(tmp_path: Path):
     assert industrial_tasks[0]["force_refresh"] is True
 
 
+def test_task_planner_preserves_missing_item_period_for_quality_gap(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": 4.1,
+                "previous_value": None,
+                "change_rate": None,
+                "unit": "%",
+                "date": "latest release",
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [
+            {"key": "industrial", "reason": "manual_required", "expected_period": "2026-04"}
+        ],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    industrial_tasks = [task for task in tasks if task["indicator_key"] == "industrial"]
+    assert len(industrial_tasks) == 1
+    task = industrial_tasks[0]
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["expected_period"] == "2026-04"
+    assert "2026-04" in task["expected_period_tokens"]
+
+
 def test_task_planner_expands_expected_period_for_query_families(tmp_path: Path):
     payload = {
         "missing_items": [],

@@ -339,6 +339,48 @@ class Stage2TaskPlanner:
                 return date_value
         return None
 
+    @staticmethod
+    def _missing_item_expected_period(
+        payload: Dict[str, Any],
+        category: str,
+        indicator_key: str,
+        raw_key: str,
+    ) -> Optional[str]:
+        candidates = {str(indicator_key or "").strip(), str(raw_key or "").strip()}
+        if category == "monetary_policy":
+            candidates.update(canonical_monetary_key(key) for key in list(candidates))
+        candidates = {key for key in candidates if key}
+
+        def iter_missing_items() -> List[Any]:
+            items: List[Any] = []
+            top_level = payload.get("missing_items", [])
+            if isinstance(top_level, list):
+                items.extend(top_level)
+
+            metadata = payload.get("metadata", {})
+            metadata_missing = metadata.get("missing_items") if isinstance(metadata, dict) else None
+            if isinstance(metadata_missing, dict):
+                rows = metadata_missing.get(category, [])
+                if isinstance(rows, list):
+                    items.extend(rows)
+            elif isinstance(metadata_missing, list):
+                items.extend(metadata_missing)
+            return items
+
+        for item in iter_missing_items():
+            if not isinstance(item, dict):
+                continue
+            expected_period = item.get("expected_period")
+            if expected_period in (None, ""):
+                continue
+            item_key = str(item.get("key") or item.get("indicator_key") or "").strip()
+            item_candidates = {item_key}
+            if category == "monetary_policy":
+                item_candidates.add(canonical_monetary_key(item_key))
+            if candidates.intersection(key for key in item_candidates if key):
+                return str(expected_period)
+        return None
+
     def _scan_quality_gaps(self, payload: Dict[str, Any]) -> List[Dict[str, Any]]:
         state = self._quality_state(payload)
         blockers = state.get("quality_blockers", [])
@@ -381,6 +423,13 @@ class Stage2TaskPlanner:
             indicator_key = item["indicator_key"]
             entry = self._entry_for_quality_gap(payload, category, item["raw_key"])
             expected_period = self._expected_period_for_quality_gap(category, entry)
+            if expected_period is None:
+                expected_period = self._missing_item_expected_period(
+                    payload,
+                    category,
+                    indicator_key,
+                    item["raw_key"],
+                )
             details = item["details"]
             tasks.append(
                 self._new_task(
