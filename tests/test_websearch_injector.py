@@ -1196,6 +1196,38 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_without_e
     assert "source_url" not in entry
 
 
+def test_apply_monetary_entry_same_value_does_not_clear_estimated_without_explicit_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 6.3,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source": "PBoC manual evidence https://www.pbc.gov.cn/rrr",
+        "note": "official note https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is True
+    assert entry["rrr_type"] == "weighted"
+
+
 def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
     market_data = {
         "metadata": {"date": "2026-04-30"},

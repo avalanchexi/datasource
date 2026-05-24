@@ -2188,7 +2188,11 @@ def _merge_same_value_report_fields(
     key: str,
     is_manual: bool = False,
 ) -> bool:
-    changed = _update_metadata_only(entry, payload)
+    metadata_payload = payload
+    if category == "monetary_policy" and is_manual and "is_estimated" in payload:
+        metadata_payload = dict(payload)
+        metadata_payload.pop("is_estimated", None)
+    changed = _update_metadata_only(entry, metadata_payload)
 
     def set_if_changed(field: str, value: Any) -> None:
         nonlocal changed
@@ -2219,6 +2223,14 @@ def _merge_same_value_report_fields(
             before_estimated = entry.get("is_estimated")
             before_note = entry.get("note")
             _apply_manual_official_estimation_rule(category, key, payload, entry)
+            if _is_trusted_monetary_manual_quality_override(
+                key,
+                entry,
+                payload,
+                _coerce_float(payload.get("current_value")),
+                is_manual=is_manual,
+            ):
+                entry["is_estimated"] = False
             changed = (
                 changed
                 or before_estimated != entry.get("is_estimated")
