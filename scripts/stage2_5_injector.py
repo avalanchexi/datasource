@@ -1041,6 +1041,7 @@ FUND_FLOW_TIER2_STRUCTURED_PATHS = {
         "/fund",
         "/rzrq",
     ),
+    "tushare.pro": ("/document",),
 }
 FUND_FLOW_TIER3_DOMAINS = (
     "finance.sina.com.cn",
@@ -1138,6 +1139,7 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
     if metric == "news_net_flow":
         return "news_summary"
 
+    explicit = _normalize_window_evidence(payload.get("window_evidence"))
     field_retry_evidence = payload.get("field_retry_evidence")
     if isinstance(field_retry_evidence, dict):
         recent = field_retry_evidence.get("recent_5d")
@@ -1154,10 +1156,11 @@ def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_b
                 str(total.get("metric_basis") or metric_basis),
             )
             if recent_trusted and total_trusted:
+                if explicit in FUND_FLOW_DIRECT_WINDOW_EVIDENCE:
+                    return explicit
                 return "direct_window"
         return "unknown"
 
-    explicit = _normalize_window_evidence(payload.get("window_evidence"))
     if explicit:
         return explicit
 

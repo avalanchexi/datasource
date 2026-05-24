@@ -63,6 +63,8 @@ class TuShareETFProvider(Stage2StructuredProvider):
                 row_count += len(records)
                 usable = []
                 for record in records:
+                    if not _record_matches_request(record, trade_date, exchange):
+                        continue
                     total_size = record.get("total_size")
                     if total_size is None:
                         continue
@@ -73,14 +75,12 @@ class TuShareETFProvider(Stage2StructuredProvider):
                     if value > 0:
                         usable.append(value)
                 if not usable:
-                    blocked = dict(diagnostics)
-                    blocked.update(
-                        {
-                            "missing_trade_date": trade_date,
-                            "missing_exchange": exchange,
-                            "date_count": len(trade_dates),
-                            "row_count": row_count,
-                        }
+                    blocked = _policy_blocked_diagnostics(
+                        diagnostics,
+                        missing_trade_date=trade_date,
+                        missing_exchange=exchange,
+                        date_count=len(trade_dates),
+                        row_count=row_count,
                     )
                     raise StructuredProviderError(
                         provider=self.name,
@@ -144,10 +144,18 @@ class TuShareETFProvider(Stage2StructuredProvider):
         reference_date: str,
         diagnostics: Mapping[str, Any],
     ) -> List[str]:
-        end_date = reference_date.replace("-", "")
-        start_date = (
-            datetime.strptime(reference_date, "%Y-%m-%d") - timedelta(days=240)
-        ).strftime("%Y%m%d")
+        try:
+            reference_dt = _parse_reference_date(reference_date)
+        except ValueError:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="invalid_reference_date",
+                message="TuShare ETF provider requires YYYY-MM-DD or YYYYMMDD reference_date",
+                diagnostics={"source_url": SOURCE_URL, "reference_date": reference_date},
+            )
+        end_date = reference_dt.strftime("%Y%m%d")
+        start_date = (reference_dt - timedelta(days=240)).strftime("%Y%m%d")
         try:
             rows = _records(
                 pro.trade_cal(
@@ -178,13 +186,11 @@ class TuShareETFProvider(Stage2StructuredProvider):
             }
         )
         if len(open_dates) < WINDOW_DATES:
-            blocked = dict(diagnostics)
-            blocked.update(
-                {
-                    "open_date_count": len(open_dates),
-                    "start_date": start_date,
-                    "end_date": end_date,
-                }
+            blocked = _policy_blocked_diagnostics(
+                diagnostics,
+                open_date_count=len(open_dates),
+                start_date=start_date,
+                end_date=end_date,
             )
             raise StructuredProviderError(
                 provider=self.name,
@@ -251,6 +257,48 @@ def _records(data: Any) -> List[Dict[str, Any]]:
     if isinstance(data, Mapping):
         return [dict(data)]
     return []
+
+
+def _parse_reference_date(value: Any) -> datetime:
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d", "%Y%m%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    raise ValueError(text)
+
+
+def _normalize_trade_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    for fmt in ("%Y%m%d", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y%m%d")
+        except ValueError:
+            continue
+    return text
+
+
+def _record_matches_request(record: Mapping[str, Any], trade_date: str, exchange: str) -> bool:
+    row_trade_date = record.get("trade_date")
+    if row_trade_date is not None and _normalize_trade_date(row_trade_date) != trade_date:
+        return False
+    row_exchange = record.get("exchange")
+    if row_exchange is not None and str(row_exchange).strip().upper() != exchange:
+        return False
+    row_market = record.get("market")
+    if row_market is not None and str(row_market).strip().upper() != exchange:
+        return False
+    return True
+
+
+def _policy_blocked_diagnostics(diagnostics: Mapping[str, Any], **details: Any) -> Dict[str, Any]:
+    blocked = dict(diagnostics)
+    blocked["terminal_structured_provider_error"] = True
+    blocked.update(details)
+    return blocked
 
 
 def _trend(value: float) -> str:

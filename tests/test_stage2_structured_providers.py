@@ -19,6 +19,7 @@ from datasource.providers.stage2_structured.official_china import (
     OfficialChinaProvider,
 )
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
+from datasource.providers.stage2_structured.registry import build_default_registry
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
 from datasource.providers.stage2_structured.stooq import StooqQuoteProvider
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
@@ -41,9 +42,17 @@ def _trade_dates(count, start=date(2026, 1, 1)):
 
 
 class FakeTuShareETFPro:
-    def __init__(self, missing_exchange=None, trade_date_count=121):
+    def __init__(
+        self,
+        missing_exchange=None,
+        trade_date_count=121,
+        wrong_trade_date=False,
+        wrong_exchange=False,
+    ):
         self.trade_dates = _trade_dates(trade_date_count)
         self.missing_exchange = missing_exchange
+        self.wrong_trade_date = wrong_trade_date
+        self.wrong_exchange = wrong_exchange
 
     def trade_cal(self, exchange="", start_date=None, end_date=None, is_open=1):
         return pd.DataFrame(
@@ -57,7 +66,13 @@ class FakeTuShareETFPro:
         index = self.trade_dates.index(trade_date)
         total_size_wan = (1000.0 + index) * 10000.0 / 2.0
         return pd.DataFrame(
-            [{"trade_date": trade_date, "exchange": exchange_value, "total_size": total_size_wan}]
+            [
+                {
+                    "trade_date": "19000101" if self.wrong_trade_date else trade_date,
+                    "exchange": "SSE" if self.wrong_exchange else exchange_value,
+                    "total_size": total_size_wan,
+                }
+            ]
         )
 
 
@@ -167,6 +182,41 @@ async def test_registry_surfaces_provider_error_with_diagnostics():
 
 
 @pytest.mark.asyncio
+async def test_registry_terminal_policy_block_does_not_try_next_provider():
+    class TerminalFailingProvider(FakeProvider):
+        name = "terminal"
+
+        async def fetch(self, task, market_payload, reference_date):
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=task["indicator_key"],
+                reason="policy_gate_blocked",
+                message="terminal fixture",
+                diagnostics={"terminal_structured_provider_error": True},
+            )
+
+    class ShouldNotRunProvider(FakeProvider):
+        name = "should_not_run"
+        calls = 0
+
+        async def fetch(self, task, market_payload, reference_date):
+            self.calls += 1
+            return await super().fetch(task, market_payload, reference_date)
+
+    fallback = ShouldNotRunProvider()
+    registry = StructuredProviderRegistry([TerminalFailingProvider(), fallback])
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await registry.fetch({"indicator_key": "GC=F"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert fallback.calls == 0
+    assert exc_info.value.diagnostics["structured_provider_attempts"][0][
+        "structured_provider"
+    ] == "terminal"
+
+
+@pytest.mark.asyncio
 async def test_registry_does_not_fallback_on_unexpected_provider_exception():
     class UnexpectedFailureProvider(FakeProvider):
         name = "unexpected"
@@ -208,6 +258,15 @@ def test_source_tier_classifier_uses_explicit_allowlists():
 
 def test_source_tier_classifier_marks_tushare_pro_as_tier2():
     assert classify_structured_source_tier(TUSHARE_ETF_SOURCE_URL) == "tier2"
+
+
+def test_default_registry_orders_tushare_etf_before_eastmoney_etf():
+    provider_names = [
+        provider.name
+        for provider in build_default_registry().providers_for("etf")
+    ]
+
+    assert provider_names.index("tushare_etf") < provider_names.index("eastmoney_etf")
 
 
 @pytest.mark.asyncio
@@ -277,6 +336,16 @@ async def test_tushare_etf_provider_computes_total_size_delta_windows():
 
 
 @pytest.mark.asyncio
+async def test_tushare_etf_provider_accepts_compact_reference_date():
+    provider = TuShareETFProvider(pro=FakeTuShareETFPro())
+
+    result = await provider.fetch({"indicator_key": "etf"}, {}, "20260523")
+
+    assert result.payload["recent_5d"] == pytest.approx(5.0)
+    assert result.payload["total_120d"] == pytest.approx(120.0)
+
+
+@pytest.mark.asyncio
 async def test_tushare_etf_provider_fails_closed_when_exchange_missing():
     provider = TuShareETFProvider(pro=FakeTuShareETFPro(missing_exchange="SZSE"))
 
@@ -286,6 +355,41 @@ async def test_tushare_etf_provider_fails_closed_when_exchange_missing():
     assert exc_info.value.reason == "policy_gate_blocked"
     assert exc_info.value.diagnostics["missing_exchange"] == "SZSE"
     assert exc_info.value.diagnostics["window_evidence"] == "direct_balance_delta"
+    assert exc_info.value.diagnostics["terminal_structured_provider_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_rejects_invalid_reference_date():
+    provider = TuShareETFProvider(pro=FakeTuShareETFPro())
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026/05/23")
+
+    assert exc_info.value.reason == "invalid_reference_date"
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_skips_wrong_trade_date_rows_and_fails_closed():
+    provider = TuShareETFProvider(pro=FakeTuShareETFPro(wrong_trade_date=True))
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["missing_trade_date"] == _trade_dates(121)[0]
+    assert exc_info.value.diagnostics["terminal_structured_provider_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_skips_wrong_exchange_rows_and_fails_closed():
+    provider = TuShareETFProvider(pro=FakeTuShareETFPro(wrong_exchange=True))
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["missing_exchange"] == "SZSE"
+    assert exc_info.value.diagnostics["terminal_structured_provider_error"] is True
 
 
 @pytest.mark.asyncio

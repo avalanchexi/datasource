@@ -56,6 +56,9 @@ class StructuredProviderRegistry:
             except StructuredProviderError as exc:
                 last_error = exc
                 attempts.append(exc.to_diagnostics())
+                if exc.diagnostics.get("terminal_structured_provider_error") is True:
+                    exc.diagnostics.setdefault("structured_provider_attempts", attempts)
+                    raise exc
 
         if attempts and hasattr(last_error, "diagnostics"):
             diagnostics = getattr(last_error, "diagnostics", {})

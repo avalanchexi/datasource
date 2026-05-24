@@ -1565,6 +1565,11 @@ def _augment_extraction_metadata(
             extraction["unit"] = "亿元"
         metric_basis = _default_fund_flow_metric_basis(str(indicator_key), extraction)
         extraction.setdefault("metric_basis", metric_basis)
+        is_structured_provider_task = (
+            task.get("extraction_backend") == "structured"
+            or task.get("search_backend") == "structured"
+        )
+        explicit_window_evidence = str(extraction.get("window_evidence") or "").strip().lower()
         recent_value = _safe_number(extraction.get("recent_5d"))
         total_value = _safe_number(extraction.get("total_120d"))
         if _safe_number(extraction.get("value")) is None and recent_value is not None:
@@ -1578,14 +1583,17 @@ def _augment_extraction_metadata(
         recent_evidence = None
         total_evidence = None
         if recent_value is not None:
-            recent_evidence = _field_retry_window_evidence(
-                "recent_5d",
-                str(indicator_key),
-                extraction,
-                source_snippets,
-                metric_basis,
-                recent_value,
-            )
+            if is_structured_provider_task and explicit_window_evidence in direct_evidence:
+                recent_evidence = explicit_window_evidence
+            else:
+                recent_evidence = _field_retry_window_evidence(
+                    "recent_5d",
+                    str(indicator_key),
+                    extraction,
+                    source_snippets,
+                    metric_basis,
+                    recent_value,
+                )
             field_retry_evidence.setdefault(
                 "recent_5d",
                 {
@@ -1596,14 +1604,17 @@ def _augment_extraction_metadata(
                 },
             )
         if total_value is not None:
-            total_evidence = _field_retry_window_evidence(
-                "total_120d",
-                str(indicator_key),
-                extraction,
-                source_snippets,
-                metric_basis,
-                total_value,
-            )
+            if is_structured_provider_task and explicit_window_evidence in direct_evidence:
+                total_evidence = explicit_window_evidence
+            else:
+                total_evidence = _field_retry_window_evidence(
+                    "total_120d",
+                    str(indicator_key),
+                    extraction,
+                    source_snippets,
+                    metric_basis,
+                    total_value,
+                )
             field_retry_evidence.setdefault(
                 "total_120d",
                 {
@@ -1613,7 +1624,14 @@ def _augment_extraction_metadata(
                     "metric_basis": metric_basis,
                 },
             )
-        if recent_value is not None and total_value is not None:
+        if (
+            is_structured_provider_task
+            and explicit_window_evidence in direct_evidence
+            and recent_value is not None
+            and total_value is not None
+        ):
+            extraction["window_evidence"] = explicit_window_evidence
+        elif recent_value is not None and total_value is not None:
             if (
                 str(indicator_key) == "margin"
                 and recent_evidence == "direct_balance_delta"
