@@ -70,6 +70,7 @@ def build_default_registry() -> StructuredProviderRegistry:
     providers: List[Stage2StructuredProvider] = []
     module_names = (
         "chinabond",
+        "tushare_etf",
         "eastmoney_etf",
         "official_china",
         "trading_economics",

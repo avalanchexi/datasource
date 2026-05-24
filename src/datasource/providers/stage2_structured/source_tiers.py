@@ -26,6 +26,7 @@ TIER2_DOMAINS = {
     "stooq.com",
     "ishares.com",
     "blackrock.com",
+    "tushare.pro",
 }
 
 TIER3_DOMAINS = {

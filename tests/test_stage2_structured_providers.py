@@ -1,5 +1,6 @@
 from datetime import date, timedelta
 
+import pandas as pd
 import pytest
 
 from datasource.providers.stage2_structured.base import (
@@ -21,6 +22,10 @@ from datasource.providers.stage2_structured.registry import StructuredProviderRe
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
 from datasource.providers.stage2_structured.stooq import StooqQuoteProvider
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
+from datasource.providers.stage2_structured.tushare_etf import (
+    SOURCE_URL as TUSHARE_ETF_SOURCE_URL,
+    TuShareETFProvider,
+)
 from datasource.providers.stage2_structured.yahoo_finance import YahooFinanceProvider
 
 
@@ -29,6 +34,31 @@ ALLOWED_ETF_SECID = "90.BKETF_FULL_MARKET_FIXTURE"
 
 def _date_texts(count, start=date(2026, 1, 1)):
     return [(start + timedelta(days=offset)).isoformat() for offset in range(count)]
+
+
+def _trade_dates(count, start=date(2026, 1, 1)):
+    return [(start + timedelta(days=offset)).strftime("%Y%m%d") for offset in range(count)]
+
+
+class FakeTuShareETFPro:
+    def __init__(self, missing_exchange=None, trade_date_count=121):
+        self.trade_dates = _trade_dates(trade_date_count)
+        self.missing_exchange = missing_exchange
+
+    def trade_cal(self, exchange="", start_date=None, end_date=None, is_open=1):
+        return pd.DataFrame(
+            {"cal_date": self.trade_dates, "is_open": [1] * len(self.trade_dates)}
+        )
+
+    def etf_share_size(self, trade_date, exchange=None, market=None):
+        exchange_value = exchange or market
+        if exchange_value == self.missing_exchange:
+            return pd.DataFrame([])
+        index = self.trade_dates.index(trade_date)
+        total_size_wan = (1000.0 + index) * 10000.0 / 2.0
+        return pd.DataFrame(
+            [{"trade_date": trade_date, "exchange": exchange_value, "total_size": total_size_wan}]
+        )
 
 
 class FakeProvider:
@@ -176,6 +206,10 @@ def test_source_tier_classifier_uses_explicit_allowlists():
     assert classify_structured_source_tier("https://stooq.com/q/l/?s=gsg.us") == "tier2"
 
 
+def test_source_tier_classifier_marks_tushare_pro_as_tier2():
+    assert classify_structured_source_tier(TUSHARE_ETF_SOURCE_URL) == "tier2"
+
+
 @pytest.mark.asyncio
 async def test_yahoo_finance_provider_parses_chart_quote():
     async def fetch_json(url, params=None):
@@ -219,6 +253,39 @@ async def test_yahoo_finance_provider_wraps_fetch_errors():
     assert exc_info.value.reason == "fetch_error"
     assert "query1.finance.yahoo.com" in exc_info.value.diagnostics["url"]
     assert exc_info.value.diagnostics["params"]["range"] == "5d"
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_computes_total_size_delta_windows():
+    provider = TuShareETFProvider(pro=FakeTuShareETFPro())
+
+    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.provider == "tushare_etf"
+    assert result.source_tier == "tier2"
+    assert extraction["category"] == "fund_flow"
+    assert extraction["recent_5d"] == pytest.approx(5.0)
+    assert extraction["total_120d"] == pytest.approx(120.0)
+    assert extraction["metric_basis"] == "etf_total_size_delta"
+    assert extraction["window_evidence"] == "direct_balance_delta"
+    assert extraction["is_estimated"] is False
+    assert extraction["source_url"] == TUSHARE_ETF_SOURCE_URL
+    assert extraction["diagnostics"]["row_count"] == 242
+    assert extraction["diagnostics"]["date_count"] == 121
+    assert extraction["diagnostics"]["exchange_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_fails_closed_when_exchange_missing():
+    provider = TuShareETFProvider(pro=FakeTuShareETFPro(missing_exchange="SZSE"))
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["missing_exchange"] == "SZSE"
+    assert exc_info.value.diagnostics["window_evidence"] == "direct_balance_delta"
 
 
 @pytest.mark.asyncio
