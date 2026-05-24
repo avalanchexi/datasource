@@ -1156,6 +1156,43 @@ def test_task_planner_adds_force_refresh_task_for_macro_quality_gap(tmp_path: Pa
     assert task["expected_period"] == "2026-04"
 
 
+def test_task_planner_adds_force_refresh_task_for_macro_estimated_blocker(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "Industrial production",
+                "current_value": 4.1,
+                "previous_value": 3.9,
+                "change_rate": 5.13,
+                "unit": "%",
+                "date": "2026-04",
+                "report_period": "2026-04",
+                "is_estimated": True,
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    industrial_tasks = [task for task in tasks if task["indicator_key"] == "industrial"]
+    assert len(industrial_tasks) == 1
+    task = industrial_tasks[0]
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "estimated_not_allowed"
+    assert task["quality_gap_category"] == "macro_indicators"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["current_value", "previous_value", "change_rate"]
+
+
 def test_task_planner_adds_force_refresh_task_for_monetary_quality_gap(tmp_path: Path):
     payload = {
         "metadata": {"date": "2026-05-22"},
@@ -1220,6 +1257,46 @@ def test_task_planner_adds_force_refresh_task_for_etf_window_gap(tmp_path: Path)
     task = etf_tasks[0]
     assert task["trigger_reason"] == "quality_gap"
     assert task["quality_gap_reason"] == "fund_flow_window_missing"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
+    assert "recent_5d" in task["field_queries"]
+    assert "total_120d" in task["field_queries"]
+
+
+def test_task_planner_adds_force_refresh_task_for_fund_flow_estimated_blocker(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "fund_flow": {
+            "etf": {
+                "type": "etf",
+                "recent_5d": 85.6,
+                "total_120d": 1250.0,
+                "trend": "inflow",
+                "source": "tier3 news estimate",
+                "source_tier": "tier3",
+                "window_evidence": "unknown",
+                "metric_basis": "news_net_flow",
+                "is_estimated": True,
+            }
+        },
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    etf_tasks = [task for task in tasks if task["indicator_key"] == "etf"]
+    assert len(etf_tasks) == 1
+    task = etf_tasks[0]
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "estimated_not_allowed"
+    assert task["quality_gap_category"] == "fund_flow"
     assert task["force_refresh"] is True
     assert task["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
     assert "recent_5d" in task["field_queries"]
@@ -1412,7 +1489,11 @@ def test_task_planner_keeps_estimated_etf_missing_item_for_stage2(tmp_path: Path
     tasks = planner.build_tasks(payload)
 
     task = next(task for task in tasks if task["indicator_key"] == "etf")
-    assert task["trigger_reason"] == "missing"
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "estimated_not_allowed"
+    assert task["quality_gap_category"] == "fund_flow"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
     assert "recent_5d" in task["field_queries"]
     assert "total_120d" in task["field_queries"]
 

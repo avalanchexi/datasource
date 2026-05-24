@@ -28,9 +28,11 @@ PLACEHOLDER_SENTINELS = {None, 0, 0.0, 7.13}
 
 QUALITY_GAP_OUTPUT_FIELDS = {
     ("macro_indicators", "missing_compare_values"): ["current_value", "previous_value", "change_rate"],
+    ("macro_indicators", "estimated_not_allowed"): ["current_value", "previous_value", "change_rate"],
     ("monetary_policy", "missing_compare_values"): ["current_value", "change_from_120d"],
     ("monetary_policy", "estimated_not_allowed"): ["current_value", "change_from_120d"],
     ("fund_flow", "fund_flow_window_missing"): ["recent_5d", "total_120d", "trend"],
+    ("fund_flow", "estimated_not_allowed"): ["recent_5d", "total_120d", "trend"],
 }
 
 QUALITY_GAP_REASONS = {
