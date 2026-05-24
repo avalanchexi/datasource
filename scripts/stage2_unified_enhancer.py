@@ -1844,6 +1844,9 @@ def _apply_extraction(
         entry["note"] = note
         if source_url:
             entry["source_url"] = source_url
+        for field in ("is_estimated", "estimation_method", "metric_basis", "confidence"):
+            if field in extraction and extraction.get(field) is not None:
+                entry[field] = extraction.get(field)
 
     def _copy_non_null(
         entry: Dict[str, Any],
@@ -1981,6 +1984,8 @@ def _apply_extraction(
             continue
         if item.get("symbol") == indicator_key:
             _write_common_fields(item, "current_yield")
+            for field in ("change_5d_bp", "change_120d_bp"):
+                _copy_non_null(item, field, numeric=True)
             if report_period and not item.get("report_period"):
                 item["report_period"] = report_period
             if as_of_date and not item.get("as_of_date"):
@@ -2027,11 +2032,14 @@ def _apply_extraction(
             "symbol": indicator_key,
             "name": _BOND_UPSERT_META[indicator_key],
             "current_yield": value,
-            "change_5d_bp": None,
-            "change_120d_bp": None,
+            "change_5d_bp": _safe_number(extraction.get("change_5d_bp")),
+            "change_120d_bp": _safe_number(extraction.get("change_120d_bp")),
             "trend": "待校验",
             "source": source_label,
-            "is_estimated": False,
+            "is_estimated": extraction.get("is_estimated") is True,
+            "estimation_method": extraction.get("estimation_method"),
+            "metric_basis": extraction.get("metric_basis"),
+            "confidence": extraction.get("confidence"),
             "stage_task_id": task["task_id"],
             "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),
         }
@@ -2320,7 +2328,7 @@ async def _try_structured_provider(
             provider_name=provider_name,
         )
         return None
-    post_writeback_reason = _post_writeback_manual_reason(market_payload, indicator_key)
+    post_writeback_reason = _post_writeback_manual_reason(market_payload, task_for_log, indicator_key)
     if post_writeback_reason:
         market_payload.clear()
         market_payload.update(snapshot)
@@ -2468,14 +2476,83 @@ def _append_note(note: Optional[str], extra: Optional[str]) -> Optional[str]:
     return f"{base} {tail}".strip()
 
 
-def _post_writeback_manual_reason(market_payload: Dict[str, Any], indicator_key: str) -> Optional[str]:
+def _entry_for_task(
+    market_payload: Dict[str, Any],
+    task: Dict[str, Any],
+    indicator_key: str,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    category = task.get("quality_gap_category") or task.get("category") or task.get("stage_phase")
+    if category == "macro_indicators":
+        entry = market_payload.get("macro_indicators", {}).get(indicator_key)
+        return category, entry if isinstance(entry, dict) else None
+    if category == "monetary_policy":
+        monetary_key = canonical_monetary_key(indicator_key)
+        entry = market_payload.get("monetary_policy", {}).get(monetary_key)
+        return category, entry if isinstance(entry, dict) else None
+    if category == "fund_flow":
+        entry = market_payload.get("fund_flow", {}).get(indicator_key)
+        return category, entry if isinstance(entry, dict) else None
+    if category == "bonds":
+        for item in market_payload.get("bonds", []) or []:
+            if isinstance(item, dict) and item.get("symbol") == indicator_key:
+                return category, item
+    return None, None
+
+
+def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:
+    missing: List[str] = []
+    numeric_fields = {
+        "current_value",
+        "previous_value",
+        "change_rate",
+        "change_from_120d",
+        "recent_5d",
+        "total_120d",
+        "current_yield",
+        "change_5d_bp",
+        "change_120d_bp",
+    }
+    for field in fields:
+        value = entry.get(field)
+        if field in numeric_fields:
+            if _safe_number(value) is None:
+                missing.append(field)
+            continue
+        if value in (None, "", "N/A"):
+            missing.append(field)
+    return missing
+
+
+def _post_writeback_manual_reason(
+    market_payload: Dict[str, Any],
+    task_or_indicator: Any,
+    indicator_key: Optional[str] = None,
+) -> Optional[str]:
+    if isinstance(task_or_indicator, dict):
+        task = task_or_indicator
+        indicator = str(indicator_key or task.get("indicator_key") or "")
+    else:
+        task = {"indicator_key": str(task_or_indicator or "")}
+        indicator = str(indicator_key or task_or_indicator or "")
+
+    category, entry = _entry_for_task(market_payload, task, indicator)
+    if (
+        task.get("quality_gap_reason") == "missing_compare_values"
+        and isinstance(entry, dict)
+    ):
+        required_fields = list(task.get("required_output_fields") or [])
+        missing_fields = _missing_required_output_fields(entry, required_fields)
+        if missing_fields:
+            task["post_writeback_missing_fields"] = missing_fields
+            return "missing_compare_values"
+
     fund_flow = market_payload.get("fund_flow", {})
-    if indicator_key not in fund_flow:
+    if indicator not in fund_flow:
         return None
-    entry = fund_flow.get(indicator_key)
+    entry = fund_flow.get(indicator)
     if not isinstance(entry, dict) or entry.get("is_estimated") is not True:
         return None
-    allowed, _reasons = is_estimated_allowlisted("fund_flow", indicator_key, entry)
+    allowed, _reasons = is_estimated_allowlisted("fund_flow", indicator, entry)
     if allowed:
         return None
     return "estimated_not_allowed"
@@ -2484,6 +2561,7 @@ def _post_writeback_manual_reason(market_payload: Dict[str, Any], indicator_key:
 def _mark_post_writeback_manual_required(
     market_payload: Dict[str, Any],
     task_record: Dict[str, Any],
+    task: Dict[str, Any],
     extraction: Dict[str, Any],
     indicator_key: str,
     reason: str,
@@ -2495,7 +2573,8 @@ def _mark_post_writeback_manual_required(
     extraction["manual_reason"] = reason
     extraction["note"] = _append_note(extraction.get("note"), reason)
     task_record["note"] = extraction.get("note")
-    append_missing_item(market_payload, "fund_flow", indicator_key, reason)
+    category = task.get("quality_gap_category") or task.get("category") or task_record.get("category") or "fund_flow"
+    append_missing_item(market_payload, category, indicator_key, reason)
 
 
 def _is_force_refresh_task(task: Dict[str, Any]) -> bool:
@@ -4485,11 +4564,12 @@ async def _execute_tasks(
                         stats["write_back_fallback_count"] += 1
                     elif write_target == "skip_no_value":
                         stats["write_back_miss_count"] += 1
-                    post_writeback_reason = _post_writeback_manual_reason(market_payload, task["indicator_key"])
+                    post_writeback_reason = _post_writeback_manual_reason(market_payload, task, task["indicator_key"])
                     if post_writeback_reason:
                         _mark_post_writeback_manual_required(
                             market_payload,
                             task_record,
+                            task,
                             extraction,
                             task["indicator_key"],
                             post_writeback_reason,
@@ -5602,11 +5682,16 @@ async def _execute_tasks(
                                 stats["write_back_fallback_count"] += 1
                             elif write_target == "skip_no_value":
                                 stats["write_back_miss_count"] += 1
-                            post_writeback_reason = _post_writeback_manual_reason(market_payload, task["indicator_key"])
+                            post_writeback_reason = _post_writeback_manual_reason(
+                                market_payload,
+                                task_for_log,
+                                task["indicator_key"],
+                            )
                             if post_writeback_reason:
                                 _mark_post_writeback_manual_required(
                                     market_payload,
                                     task_record,
+                                    task_for_log,
                                     extraction,
                                     task["indicator_key"],
                                     post_writeback_reason,

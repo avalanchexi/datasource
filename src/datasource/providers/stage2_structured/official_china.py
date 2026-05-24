@@ -160,12 +160,15 @@ class OfficialChinaProvider(Stage2StructuredProvider):
 
     async def _follow_detail_page(self, key, html, url, task, reference_date):
         detail_url = None
+        target_date = self._target_operation_date(task)
         if key == "reverse_repo":
             detail_url = self._find_link(
                 html,
                 url,
                 include_tokens=("公开市场业务交易公告",),
                 exclude_tokens=("公开市场买断式逆回购",),
+                target_date=target_date,
+                date_match_mode="exact",
             )
         elif key == "mlf":
             detail_url = self._find_link(
@@ -173,6 +176,8 @@ class OfficialChinaProvider(Stage2StructuredProvider):
                 url,
                 include_tokens=("中期借贷便利",),
                 exclude_tokens=(),
+                target_date=target_date,
+                date_match_mode="month",
             )
         elif key == "industrial":
             detail_url = self._find_link(
@@ -236,14 +241,14 @@ class OfficialChinaProvider(Stage2StructuredProvider):
 
     def _parse_result(self, key, raw_key, task, html, url, reference_date):
         if key in {"reverse_repo", "mlf", "reserve_ratio"}:
-            return self._parse_monetary_result(key, raw_key, html, url, reference_date)
+            return self._parse_monetary_result(key, raw_key, task, html, url, reference_date)
         if key == "USDCNY":
             return self._parse_usdcny_result(raw_key, html, url, reference_date)
         if key in {"industrial", "industrial_sales"}:
             return self._parse_macro_result(key, raw_key, task, html, url, reference_date)
         return None
 
-    def _parse_monetary_result(self, key, raw_key, html, url, reference_date):
+    def _parse_monetary_result(self, key, raw_key, task, html, url, reference_date):
         value = self._parse_rate(html)
         if value is None:
             if key == "mlf" and "多重价位" in html:
@@ -275,6 +280,31 @@ class OfficialChinaProvider(Stage2StructuredProvider):
             payload["manual_reason"] = "多重价位，参考值，口径不适用"
             diagnostics["note"] = "MLF公告包含多重价位，利率按公告参考/中标利率语境解析。"
 
+        operation_date = self._parse_date(html) or self._parse_date_from_url(url)
+        target_date = self._target_operation_date(task)
+        if key in {"reverse_repo", "mlf"}:
+            if operation_date is None:
+                raise StructuredProviderError(
+                    provider=self.name,
+                    indicator_key=raw_key,
+                    reason="period_mismatch",
+                    message="PBoC operation notice does not expose a parseable operation date",
+                    diagnostics={"url": url, "evidence_text": self._evidence(html)},
+                )
+            if target_date and not self._operation_date_matches(key, operation_date, target_date):
+                raise StructuredProviderError(
+                    provider=self.name,
+                    indicator_key=raw_key,
+                    reason="period_mismatch",
+                    message="PBoC operation notice date does not match the task period",
+                    diagnostics={
+                        "url": url,
+                        "operation_date": operation_date,
+                        "target_date": target_date,
+                        "evidence_text": self._evidence(html),
+                    },
+                )
+
         return StructuredResult(
             provider=self.name,
             indicator_key=raw_key,
@@ -283,7 +313,7 @@ class OfficialChinaProvider(Stage2StructuredProvider):
             source="Official China structured source",
             source_url=url,
             source_tier=classify_structured_source_tier(url),
-            as_of_date=self._parse_date(html) or reference_date,
+            as_of_date=operation_date or reference_date,
             confidence=0.9,
             diagnostics=diagnostics,
         )
@@ -469,6 +499,58 @@ class OfficialChinaProvider(Stage2StructuredProvider):
         return None
 
     @staticmethod
+    def _parse_date_from_url(url):
+        match = re.search(r"(20\d{2})(\d{2})(\d{2})", str(url or ""))
+        if not match:
+            return None
+        year, month, day = match.groups()
+        return "{0}-{1}-{2}".format(year, month, day)
+
+    @staticmethod
+    def _target_operation_date(task):
+        if not isinstance(task, dict):
+            return None
+        for field in ("ref_date", "reference_date"):
+            raw = task.get(field)
+            if isinstance(raw, str) and re.match(r"20\d{2}-\d{2}-\d{2}$", raw.strip()):
+                return raw.strip()
+        return None
+
+    @staticmethod
+    def _operation_date_matches(key, operation_date, target_date):
+        if not target_date:
+            return True
+        if key == "mlf":
+            return str(operation_date or "")[:7] == str(target_date)[:7]
+        return str(operation_date or "")[:10] == str(target_date)[:10]
+
+    @staticmethod
+    def _date_tokens(date_text):
+        match = re.match(r"(20\d{2})-(\d{2})-(\d{2})$", str(date_text or "").strip())
+        if not match:
+            return set()
+        year, month, day = match.groups()
+        month_i = int(month)
+        day_i = int(day)
+        return {
+            f"{year}{month}{day}",
+            f"{year}-{month}-{day}",
+            f"{year}年{month_i}月{day_i}日",
+            f"{year}年{int(month)}月",
+            f"{year}{month}",
+        }
+
+    @staticmethod
+    def _link_matches_date(label, url, target_date, mode):
+        if not target_date:
+            return True
+        haystack = f"{label} {url}"
+        tokens = OfficialChinaProvider._date_tokens(target_date)
+        if mode == "month":
+            return any(token in haystack for token in tokens if len(token) in {6, 8} or "月" in token)
+        return any(token in haystack for token in tokens if token.count("-") == 2 or token.endswith("日") or len(token) == 8)
+
+    @staticmethod
     def _report_period(task, html, reference_date):
         expected_period = task.get("expected_period")
         if expected_period:
@@ -520,6 +602,8 @@ class OfficialChinaProvider(Stage2StructuredProvider):
         include_tokens,
         optional_tokens=(),
         exclude_tokens=(),
+        target_date=None,
+        date_match_mode="exact",
     ):
         pattern = re.compile(r"<a\b[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.DOTALL)
         for match in pattern.finditer(html):
@@ -540,6 +624,13 @@ class OfficialChinaProvider(Stage2StructuredProvider):
                 continue
             candidate_url = urljoin(base_url, href)
             if candidate_url.rstrip("/") == str(base_url or "").rstrip("/"):
+                continue
+            if not OfficialChinaProvider._link_matches_date(
+                label,
+                candidate_url,
+                target_date,
+                date_match_mode,
+            ):
                 continue
             return candidate_url
         return None

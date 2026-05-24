@@ -1013,6 +1013,48 @@ async def test_official_china_provider_follows_reverse_repo_list_detail():
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_selects_reverse_repo_detail_by_ref_date():
+    old_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052108514823570/index.html"
+    )
+    target_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    list_html = (
+        '<a href="./2026052108514823570/index.html">'
+        "公开市场业务交易公告 [2026]第95号</a>"
+        '<a href="./2026052208514823570/index.html">'
+        "公开市场业务交易公告 [2026]第96号</a>"
+    )
+    target_html = (
+        '<meta name="Description" content="2026年5月22日中国人民银行'
+        "开展1530亿元7天期逆回购操作，中标利率1.40%。"
+        '">'
+    )
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.REVERSE_REPO_URL:
+            return list_html
+        assert url == target_url
+        assert url != old_url
+        return target_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch(
+        {"indicator_key": "reverse_repo", "ref_date": "2026-05-22"},
+        {},
+        "2026-05-23",
+    )
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == 1.4
+    assert extraction["as_of_date"] == "2026-05-22"
+    assert extraction["source_url"] == target_url
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_parses_prefixed_reverse_repo_amount():
     html = "2026年5月22日人民银行开展1185亿元7天期逆回购操作，中标利率1.40%。"
 

@@ -1283,6 +1283,18 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 return
         rows.append(payload)
 
+    def _stage2_quality_metadata(extraction: Dict[str, Any]) -> Dict[str, Any]:
+        fields = (
+            "is_estimated",
+            "estimation_method",
+            "metric_basis",
+            "confidence",
+            "note",
+            "as_of_date",
+            "report_period",
+        )
+        return {field: extraction.get(field) for field in fields if extraction.get(field) is not None}
+
     def _append_manual_skeleton(
         key: str,
         cat: str,
@@ -1491,6 +1503,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "trend": extraction.get("trend") or "未知",
                     "source": source,
                     "source_url": src,
+                    **_stage2_quality_metadata(extraction),
                 },
             )
         elif cat == "stock_indices":
@@ -2224,7 +2237,13 @@ def _update_metadata_only(entry: Dict[str, Any], payload: Dict[str, Any]) -> boo
         if field_name in payload:
             set_if_changed(field_name, payload.get(field_name))
     if "is_estimated" in payload:
-        set_if_changed("is_estimated", _coerce_bool(payload.get("is_estimated")))
+        incoming_estimated = _coerce_bool(payload.get("is_estimated"))
+        if not (
+            preserve_existing_official_source
+            and entry.get("is_estimated") is False
+            and incoming_estimated is True
+        ):
+            set_if_changed("is_estimated", incoming_estimated)
     return changed
 
 
@@ -2322,7 +2341,12 @@ def _is_trusted_monetary_manual_quality_override(
     if incoming_current_value is None:
         return False
     if not bool(entry.get("is_estimated")):
-        return False
+        existing_source_url = _extract_source_url(entry)
+        existing_official = bool(existing_source_url and is_official_source_url(existing_source_url))
+        existing_compare_gap = _coerce_float(entry.get("change_from_120d")) is None
+        note_text = str(entry.get("note") or "")
+        if existing_official or not existing_compare_gap or "缺少发布机构" not in note_text:
+            return False
     if "is_estimated" not in payload or _coerce_bool(payload.get("is_estimated")) is not False:
         return False
     source_url = _single_trusted_explicit_https_url(
@@ -2639,6 +2663,7 @@ def _apply_monetary_entry(
         incoming_current_value,
         is_manual=is_manual,
     )
+    preserve_existing_official_source = _should_preserve_existing_official_source(entry, payload)
     if (
         not force_override
         and not existing_placeholder
@@ -2686,13 +2711,15 @@ def _apply_monetary_entry(
     if payload.get("expected_period"):
         entry["expected_period"] = payload.get("expected_period")
     entry['as_of_date'] = payload.get('as_of_date') or entry.get('as_of_date')
-    entry['source'] = _format_source_label(payload.get('source'))
-    _copy_source_url(entry, payload)
+    if not preserve_existing_official_source:
+        entry['source'] = _format_source_label(payload.get('source'))
+        _copy_source_url(entry, payload)
     _copy_payload_metadata_fields(entry, payload, ("estimation_method", "metric_basis", "confidence"))
     note_val = payload.get('note', entry.get('note'))
     if is_manual and 'note' not in payload:
         note_val = ""
-    entry['note'] = note_val
+    if not preserve_existing_official_source:
+        entry['note'] = note_val
     incoming_rrr_type = _normalize_rrr_type(payload.get('rrr_type') or payload.get('value_type'))
     if indicator_key in {"rrr", "reserve_ratio"}:
         existing_rrr_type = _normalize_rrr_type(entry.get('rrr_type'))
@@ -2708,15 +2735,22 @@ def _apply_monetary_entry(
 
     # is_estimated 规则：手工注入默认不估算；regex_only/明确标注才估算
     if 'is_estimated' in payload:
-        entry['is_estimated'] = _coerce_bool(payload.get('is_estimated'))
+        incoming_estimated = _coerce_bool(payload.get('is_estimated'))
+        if not (
+            preserve_existing_official_source
+            and entry.get('is_estimated') is False
+            and incoming_estimated is True
+        ):
+            entry['is_estimated'] = incoming_estimated
     else:
-        source_text = str(payload.get('source') or entry.get('source') or "")
-        note_text = str(entry.get('note') or "")
-        estimated_markers = ("regex_only", "regex_fallback", "bond_etf_proxy", "ETF代理", "估", "estimated")
-        if any(m in source_text or m in note_text for m in estimated_markers):
-            entry['is_estimated'] = True
-        else:
-            entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
+        if not preserve_existing_official_source:
+            source_text = str(payload.get('source') or entry.get('source') or "")
+            note_text = str(entry.get('note') or "")
+            estimated_markers = ("regex_only", "regex_fallback", "bond_etf_proxy", "ETF代理", "估", "estimated")
+            if any(m in source_text or m in note_text for m in estimated_markers):
+                entry['is_estimated'] = True
+            else:
+                entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
     if is_manual:
         _apply_manual_official_estimation_rule("monetary_policy", indicator_key, payload, entry)
 

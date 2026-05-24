@@ -524,6 +524,77 @@ def test_apply_extraction_writes_macro_compare_fields_for_quality_gap():
     assert entry["report_period"] == "2026-04"
 
 
+def test_post_writeback_flags_missing_monetary_compare_fields_for_quality_gap():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "unit": "%",
+            }
+        },
+        "fund_flow": {},
+    }
+    task = {
+        "indicator_key": "reverse_repo",
+        "quality_gap_category": "monetary_policy",
+        "quality_gap_reason": "missing_compare_values",
+        "required_output_fields": ["current_value", "change_from_120d"],
+    }
+
+    reason = stage2._post_writeback_manual_reason(payload, task, "reverse_repo")
+
+    assert reason == "missing_compare_values"
+    assert task["post_writeback_missing_fields"] == ["change_from_120d"]
+
+
+def test_apply_extraction_preserves_bond_estimated_metadata():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "fund_flow": {},
+        "bonds": [
+            {
+                "symbol": "CN10Y_CDB",
+                "name": "10年期国开债收益率",
+                "current_yield": None,
+                "is_estimated": False,
+            }
+        ],
+    }
+    task = {
+        "task_id": "cdb-estimated",
+        "indicator_key": "CN10Y_CDB",
+        "stage_phase": "assets",
+        "search_backend": "structured",
+    }
+    extraction = {
+        "value": 2.02,
+        "current_yield": 2.02,
+        "source_url": "https://example.com/cdb",
+        "is_estimated": True,
+        "estimation_method": "CN10Y plus observed CDB spread",
+        "metric_basis": "cn10y_proxy_spread",
+        "confidence": 0.62,
+        "note": "CN10Y proxy",
+        "as_of_date": "2026-05-22",
+    }
+
+    target = _apply_extraction(payload, task, extraction, snippets=[])
+
+    entry = payload["bonds"][0]
+    assert target == "bonds"
+    assert entry["current_yield"] == pytest.approx(2.02)
+    assert entry["is_estimated"] is True
+    assert entry["estimation_method"] == "CN10Y plus observed CDB spread"
+    assert entry["metric_basis"] == "cn10y_proxy_spread"
+    assert entry["confidence"] == pytest.approx(0.62)
+
+
 def test_apply_extraction_keeps_existing_macro_report_period_without_force_refresh():
     payload = {
         "metadata": {"date": "2026-05-22"},

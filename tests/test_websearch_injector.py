@@ -331,6 +331,37 @@ def test_backfill_cdb_proxy_changes_from_cn10y_for_estimated_spread():
     assert cdb["is_estimated"] is True
 
 
+def test_coerce_stage2_results_preserves_bond_estimation_metadata():
+    raw = {
+        "results": [
+            {
+                "task": {"indicator_key": "CN10Y_CDB"},
+                "extraction": {
+                    "value": 1.85,
+                    "source_url": "https://example.com/cdb",
+                    "is_estimated": True,
+                    "estimation_method": "CN10Y plus observed CDB spread",
+                    "metric_basis": "cn10y_proxy_spread",
+                    "confidence": 0.62,
+                    "note": "CN10Y proxy",
+                },
+                "raw_results": [{"url": "https://example.com/cdb"}],
+            }
+        ]
+    }
+
+    schema = injector._coerce_stage2_results_to_schema(raw)
+
+    cdb = schema["bonds"][0]
+    assert cdb["symbol"] == "CN10Y_CDB"
+    assert cdb["current_yield"] == pytest.approx(1.85)
+    assert cdb["is_estimated"] is True
+    assert cdb["estimation_method"] == "CN10Y plus observed CDB spread"
+    assert cdb["metric_basis"] == "cn10y_proxy_spread"
+    assert cdb["confidence"] == pytest.approx(0.62)
+    assert cdb["note"] == "CN10Y proxy"
+
+
 def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
     entry = {
         "policy_name": "MLF利率",
@@ -1203,6 +1234,87 @@ def test_apply_monetary_entry_same_value_preserves_existing_official_source():
     assert "official_source_period_unit_match" in entry["note"]
 
 
+def test_apply_monetary_entry_same_value_preserves_official_non_estimated_status():
+    official_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    entry = {
+        "policy_name": "reverse_repo",
+        "current_value": 1.4,
+        "change_from_120d": None,
+        "source": "structured",
+        "source_url": official_url,
+        "note": "structured_provider:official_china official_source_period_unit_match",
+        "is_estimated": False,
+    }
+    payload = {
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "source": "non official mirror",
+        "source_url": "https://example.com/reverse-repo",
+        "is_estimated": True,
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reverse_repo",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["source_url"] == official_url
+    assert entry["is_estimated"] is False
+
+
+def test_apply_monetary_entry_stale_override_preserves_official_source_and_status():
+    official_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    entry = {
+        "policy_name": "reverse_repo",
+        "current_value": 1.4,
+        "change_from_120d": None,
+        "source": "structured",
+        "source_url": official_url,
+        "note": "structured_provider:official_china official_source_period_unit_match",
+        "is_estimated": False,
+        "is_stale": True,
+        "stale_reason": "missing_compare_values",
+    }
+    payload = {
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "source": "non official mirror",
+        "source_url": "https://example.com/reverse-repo",
+        "note": "third-party same value",
+        "is_estimated": True,
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reverse_repo",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        override_stale=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["source_url"] == official_url
+    assert entry["source"] == "structured"
+    assert "official_source_period_unit_match" in entry["note"]
+    assert entry["is_estimated"] is False
+    assert entry["is_stale"] is False
+
+
 def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manual_value():
     entry = {
         "policy_name": "reserve_ratio",
@@ -1223,6 +1335,40 @@ def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manu
         entry,
         payload,
         "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_replaces_nonofficial_reserve_ratio_compare_gap():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": False,
+        "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+        "note": "structured_provider:trading_economics 缺少发布机构(中国人民银行)",
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-05-22",
         is_manual=True,
         trend_history_base_dir=None,
     )

@@ -167,15 +167,15 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
-- 输入也可用 Stage2 自动结果 `websearch_results_auto.json`；脚本会自动转换 `results` 结构，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 骨架。
+- 输入也可用 Stage2 自动结果 `websearch_results_auto.json`；脚本会自动转换 `results` 结构，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 骨架；自动结果转换必须保留 `is_estimated/estimation_method/metric_basis/confidence`，尤其是 `CN10Y_CDB` 这类估算债券，避免估算值被转换成非估算值。
 - 手工补数优先从 `data/runs/templates/manual_template.json` 复制对应 category 示例到当日 `websearch_results_manual.json`，再替换数值、日期和 `source_url`。
 - 官方发布值、官方中间价、交易所/指数商实时值默认 `is_estimated=false`；只有利差估算、公式推导、代理序列、外推或明确近似值才写 `is_estimated=true`。
 - Stage2.5 same-value merge 可在 incoming `current_value` 与 existing `current_value` 相同的情况下合并 `previous_value`、`change_rate`、`change_from_120d`、`value_type`、`rrr_type`、`is_estimated`、`source_url` 等 report-readiness 字段，用于关闭 Stage3 compare/window blockers；这不计入 Stage2 真实命中率。
-- `reserve_ratio` estimated fallback replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false`，且提供单一显式 HTTPS PBoC URL（`pbc.gov.cn`）。`chinamoney.com.cn` 不释放 `reserve_ratio` quality override；文本 URL 只能作为一致性证据，多个或 conflicting 文本 URL 均拒绝。
+- `reserve_ratio` quality replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false`，且提供单一显式 HTTPS PBoC URL（`pbc.gov.cn`）。可替换估算 fallback，或替换缺 `change_from_120d` 且带“缺少发布机构”诊断的非官方 structured 值；`chinamoney.com.cn` 不释放 `reserve_ratio` quality override；文本 URL 只能作为一致性证据，多个或 conflicting 文本 URL 均拒绝。
 - `macro_indicators.industrial` 若使用“1-2月累计同比”等来源作为流水线当前值，必须显式写 `value_type: "yoy_month"` 和 `yoy_month`，否则会被识别为 `yoy_ytd` 并导致 `current_value` 缺失。
 - `bdi` 即使在 `estimated_allowlist_keys` 内，仍受 `bdi_estimated_allow_conditions` 约束：`trusted_domains`、`max_age_days`、`value_range`、`unit_keywords` 均需通过。
 - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`。
-- Stage2.5 同值补 `previous_value/change_rate/change_from_120d` 等报告字段时，不得用非官方 manual 来源覆盖已有官方 `source_url/source/note`；只补缺的对比字段和可信估算标记。
+- Stage2.5 同值补 `previous_value/change_rate/change_from_120d` 等报告字段时，不得用非官方 manual 来源覆盖已有官方 `source_url/source/note`，也不得把已有官方非估算值降级为 `is_estimated=true`；只补缺的对比字段和可信估算标记。
 - official manual override 仅适用于代码内 `official manual override allowlist` 中的指标：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。这些指标在 `_manual.json` 显式 `is_estimated=True` 时，只有提供可信官方 HTTPS `source_url` 证据才会正规化为 `is_estimated=False`，并追加 `manual_official_not_estimated`。
 - 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 official override 白名单。
 - official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在代码内 `official manual override allowlist`，估算仍受 gate 约束。
@@ -311,6 +311,7 @@ if comp < 0.8:
 - Stage2.5 last resort: 用 `data/runs/${DATE_NH}/websearch_results_manual.json` 或手工 `_manual.json` 注入。
 - Market fallback: legacy-only path，必要时运行 `scripts/legacy/fill_market_data_from_yahoo.py`，再通过 Stage2.5 注入补 commodities/bonds/forex 缺口。
 - `fund_flow.etf`: Stage1/Stage2 均可用 TuShare `etf_share_size.total_size` 计算全市场规模窗口变化，`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`；121 个交易日、SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析时可作为非估算 Tier2 结构化窗口值。该口径是 ETF 规模 delta，不等同于新闻口径净流入。若 TuShare 不可得、窗口不完整或质量阻断，继续 Stage2 搜索或 Stage2.5 补数。
+- `reverse_repo` 的 PBoC 结构化公告必须匹配任务 `ref_date`；`mlf` 至少匹配 `ref_date` 所在月份。公告正文和 URL 都解析不出操作日期，或期次不匹配时，不得回退为官方非估算值。
 - `DXY`: Stage1 可探测 TuShare `fx_obasic` 的 `FX_BASKET`/`USDOLLAR.FXCM` 并用 `fx_daily` 取数；报告必须标注为 TuShare `USDOLLAR` proxy，不得写成 ICE DXY。若不可得或不完整，继续 Stage2/Stage2.5。
 - `USDCNH`: `fx_daily` 优先使用 `ts_code=USDCNH.FXCM`；`USDCNH` 常返回空。
 - `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；若空则回退 `curve_type=1`。
@@ -337,7 +338,7 @@ if comp < 0.8:
 | Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
 | Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 
-Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；日常判断 Stage2 是否达标优先看 `stage2_effective_hit_rate`，并用 `stage2_effective_success/stage2_effective_failure/stage2_effective_denominator` 审计分子分母。`stage2_effective_hit_rate` 包含 structured-provider 成功 + 搜索抽取成功，不含 `skipped_existing` 与 Stage2.5 manual 注入。搜索链路命中率只看 `task_search_success/task_search_failed/search_success_rate_incremental`；`search_success_rate_incremental=0.0` 只表示 Tavily/Exa 搜索链路未写回，不代表 Stage2 总命中率为 0，需同时看 `task_structured_success`、`structured_provider_success_count`。结构化源排障看 `structured_provider_attempt_count/structured_provider_success_count/structured_provider_fallback_to_search_count/structured_provider_error_breakdown`、`retrieval_diagnostics`、`manual_reason_breakdown`；已有值跳过看 `task_skipped_existing`，quota/rate/payment failover 看 `search_backend_final`、`tavily_to_exa_failover`、`tavily_to_exa_failover_count`、`exa_failover_success`、`exa_failover_empty`、`exa_failover_error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`，同时保留查看 `tavily_unavailable_reason=quota_or_rate_limit`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated/deepseek_json_parse_error`、`field_retry_merged_count`、`field_retry_missing_fields`。
+Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；日常判断 Stage2 是否达标优先看 `stage2_effective_hit_rate`，并用 `stage2_effective_success/stage2_effective_failure/stage2_effective_denominator` 审计分子分母。`stage2_effective_hit_rate` 包含 structured-provider 成功 + 搜索抽取成功，不含 `skipped_existing` 与 Stage2.5 manual 注入。质量缺口任务（`trigger_reason=quality_gap`）只有写回 `required_output_fields` 后才算 Stage2 成功；structured-provider 只写当前值但缺 `previous_value/change_rate/change_from_120d` 时，应继续 fallback 到搜索/抽取或转 `manual_required`，不得虚增命中率。搜索链路命中率只看 `task_search_success/task_search_failed/search_success_rate_incremental`；`search_success_rate_incremental=0.0` 只表示 Tavily/Exa 搜索链路未写回，不代表 Stage2 总命中率为 0，需同时看 `task_structured_success`、`structured_provider_success_count`。结构化源排障看 `structured_provider_attempt_count/structured_provider_success_count/structured_provider_fallback_to_search_count/structured_provider_error_breakdown`、`retrieval_diagnostics`、`manual_reason_breakdown`；已有值跳过看 `task_skipped_existing`，quota/rate/payment failover 看 `search_backend_final`、`tavily_to_exa_failover`、`tavily_to_exa_failover_count`、`exa_failover_success`、`exa_failover_empty`、`exa_failover_error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`，同时保留查看 `tavily_unavailable_reason=quota_or_rate_limit`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated/deepseek_json_parse_error`、`field_retry_merged_count`、`field_retry_missing_fields`。
 
 ## 12. Troubleshooting
 | 问题 | 原因 | 解决方案 |
