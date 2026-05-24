@@ -1147,7 +1147,7 @@ python scripts/utility/data_completion_checker.py
 - [ ] 资金流向: 4类资金数据完整，0/None/窗口缺失均进入 Stage2.5 manual_required
   - 北向资金（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
   - 南向资金（Stage2 Tavily/DeepSeek 或 Stage2.5 manual 注入）
-  - ETF资金流（Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual 注入；structured provider 不默认释放全市场 ETF gate）
+  - ETF资金流（Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual 注入；TuShare `etf_share_size` 完整窗口可释放 gate，EastMoney 仍需 full-market direct daily series 验证）
   - 融资融券余额（TuShare 可得字段或 Stage2.5 manual 注入）
 
 #### 当前数据质量
@@ -1456,7 +1456,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 4. **完整性验证** - 阶段5严格检查验证清单
 5. **格式规范** - 百分比、基点、斜率、价格格式统一
 6. **透明可追溯** - 数据来源、时点、方法完整记录
-7. **资金流向完整** - 北向/南向/ETF/融资融券按当前 gate 处理：TuShare 可得字段、Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual/WebSearch 注入；ETF structured provider 不默认释放全市场 ETF gate，0/None/窗口缺失进入 manual_required
+7. **资金流向完整** - 北向/南向/ETF/融资融券按当前 gate 处理：TuShare 可得字段、Stage2 structured-provider/Tavily/DeepSeek 或 Stage2.5 manual/WebSearch 注入；ETF 的 TuShare `etf_share_size` 完整窗口可释放 gate，EastMoney 仍需 full-market direct daily series 验证，0/None/窗口缺失进入 manual_required
 8. **智能容错机制** - WebSearch失败记录提示，等待人工补数（AKShare 通道已停用）
 9. **Pring数据验证** - 自动三阶段验证，数据不足时拒绝执行 (V4.1新增) ⭐
 10. **数据质量透明** - Pring章节自动显示数据完整性状态 (V4.1新增) ⭐

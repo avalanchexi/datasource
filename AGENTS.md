@@ -133,7 +133,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 ```
 
 - structured-provider-first 覆盖：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 会先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败后才进入搜索。
-- 当前结构化来源：商品期货优先 Trading Economics，`GSG` 使用 Stooq CSV 市价，`USDCNY` 使用 ChinaMoney JSON，工业/工业营收 follow 国家统计局详情页，逆回购/RRR 可用央行/Trading Economics，`ETF` structured provider 默认仍不释放全市场 ETF gate。
+- 当前结构化来源：商品期货优先 Trading Economics，`GSG` 使用 Stooq CSV 市价，`USDCNY` 使用 ChinaMoney JSON，工业/工业营收 follow 国家统计局详情页，逆回购/RRR 可用央行/Trading Economics，ETF 先尝试 TuShare `etf_share_size`，再走 EastMoney/search。
 - 结构化源失败、超时、解析失败或质量 gate 阻断时，继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。
 - 排障可追加 `--disable-structured-providers`，只跑原 Tavily/Exa/DeepSeek 搜索链路。
 - Stage2 真实命中率优先看 `stage2_effective_hit_rate`；它包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。
@@ -170,6 +170,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 输入也可用 Stage2 自动结果 `websearch_results_auto.json`；脚本会自动转换 `results` 结构，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 骨架。
 - 手工补数优先从 `data/runs/templates/manual_template.json` 复制对应 category 示例到当日 `websearch_results_manual.json`，再替换数值、日期和 `source_url`。
 - 官方发布值、官方中间价、交易所/指数商实时值默认 `is_estimated=false`；只有利差估算、公式推导、代理序列、外推或明确近似值才写 `is_estimated=true`。
+- Stage2.5 same-value merge 可在 incoming `current_value` 与 existing `current_value` 相同的情况下合并 `previous_value`、`change_rate`、`change_from_120d`、`value_type`、`rrr_type`、`is_estimated`、`source_url` 等 report-readiness 字段，用于关闭 Stage3 compare/window blockers；这不计入 Stage2 真实命中率。
+- `reserve_ratio` estimated fallback replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false`，且提供单一显式 HTTPS PBoC URL（`pbc.gov.cn`）。`chinamoney.com.cn` 不释放 `reserve_ratio` quality override；文本 URL 只能作为一致性证据，多个或 conflicting 文本 URL 均拒绝。
 - `macro_indicators.industrial` 若使用“1-2月累计同比”等来源作为流水线当前值，必须显式写 `value_type: "yoy_month"` 和 `yoy_month`，否则会被识别为 `yoy_ytd` 并导致 `current_value` 缺失。
 - `bdi` 即使在 `estimated_allowlist_keys` 内，仍受 `bdi_estimated_allow_conditions` 约束：`trusted_domains`、`max_age_days`、`value_range`、`unit_keywords` 均需通过。
 - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`。
@@ -179,7 +181,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 普通 manual 来源不要因为不是官方域名就默认改成 estimated 或 blocked；是否 official override 只影响显式估算值能否被正规化。
 - fund_flow 的 `source_url` 只证明来源存在，不自动证明 5日/120日窗口真实可用。只有 Tier1/Tier2 结构化来源、`window_evidence` 为 `direct_window`、`direct_daily_series` 或 `direct_balance_delta`，且 `metric_basis` 不是 `news_net_flow`/`estimated_net_flow` 时，才允许 `is_estimated=false`。
 - fund_flow gate 的 `source_tier` 从 `source_url` 域名推断；manual JSON 中手工填写的 `source_tier`/`claimed_source_tier` 仅可作为诊断说明，不能释放 gate。
-- fund_flow Tier1 域名：`hkex.com.hk`、`sse.com.cn`、`szse.cn`；Tier2 结构化 path：`data.eastmoney.com/hsgt`、`data.eastmoney.com/etf`、`data.eastmoney.com/fund`、`data.eastmoney.com/rzrq`。其他新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
+- fund_flow Tier1 域名：`hkex.com.hk`、`sse.com.cn`、`szse.cn`；Tier2 结构化 path：`data.eastmoney.com/hsgt`、`data.eastmoney.com/etf`、`data.eastmoney.com/fund`、`data.eastmoney.com/rzrq`、`tushare.pro/document`。其他新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
 - fund_flow 手工补数若使用 `news_net_flow`、`estimated_net_flow`、单日外推、季度/年度/年内摘要、外推或无法证明目标窗口，Stage2.5 会强制 `is_estimated=true` 并写入 `estimated_not_allowed` blocker；不得为了通过 gate 手工改成 `false`。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
 - 若终端显示“注入数据项: 0”，说明结果无可解析数值或文件为空，应改用手工 schema 版 `_manual.json`。
@@ -225,6 +227,8 @@ if comp < 0.8:
 - Stage2 Unified 默认 structured-provider-first：对 `GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；同一 key 的多个 provider 会顺序兜底，结构化源全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切到 Exa，`--fund-flow-backend` 参数仍使用 `tavily`。
 - 排障可传 `--disable-structured-providers` 只跑原 Tavily/Exa/DeepSeek 搜索链路。
 - Stage2 真实命中率优先看 `stage2_effective_hit_rate`；该指标包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。搜索链路命中率仍可看 `task_search_success/task_search_failed/search_success_rate_incremental`。
+- Stage2 task planner 已 quality-gap aware：会从 Stage2.5/Stage3 质量状态生成 `trigger_reason=quality_gap`、`force_refresh=true` 的任务，覆盖 `missing_compare_values`、`estimated_not_allowed`、`fund_flow_window_missing`。这些任务要求 compare/window 字段，不能因已有 `current_value` 跳过。
+- Stage2 extraction 会写回宏观 compare 字段和货币 `change_from_120d`，用于补齐报告可读性和关闭 Stage3 compare/window blockers。
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`；宏观/低时效指标用 `time_range=year/month`, `max_results<=6`, `search_depth=basic`。
 - `search_profiles` 支持 `query_families`、`queries`、`field_queries`、`exclude_domains`、`max_query_candidates`、`extract_policy`；Stage2 记录 `query_used/query_family_used/query_attempts`。
 - Stage2 query context 区分 `daily_quote` 与 `monthly_period`：日频 quote 类任务（商品、DXY、BDI、BCOM/GSG 等）使用 `closing_date/ref_date` 模板，不继承宏观 `expected_period_tokens`；月度宏观/政策任务才使用 `expected_period/report_period` 期次 token。
@@ -240,7 +244,7 @@ if comp < 0.8:
 - Tavily search/extract 遇到 quota/rate limit/payment/plan limit 后（含 HTTP `402/403/429/432/433`），本轮立即切换搜索后端状态：有 Exa 时 `tavily_active -> exa_active` 并由 Exa 接管当前与后续任务；无 Exa 或 Exa 失败时写 `manual_required` skeleton。不新增 quota probe，不重跑当日 Tavily。排查看 summary 的 `tavily_unavailable_reason=quota_or_rate_limit`、`tavily_limit_error_count`、`tavily_error_samples`、`retrieval_diagnostics`、`manual_reason_breakdown`。
 - 环境/proxy/SOCKS/DNS/TLS 等运行环境错误不触发 Exa failover；先修复 preflight、代理或证书问题。非 quota 类 Exa fallback 仍为显式 opt-in，只在传 `--enable-exa-fallback` 或设置 `STAGE2_ENABLE_EXA_FALLBACK=1` 时启用。
 - 资金流缺 `recent_5d/total_120d` 时，优先按 `field_queries` 仅补缺字段，并统计 `field_retry_count/field_retry_merged_count/field_retry_missing_fields`。
-- ETF structured provider 默认不释放全市场 ETF gate；只有已验证全市场 direct daily series `secid` 且 `window_evidence=direct_daily_series`、`metric_basis` 满足 fund_flow gate 时，才允许作为非估算窗口值。
+- ETF structured provider 顺序为 TuShare `etf_share_size` before EastMoney/search。TuShare 成功条件是 121 个交易日、SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析，输出 `metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false`；任一交易日或 exchange 缺失均 fail closed。EastMoney 仍只有已验证全市场 `direct_daily_series` 时才可释放 gate。
 - DeepSeek 抽取 schema 已减负，默认只要求报告写回所需字段；JSON 解析失败区分 `deepseek_json_truncated` 与 `deepseek_json_parse_error`，避免把模型输出截断误判为网页无数据。`source_url` 必须来自 snippets，否则强制 `manual_required`。
 - 命中 `low_score_all/单位不匹配/缺少发布机构/no_value` 时追加一次定向检索，补充单位、发布机构以及任务已有的日期/期次上下文；`daily_quote` 不强行追加宏观月份 token。
 - LangChain 默认禁用；实验时必须显式传 `--allow-langchain` 并自备依赖。
@@ -267,7 +271,7 @@ if comp < 0.8:
 - 来源标注：`tavily+deepseek`、`exa+deepseek`、`待人工补数(Stage2 manual_required)`、`异常零值-需核查`。
 - Exa quota failover 覆盖 fund_flow，但 fund_flow gate 不变：`source_tier`、`window_evidence`、`metric_basis`、`is_estimated`、`estimated_not_allowed` 仍按原规则判定。
 - `metric_basis=net_flow_sum` 仅用于目标窗口内日频净流入求和；`balance_delta` 用于余额类窗口差值；`news_net_flow` 和 `estimated_net_flow` 均不能作为真实窗口值通过 gate。
-- ETF 全市场资金流目前没有稳定官方开放入口；新闻或季度报告可作为备注和估算依据，但默认 `is_estimated=true`。
+- ETF 全市场资金流可由 TuShare `etf_share_size` 完整窗口释放 gate：121 个交易日、SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析时，按 `metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false` 写入。该口径是 ETF 规模 delta，不等同于新闻净流入；新闻、季度报告和 EastMoney 未验证全市场窗口时仍默认 `is_estimated=true`。
 - Stage2 资金流定向命令：
   ```bash
   bash run_clean.sh python scripts/stage2_unified_enhancer.py \
@@ -305,7 +309,7 @@ if comp < 0.8:
 - Stage2 structured/search second: TuShare 不可得或缺失字段统一走 Stage2；已知官方或结构化指标先尝试 structured-provider，失败后再走 Tavily-first 搜索与 Exa quota failover。
 - Stage2.5 last resort: 用 `data/runs/${DATE_NH}/websearch_results_manual.json` 或手工 `_manual.json` 注入。
 - Market fallback: legacy-only path，必要时运行 `scripts/legacy/fill_market_data_from_yahoo.py`，再通过 Stage2.5 注入补 commodities/bonds/forex 缺口。
-- `fund_flow.etf`: Stage1 可用 TuShare `etf_share_size.total_size` 计算全市场规模窗口变化，`metric_basis=etf_total_size_delta`；该口径是 ETF 规模 delta，不等同于新闻口径净流入。若 TuShare 不可得、窗口不完整或质量阻断，继续 Stage2/Stage2.5 补数。
+- `fund_flow.etf`: Stage1/Stage2 均可用 TuShare `etf_share_size.total_size` 计算全市场规模窗口变化，`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`；121 个交易日、SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析时可作为非估算 Tier2 结构化窗口值。该口径是 ETF 规模 delta，不等同于新闻口径净流入。若 TuShare 不可得、窗口不完整或质量阻断，继续 Stage2 搜索或 Stage2.5 补数。
 - `DXY`: Stage1 可探测 TuShare `fx_obasic` 的 `FX_BASKET`/`USDOLLAR.FXCM` 并用 `fx_daily` 取数；报告必须标注为 TuShare `USDOLLAR` proxy，不得写成 ICE DXY。若不可得或不完整，继续 Stage2/Stage2.5。
 - `USDCNH`: `fx_daily` 优先使用 `ts_code=USDCNH.FXCM`；`USDCNH` 常返回空。
 - `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；若空则回退 `curve_type=1`。
