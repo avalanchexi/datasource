@@ -134,7 +134,7 @@ OFFICIAL_MANUAL_SOURCES = {
     "bonds": {},
 }
 TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS = {
-    "reserve_ratio": ("pbc.gov.cn", "chinamoney.com.cn"),
+    "reserve_ratio": ("pbc.gov.cn",),
 }
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
 
@@ -564,15 +564,19 @@ def _single_trusted_explicit_https_url(
         return None
     if not any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains):
         return None
+    text_url_evidence: List[str] = []
     for field in OFFICIAL_MANUAL_TEXT_FIELDS:
-        for value in _iter_http_like_evidence(payload.get(field)):
-            if not _is_https_url_evidence(value):
-                return None
-            text_domain = _extract_domain(value)
-            if not text_domain:
-                return None
-            if not any(_official_domain_matches(text_domain, trusted_domain) for trusted_domain in trusted_domains):
-                return None
+        text_url_evidence.extend(_iter_http_like_evidence(payload.get(field)))
+    if len(text_url_evidence) > 1:
+        return None
+    for value in text_url_evidence:
+        if not _is_https_url_evidence(value):
+            return None
+        text_domain = _extract_domain(value)
+        if not text_domain:
+            return None
+        if not any(_official_domain_matches(text_domain, trusted_domain) for trusted_domain in trusted_domains):
+            return None
     return source_url
 
 

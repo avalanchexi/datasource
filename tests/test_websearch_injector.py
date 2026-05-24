@@ -1258,6 +1258,37 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_http
     assert "rrr_type" not in entry
 
 
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_chinamoney_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.chinamoney.com.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
 def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_conflicting_note_url():
     entry = {
         "policy_name": "reserve_ratio",
@@ -1270,6 +1301,39 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_conf
         "change_from_120d": 0.0,
         "source_url": "https://www.pbc.gov.cn/rrr",
         "note": "conflict https://evil.com/x",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_multiple_text_urls():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "source": "primary https://www.pbc.gov.cn/source",
+        "note": "secondary https://www.pbc.gov.cn/note",
         "is_estimated": False,
         "rrr_type": "weighted",
     }
