@@ -2248,7 +2248,7 @@ def _is_trusted_monetary_manual_quality_override(
         return False
     if "is_estimated" not in payload or _coerce_bool(payload.get("is_estimated")) is not False:
         return False
-    source_url = _extract_source_url(payload)
+    source_url = _normalize_parseable_http_url(payload.get("source_url"))
     if not source_url:
         return False
     domain = _extract_domain(source_url)
