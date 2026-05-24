@@ -1163,6 +1163,69 @@ def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manu
     assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
 
 
+def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_source_url_alias():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "sourceUrl": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_http_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "http://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
 def test_apply_monetary_entry_trusted_reserve_ratio_rrr_type_conflict_keeps_estimated():
     entry = {
         "policy_name": "reserve_ratio",

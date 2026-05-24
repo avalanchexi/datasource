@@ -545,6 +545,28 @@ def _extract_domains_from_evidence(url_like_evidence: List[str]) -> List[str]:
     return domains
 
 
+def _single_trusted_explicit_https_url(
+    payload: Dict[str, Any],
+    trusted_domains: Tuple[str, ...],
+) -> Optional[str]:
+    if _has_invalid_explicit_url_evidence(payload):
+        return None
+    if _has_multi_value_explicit_url_evidence(payload):
+        return None
+    url_like_evidence = _iter_explicit_url_evidence(payload)
+    if len(url_like_evidence) != 1:
+        return None
+    source_url = url_like_evidence[0]
+    if not _is_https_url_evidence(source_url):
+        return None
+    domain = _extract_domain(source_url)
+    if not domain:
+        return None
+    if not any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains):
+        return None
+    return source_url
+
+
 def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
     domain = domain.lower().strip()
     trusted_domain = trusted_domain.lower().strip()
@@ -2289,14 +2311,13 @@ def _is_trusted_monetary_manual_quality_override(
         return False
     if "is_estimated" not in payload or _coerce_bool(payload.get("is_estimated")) is not False:
         return False
-    source_url = _normalize_parseable_http_url(payload.get("source_url"))
+    source_url = _single_trusted_explicit_https_url(
+        payload,
+        TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS[key],
+    )
     if not source_url:
         return False
-    domain = _extract_domain(source_url)
-    return any(
-        _official_domain_matches(domain, trusted_domain)
-        for trusted_domain in TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS[key]
-    )
+    return True
 
 
 def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
