@@ -114,6 +114,38 @@ class PolicyBlockedETFRegistry:
         )
 
 
+class MacroCompareRegistry:
+    def __init__(self):
+        self.calls = 0
+
+    def provider_for(self, indicator_key):
+        return object() if indicator_key == "industrial" else None
+
+    async def fetch(self, task, market_payload, reference_date):
+        self.calls += 1
+        return StructuredResult(
+            provider="macro-compare-fixture",
+            indicator_key=task["indicator_key"],
+            category="macro_indicators",
+            payload={
+                "value": 4.1,
+                "current_value": 4.1,
+                "previous_value": 5.7,
+                "change_rate": -28.07,
+                "value_type": "yoy_month",
+                "yoy_month": 4.1,
+                "unit": "%",
+                "is_estimated": False,
+            },
+            source="国家统计局",
+            source_url="https://www.stats.gov.cn/sj/zxfb/202605/t20260518_1963731.html",
+            source_tier="tier1",
+            as_of_date=reference_date,
+            confidence=0.95,
+            diagnostics={"fixture": True},
+        )
+
+
 class FailingTavilyClient:
     def __init__(self):
         self.search_calls = 0
@@ -252,6 +284,75 @@ async def test_execute_tasks_structured_success_writes_back_and_skips_search(tmp
     assert stats["structured_provider"]["success"] == 1
     assert stats["structured_provider"]["by_key"]["GC=F"]["attempt"] == 1
     assert stats["structured_provider"]["by_key"]["GC=F"]["success"] == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_tasks_quality_gap_force_refresh_does_not_skip_existing_macro_value(
+    tmp_path: Path,
+):
+    task = {
+        "task_id": "quality-industrial",
+        "indicator_key": "industrial",
+        "category": "macro_indicators",
+        "stage_phase": "essential",
+        "search_backend": "tavily",
+        "extraction_backend": "structured",
+        "query": "国家统计局 工业增加值 2026年4月 同比",
+        "unit": "%",
+        "preferred_domains": ["stats.gov.cn"],
+        "trigger_reason": "quality_gap",
+        "quality_gap_reason": "missing_compare_values",
+        "required_output_fields": ["current_value", "previous_value", "change_rate"],
+        "force_refresh": True,
+        "created_at": 1700000000,
+    }
+    payload = {
+        "metadata": {
+            "date": "2026-05-22",
+            "missing_items": {"macro_indicators": [{"key": "industrial"}]},
+        },
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": 1.0,
+                "previous_value": None,
+                "change_rate": None,
+                "unit": "%",
+                "is_estimated": False,
+                "source": "old",
+            }
+        },
+        "missing_items": ["industrial"],
+    }
+    registry = MacroCompareRegistry()
+    stats = {}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        payload,
+        FailingTavilyClient(),
+        None,
+        None,
+        tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        stats=stats,
+        disable_extract=True,
+        structured_registry=registry,
+    )
+
+    assert registry.calls == 1
+    assert failures == []
+    assert len(completed) == 1
+    assert completed[0]["result_type"] == "structured_success"
+    industrial = payload["macro_indicators"]["industrial"]
+    assert industrial["current_value"] == pytest.approx(4.1)
+    assert industrial["previous_value"] == pytest.approx(5.7)
+    assert industrial["change_rate"] == pytest.approx(-28.07)
+    assert industrial["value_type"] == "yoy_month"
+    assert industrial["yoy_month"] == pytest.approx(4.1)
+    assert industrial["is_estimated"] is False
+    assert websearch_results[0]["result_type"] == "structured_success"
+    assert stats["structured_provider"]["success"] == 1
 
 
 @pytest.mark.asyncio
