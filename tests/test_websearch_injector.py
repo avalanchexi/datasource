@@ -1131,6 +1131,44 @@ def test_apply_monetary_entry_same_value_merges_change_and_non_estimated_flag():
     assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
 
 
+def test_apply_monetary_entry_same_value_preserves_existing_official_source():
+    official_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    entry = {
+        "policy_name": "reverse_repo",
+        "current_value": 1.4,
+        "change_from_120d": None,
+        "source": "structured",
+        "source_url": official_url,
+        "note": "structured_provider:official_china official_source_period_unit_match",
+        "is_estimated": False,
+    }
+    payload = {
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "source": "TrendForce reverse repo chart",
+        "source_url": "https://datatrack.trendforce.com/Chart/content/3912/china-pboc-interest-rate-7-day-reverse-repo-rate",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reverse_repo",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["source_url"] == official_url
+    assert entry["source"] == "structured"
+    assert "official_source_period_unit_match" in entry["note"]
+
+
 def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manual_value():
     entry = {
         "policy_name": "reserve_ratio",

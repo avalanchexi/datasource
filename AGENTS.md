@@ -175,6 +175,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - `macro_indicators.industrial` 若使用“1-2月累计同比”等来源作为流水线当前值，必须显式写 `value_type: "yoy_month"` 和 `yoy_month`，否则会被识别为 `yoy_ytd` 并导致 `current_value` 缺失。
 - `bdi` 即使在 `estimated_allowlist_keys` 内，仍受 `bdi_estimated_allow_conditions` 约束：`trusted_domains`、`max_age_days`、`value_range`、`unit_keywords` 均需通过。
 - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`。
+- Stage2.5 同值补 `previous_value/change_rate/change_from_120d` 等报告字段时，不得用非官方 manual 来源覆盖已有官方 `source_url/source/note`；只补缺的对比字段和可信估算标记。
 - official manual override 仅适用于代码内 `official manual override allowlist` 中的指标：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。这些指标在 `_manual.json` 显式 `is_estimated=True` 时，只有提供可信官方 HTTPS `source_url` 证据才会正规化为 `is_estimated=False`，并追加 `manual_official_not_estimated`。
 - 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 official override 白名单。
 - official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 都不能触发 override。ETF/fund_flow 不在代码内 `official manual override allowlist`，估算仍受 gate 约束。

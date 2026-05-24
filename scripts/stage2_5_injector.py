@@ -41,6 +41,7 @@ from datasource.utils.policy_rules import (
     get_non_blocking_warning_rules,
 )
 from datasource.utils.run_paths import build_run_paths_from_reference
+from datasource.utils.source_trust import is_official_source_url
 from datasource.utils.text_markers import contains_ytd_marker
 
 FUND_FLOW_KEY_MAP = {
@@ -477,6 +478,14 @@ def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
     url = _extract_source_url(payload)
     if url:
         target["source_url"] = url
+
+
+def _should_preserve_existing_official_source(target: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    existing_url = _extract_source_url(target)
+    if not existing_url or not is_official_source_url(existing_url):
+        return False
+    incoming_url = _extract_source_url(payload)
+    return not (incoming_url and is_official_source_url(incoming_url))
 
 
 def _normalize_manual_official_key(category: str, key: str) -> str:
@@ -2186,6 +2195,7 @@ def _format_source_label(raw_source: Optional[str]) -> str:
 
 def _update_metadata_only(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
     changed = False
+    preserve_existing_official_source = _should_preserve_existing_official_source(entry, payload)
 
     def set_if_changed(field: str, value: Any) -> None:
         nonlocal changed
@@ -2202,12 +2212,12 @@ def _update_metadata_only(entry: Dict[str, Any], payload: Dict[str, Any]) -> boo
         set_if_changed("as_of_date", payload.get("as_of_date") or payload.get("report_period"))
     if "report_period" in payload:
         set_if_changed("report_period", payload.get("report_period"))
-    if "source" in payload:
+    if "source" in payload and not preserve_existing_official_source:
         set_if_changed("source", _format_source_label(payload.get("source")))
     source_url = _extract_source_url(payload)
-    if source_url:
+    if source_url and not preserve_existing_official_source:
         set_if_changed("source_url", source_url)
-    if "note" in payload:
+    if "note" in payload and not preserve_existing_official_source:
         note_val = payload.get("note")
         set_if_changed("note", note_val if isinstance(note_val, str) else "")
     for field_name in ("confidence", "estimation_method"):
