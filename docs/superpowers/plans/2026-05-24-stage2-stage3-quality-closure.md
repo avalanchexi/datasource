@@ -409,7 +409,7 @@ git commit -m "fix: plan stage2 tasks from quality gaps"
 - Modify: `scripts/stage2_unified_enhancer.py`
 - Test: `tests/test_stage2_unified.py`
 
-- [ ] **Step 1: Add failing Stage2 writeback tests**
+- [x] **Step 1: Add failing Stage2 writeback tests**
 
 Append these tests near the existing `_apply_extraction` tests in `tests/test_stage2_unified.py`:
 
@@ -508,7 +508,7 @@ def test_apply_extraction_writes_monetary_change_from_120d_for_quality_gap():
     assert entry["as_of_date"] == "2026-05-22"
 ```
 
-- [ ] **Step 2: Run writeback tests and verify failure**
+- [x] **Step 2: Run writeback tests and verify failure**
 
 Run:
 
@@ -520,7 +520,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: both tests fail because `_apply_extraction()` currently writes current values but not compare fields.
 
-- [ ] **Step 3: Implement compare-field writeback**
+- [x] **Step 3: Implement compare-field writeback**
 
 In `scripts/stage2_unified_enhancer.py`, inside `_apply_extraction()` add this helper near `_write_common_fields()`:
 
@@ -554,7 +554,7 @@ In the monetary branch, after `_write_period_fields(entry)`, add:
         _copy_non_null(entry, "rrr_type")
 ```
 
-- [ ] **Step 4: Run writeback tests and verify pass**
+- [x] **Step 4: Run writeback tests and verify pass**
 
 Run:
 
@@ -566,7 +566,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: both tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/stage2_unified_enhancer.py tests/test_stage2_unified.py
