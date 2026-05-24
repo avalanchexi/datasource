@@ -1517,9 +1517,15 @@ def test_task_planner_routes_estimated_etf_fallback_without_missing_item(tmp_pat
 
     etf_tasks = [task for task in tasks if task["indicator_key"] == "etf"]
     assert len(etf_tasks) == 1
-    assert etf_tasks[0]["trigger_reason"] == "estimated_fallback"
-    assert "recent_5d" in etf_tasks[0]["field_queries"]
-    assert "total_120d" in etf_tasks[0]["field_queries"]
+    task = etf_tasks[0]
+    assert task["indicator_key"] == "etf"
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "estimated_not_allowed"
+    assert task["quality_gap_category"] == "fund_flow"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
+    assert "recent_5d" in task["field_queries"]
+    assert "total_120d" in task["field_queries"]
 
 
 def test_task_planner_passes_report_usage_contract_to_task(tmp_path: Path):
