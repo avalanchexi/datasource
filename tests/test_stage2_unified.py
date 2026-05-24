@@ -1100,7 +1100,13 @@ def test_task_planner_picks_stale_entries(tmp_path: Path):
     payload = {
         "missing_items": [],
         "macro_indicators": {
-            "cpi": {"current_value": 0.8, "is_stale": True, "expected_period": "2026-01"},
+            "cpi": {
+                "current_value": 0.8,
+                "previous_value": 0.3,
+                "change_rate": 166.7,
+                "is_stale": True,
+                "expected_period": "2026-01",
+            },
         },
     }
     planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
@@ -1110,6 +1116,150 @@ def test_task_planner_picks_stale_entries(tmp_path: Path):
     assert task_map["cpi"]["trigger_reason"] == "stale_data"
     assert task_map["cpi"]["expected_period"] == "2026-01"
     assert "2026-01" in task_map["cpi"]["expected_period_tokens"]
+
+
+def test_task_planner_adds_force_refresh_task_for_macro_quality_gap(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": 4.1,
+                "previous_value": None,
+                "change_rate": None,
+                "unit": "%",
+                "date": "2026-04",
+                "report_period": "2026-04",
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    industrial_tasks = [task for task in tasks if task["indicator_key"] == "industrial"]
+    assert len(industrial_tasks) == 1
+    task = industrial_tasks[0]
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "missing_compare_values"
+    assert task["quality_gap_category"] == "macro_indicators"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["current_value", "previous_value", "change_rate"]
+    assert task["expected_period"] == "2026-04"
+
+
+def test_task_planner_adds_force_refresh_task_for_monetary_quality_gap(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "unit": "%",
+                "date": "2026-05-22",
+                "is_estimated": False,
+            }
+        },
+        "fund_flow": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    repo_tasks = [task for task in tasks if task["indicator_key"] == "reverse_repo"]
+    assert len(repo_tasks) == 1
+    task = repo_tasks[0]
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "missing_compare_values"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["current_value", "change_from_120d"]
+
+
+def test_task_planner_adds_force_refresh_task_for_etf_window_gap(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "fund_flow": {
+            "etf": {
+                "type": "etf",
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "待获取",
+                "source": "待WebSearch补充",
+                "is_estimated": False,
+            }
+        },
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    etf_tasks = [task for task in tasks if task["indicator_key"] == "etf"]
+    assert len(etf_tasks) == 1
+    task = etf_tasks[0]
+    assert task["trigger_reason"] == "quality_gap"
+    assert task["quality_gap_reason"] == "fund_flow_window_missing"
+    assert task["force_refresh"] is True
+    assert task["required_output_fields"] == ["recent_5d", "total_120d", "trend"]
+    assert "recent_5d" in task["field_queries"]
+    assert "total_120d" in task["field_queries"]
+
+
+def test_task_planner_quality_gap_wins_dedup_over_missing_item(tmp_path: Path):
+    payload = {
+        "metadata": {
+            "date": "2026-05-22",
+            "missing_items": {"macro_indicators": [{"key": "industrial", "reason": "missing_compare_values"}]},
+        },
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": 4.1,
+                "previous_value": None,
+                "change_rate": None,
+                "unit": "%",
+                "date": "2026-04",
+                "report_period": "2026-04",
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "missing_items": [{"key": "industrial", "reason": "manual_required"}],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    tasks = planner.build_tasks(payload)
+
+    industrial_tasks = [task for task in tasks if task["indicator_key"] == "industrial"]
+    assert len(industrial_tasks) == 1
+    assert industrial_tasks[0]["trigger_reason"] == "quality_gap"
+    assert industrial_tasks[0]["force_refresh"] is True
 
 
 def test_task_planner_expands_expected_period_for_query_families(tmp_path: Path):
