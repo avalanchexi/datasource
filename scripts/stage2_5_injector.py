@@ -564,6 +564,15 @@ def _single_trusted_explicit_https_url(
         return None
     if not any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains):
         return None
+    for field in OFFICIAL_MANUAL_TEXT_FIELDS:
+        for value in _iter_http_like_evidence(payload.get(field)):
+            if not _is_https_url_evidence(value):
+                return None
+            text_domain = _extract_domain(value)
+            if not text_domain:
+                return None
+            if not any(_official_domain_matches(text_domain, trusted_domain) for trusted_domain in trusted_domains):
+                return None
     return source_url
 
 
@@ -2603,6 +2612,8 @@ def _apply_monetary_entry(
     incoming_current_value = _coerce_float(payload.get("current_value"))
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
+    preserve_stale = existing_stale and not override_stale
+    original_stale_reason = entry.get("stale_reason")
     trusted_quality_override = _is_trusted_monetary_manual_quality_override(
         indicator_key,
         entry,
@@ -2718,8 +2729,12 @@ def _apply_monetary_entry(
         note_val += f"reason={fallback_reason}"
         entry['note'] = note_val
     if entry.get("current_value") is not None:
-        entry["is_stale"] = False
-        entry["stale_reason"] = None
+        if preserve_stale:
+            entry["is_stale"] = True
+            entry["stale_reason"] = original_stale_reason
+        else:
+            entry["is_stale"] = False
+            entry["stale_reason"] = None
     if summary is not None:
         if (
             force_override
