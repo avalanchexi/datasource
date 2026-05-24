@@ -120,6 +120,103 @@ def test_deepseek_schema_hint_keeps_non_fund_flow_core_small() -> None:
     assert "manual_required" in hint
 
 
+def test_deepseek_schema_hint_includes_requested_compare_fields() -> None:
+    hint = DeepSeekExtractionAgent._schema_hint(
+        is_fund_flow=False,
+        required_output_fields=[
+            "previous_value",
+            "change_rate",
+            "change_from_120d",
+            "value_type",
+            "yoy_month",
+            "yoy_ytd",
+            "rrr_type",
+            "unsupported_field",
+        ],
+    )
+
+    assert '"previous_value": float|null' in hint
+    assert '"change_rate": float|null' in hint
+    assert '"change_from_120d": float|null' in hint
+    assert '"value_type": str|null' in hint
+    assert '"yoy_month": float|null' in hint
+    assert '"yoy_ytd": float|null' in hint
+    assert '"rrr_type": str|null' in hint
+    assert "unsupported_field" not in hint
+
+
+def test_deepseek_extract_returns_requested_compare_fields(monkeypatch) -> None:
+    seen_messages: list[object] = []
+
+    class FakeCompletions:
+        async def create(self, **kwargs):
+            seen_messages.extend(kwargs["messages"])
+            message = SimpleNamespace(
+                content=json.dumps(
+                    {
+                        "value": "4.1",
+                        "unit": "%",
+                        "source_url": "https://www.stats.gov.cn/example.html",
+                        "as_of_date": None,
+                        "report_period": "2026-04",
+                        "manual_required": False,
+                        "manual_reason": None,
+                        "previous_value": "5.7",
+                        "change_rate": "-28.07",
+                        "change_from_120d": "0.0",
+                        "value_type": "yoy_month",
+                        "yoy_month": "4.1",
+                        "yoy_ytd": None,
+                        "rrr_type": "weighted",
+                    }
+                )
+            )
+            return SimpleNamespace(choices=[SimpleNamespace(message=message)])
+
+    class FakeChat:
+        def __init__(self):
+            self.completions = FakeCompletions()
+
+    class FakeClient:
+        def __init__(self):
+            self.chat = FakeChat()
+
+        def with_options(self, **kwargs):
+            return self
+
+    async def fake_ensure_client(self):
+        return FakeClient()
+
+    monkeypatch.setattr(DeepSeekExtractionAgent, "_ensure_client", fake_ensure_client)
+    agent = DeepSeekExtractionAgent(api_key="test-key")
+
+    result = asyncio.run(
+        agent.extract(
+            [{"url": "https://www.stats.gov.cn/example.html", "content": "工业增加值同比4.1%"}],
+            "industrial",
+            unit_hint="%",
+            required_output_fields=[
+                "previous_value",
+                "change_rate",
+                "change_from_120d",
+                "value_type",
+                "yoy_month",
+                "yoy_ytd",
+                "rrr_type",
+            ],
+        )
+    )
+
+    assert result["previous_value"] == 5.7
+    assert result["change_rate"] == -28.07
+    assert result["change_from_120d"] == 0.0
+    assert result["value_type"] == "yoy_month"
+    assert result["yoy_month"] == 4.1
+    assert result["yoy_ytd"] is None
+    assert result["rrr_type"] == "weighted"
+    assert "requested compare/window fields" in seen_messages[0]["content"]
+
+
 def test_deepseek_classifies_unterminated_json_as_truncated() -> None:
     exc = json.JSONDecodeError("Unterminated string starting at", '{"value": "abc', 10)
     assert DeepSeekExtractionAgent._json_error_reason(exc) == "deepseek_json_truncated"

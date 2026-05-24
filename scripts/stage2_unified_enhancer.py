@@ -1827,10 +1827,35 @@ def _apply_extraction(
         if source_url:
             entry["source_url"] = source_url
 
-    def _copy_non_null(entry: Dict[str, Any], field: str, source_field: Optional[str] = None) -> None:
+    def _copy_non_null(
+        entry: Dict[str, Any],
+        field: str,
+        source_field: Optional[str] = None,
+        numeric: bool = False,
+    ) -> None:
         field_value = extraction.get(source_field or field)
-        if field_value is not None:
-            entry[field] = field_value
+        if field_value is None:
+            return
+        if numeric:
+            parsed_value = _safe_number(field_value)
+            if parsed_value is None:
+                return
+            entry[field] = parsed_value
+            return
+        entry[field] = field_value
+
+    def _has_explicit_120d_change_basis() -> bool:
+        basis_text = " ".join(
+            str(extraction.get(field) or "")
+            for field in ("change_period", "metric_basis")
+        ).lower()
+        if any(token in basis_text for token in ("120d", "120日", "120-day")):
+            return True
+        note_text = str(extraction.get("note") or "").lower()
+        return (
+            "change_from_120d" in note_text
+            and any(token in note_text for token in ("120d", "120日", "120-day"))
+        )
 
     def _mark_official_non_estimated(entry: Dict[str, Any], category: str) -> None:
         evidence_snippets = snippets if snippets is not None else extraction.get("snippets") or task.get("snippets") or []
@@ -1851,10 +1876,9 @@ def _apply_extraction(
         entry = macro[indicator_key]
         _write_common_fields(entry, "current_value")
         _write_period_fields(entry)
-        for field in ("previous_value", "change_rate", "value_type", "yoy_month", "yoy_ytd"):
-            _copy_non_null(entry, field)
-        if report_period:
-            entry["report_period"] = report_period
+        for field in ("previous_value", "change_rate", "yoy_month", "yoy_ytd"):
+            _copy_non_null(entry, field, numeric=True)
+        _copy_non_null(entry, "value_type")
         if str(indicator_key).lower() == "bdi":
             allowed, reasons = is_estimated_allowlisted("macro_indicators", indicator_key, entry)
             if allowed:
@@ -1871,9 +1895,9 @@ def _apply_extraction(
         entry = monetary[monetary_key]
         _write_common_fields(entry, "current_value")
         _write_period_fields(entry)
-        _copy_non_null(entry, "change_from_120d")
-        if extraction.get("change_from_120d") is None:
-            _copy_non_null(entry, "change_from_120d", "change_rate")
+        _copy_non_null(entry, "change_from_120d", numeric=True)
+        if extraction.get("change_from_120d") is None and _has_explicit_120d_change_basis():
+            _copy_non_null(entry, "change_from_120d", "change_rate", numeric=True)
         _copy_non_null(entry, "rrr_type")
         _mark_official_non_estimated(entry, "monetary_policy")
         return "monetary_policy"
@@ -3834,14 +3858,22 @@ async def _execute_tasks(
         while attempts < 2:
             attempts += 1
             try:
+                extract_kwargs = {
+                    "unit_hint": task.get("unit"),
+                    "issuer_hint": task.get("issuer"),
+                    "request_timeout": deepseek_timeout,
+                }
+                if (
+                    task.get("required_output_fields")
+                    and _callable_supports_kwarg(extractor.extract, "required_output_fields")
+                ):
+                    extract_kwargs["required_output_fields"] = task.get("required_output_fields")
                 if task["indicator_key"] in serial_keys:
                     result = await _run_with_timeout(
                         extractor.extract(
                             snips,
                             task["indicator_key"],
-                            unit_hint=task.get("unit"),
-                            issuer_hint=task.get("issuer"),
-                            request_timeout=deepseek_timeout,
+                            **extract_kwargs,
                         )
                     )
                 else:
@@ -3850,9 +3882,7 @@ async def _execute_tasks(
                             extractor.extract(
                                 snips,
                                 task["indicator_key"],
-                                unit_hint=task.get("unit"),
-                                issuer_hint=task.get("issuer"),
-                                request_timeout=deepseek_timeout,
+                                **extract_kwargs,
                             )
                         )
                 result = result or {}

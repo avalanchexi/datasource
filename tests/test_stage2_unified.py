@@ -500,10 +500,11 @@ def test_apply_extraction_writes_macro_compare_fields_for_quality_gap():
     extraction = {
         "value": 4.1,
         "current_value": 4.1,
-        "previous_value": 5.7,
-        "change_rate": -28.07,
+        "previous_value": "5.7",
+        "change_rate": "-28.07",
         "value_type": "yoy_month",
-        "yoy_month": 4.1,
+        "yoy_month": "4.1",
+        "yoy_ytd": "N/A",
         "unit": "%",
         "source_url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260518_1963731.html",
         "note": "fixture",
@@ -519,7 +520,43 @@ def test_apply_extraction_writes_macro_compare_fields_for_quality_gap():
     assert entry["change_rate"] == pytest.approx(-28.07)
     assert entry["value_type"] == "yoy_month"
     assert entry["yoy_month"] == pytest.approx(4.1)
+    assert "yoy_ytd" not in entry
     assert entry["report_period"] == "2026-04"
+
+
+def test_apply_extraction_keeps_existing_macro_report_period_without_force_refresh():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": 4.1,
+                "unit": "%",
+                "date": "2026-04",
+                "report_period": "2026-04",
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+    }
+    task = {
+        "task_id": "industrial-refresh",
+        "indicator_key": "industrial",
+        "stage_phase": "essential",
+        "search_backend": "structured",
+    }
+    extraction = {
+        "value": 4.2,
+        "unit": "%",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/202606/t20260618.html",
+        "note": "fixture",
+        "report_period": "2026-05",
+    }
+
+    target = _apply_extraction(payload, task, extraction, snippets=[])
+
+    assert target == "macro_indicators"
+    assert payload["macro_indicators"]["industrial"]["report_period"] == "2026-04"
 
 
 def test_apply_extraction_writes_monetary_change_from_120d_for_quality_gap():
@@ -549,7 +586,7 @@ def test_apply_extraction_writes_monetary_change_from_120d_for_quality_gap():
     extraction = {
         "value": 1.4,
         "current_value": 1.4,
-        "change_from_120d": 0.0,
+        "change_from_120d": "0.0",
         "unit": "%",
         "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
         "note": "fixture",
@@ -563,6 +600,79 @@ def test_apply_extraction_writes_monetary_change_from_120d_for_quality_gap():
     assert entry["current_value"] == pytest.approx(1.4)
     assert entry["change_from_120d"] == pytest.approx(0.0)
     assert entry["as_of_date"] == "2026-05-22"
+
+
+def test_apply_extraction_does_not_copy_generic_monetary_change_rate_to_120d():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "unit": "%",
+            }
+        },
+        "fund_flow": {},
+    }
+    task = {
+        "task_id": "quality-reverse-repo",
+        "indicator_key": "reverse_repo",
+        "stage_phase": "essential",
+        "search_backend": "structured",
+        "trigger_reason": "quality_gap",
+        "force_refresh": True,
+    }
+    extraction = {
+        "value": 1.4,
+        "change_rate": "0.1",
+        "unit": "%",
+        "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+        "note": "generic period fixture",
+    }
+
+    target = _apply_extraction(payload, task, extraction, snippets=[])
+
+    assert target == "monetary_policy"
+    assert payload["monetary_policy"]["reverse_repo"]["change_from_120d"] is None
+
+
+def test_apply_extraction_copies_monetary_change_rate_when_marked_120d_basis():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "unit": "%",
+            }
+        },
+        "fund_flow": {},
+    }
+    task = {
+        "task_id": "quality-reverse-repo",
+        "indicator_key": "reverse_repo",
+        "stage_phase": "essential",
+        "search_backend": "structured",
+        "trigger_reason": "quality_gap",
+        "force_refresh": True,
+    }
+    extraction = {
+        "value": 1.4,
+        "change_rate": "0.0",
+        "change_period": "120d",
+        "unit": "%",
+        "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+        "note": "fixture change_from_120d evidence",
+    }
+
+    target = _apply_extraction(payload, task, extraction, snippets=[])
+
+    assert target == "monetary_policy"
+    assert payload["monetary_policy"]["reverse_repo"]["change_from_120d"] == pytest.approx(0.0)
 
 
 def test_apply_extraction_uses_exa_deepseek_source_label():
@@ -2440,6 +2550,160 @@ def test_execute_tasks_legacy_mcp_backend_still_searches(tmp_path: Path):
         )
     )
     assert client.called == 1
+    assert completed
+    assert not failures
+
+
+def test_execute_tasks_passes_required_output_fields_to_deepseek_extractor(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": None,
+                "previous_value": None,
+                "change_rate": None,
+                "unit": "%",
+            }
+        },
+        "missing_items": [{"key": "industrial"}],
+    }
+    task = {
+        "task_id": "quality-industrial",
+        "indicator_key": "industrial",
+        "stage_phase": "essential",
+        "search_backend": "tavily",
+        "preferred_domains": [],
+        "time_range": None,
+        "query": "工业增加值 2026年4月 同比",
+        "unit": "%",
+        "issuer": "国家统计局",
+        "retry_count": 0,
+        "created_at": 0,
+        "trigger_reason": "quality_gap",
+        "required_output_fields": ["current_value", "previous_value", "change_rate"],
+    }
+
+    class DummyClient:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://www.stats.gov.cn/example.html",
+                        "snippet": "2026年4月工业增加值同比增长4.1%，前值5.7%。",
+                        "content": "2026年4月工业增加值同比增长4.1%，前值5.7%。",
+                        "score": 0.9,
+                    }
+                ]
+            }
+
+    class DummyExtractor:
+        def __init__(self):
+            self.required_output_fields = None
+
+        async def extract(
+            self,
+            snippets,
+            indicator,
+            unit_hint=None,
+            issuer_hint=None,
+            request_timeout=None,
+            required_output_fields=None,
+        ):
+            self.required_output_fields = required_output_fields
+            return {
+                "value": 4.1,
+                "unit": unit_hint,
+                "source_url": "https://www.stats.gov.cn/example.html",
+                "confidence": 0.9,
+                "manual_required": False,
+                "previous_value": 5.7,
+                "change_rate": -28.07,
+            }
+
+    extractor = DummyExtractor()
+    completed, failures, _ = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            extractor,
+            tmp_path / "required_fields.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+        )
+    )
+
+    assert completed
+    assert not failures
+    assert extractor.required_output_fields == ["current_value", "previous_value", "change_rate"]
+
+
+def test_execute_tasks_omits_required_output_fields_for_legacy_extractors(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": None,
+                "unit": "%",
+            }
+        },
+        "missing_items": [{"key": "industrial"}],
+    }
+    task = {
+        "task_id": "quality-industrial",
+        "indicator_key": "industrial",
+        "stage_phase": "essential",
+        "search_backend": "tavily",
+        "preferred_domains": [],
+        "time_range": None,
+        "query": "工业增加值 2026年4月 同比",
+        "unit": "%",
+        "issuer": "国家统计局",
+        "retry_count": 0,
+        "created_at": 0,
+        "trigger_reason": "quality_gap",
+        "required_output_fields": ["current_value", "previous_value", "change_rate"],
+    }
+
+    class DummyClient:
+        async def search(self, *args, **kwargs):
+            return {
+                "results": [
+                    {
+                        "url": "https://www.stats.gov.cn/example.html",
+                        "snippet": "2026年4月工业增加值同比增长4.1%。",
+                        "content": "2026年4月工业增加值同比增长4.1%。",
+                        "score": 0.9,
+                    }
+                ]
+            }
+
+    class LegacyExtractor:
+        async def extract(self, snippets, indicator, unit_hint=None, issuer_hint=None, request_timeout=None):
+            return {
+                "value": 4.1,
+                "unit": unit_hint,
+                "source_url": "https://www.stats.gov.cn/example.html",
+                "confidence": 0.9,
+                "manual_required": False,
+            }
+
+    completed, failures, _ = asyncio.run(
+        _execute_tasks(
+            [task],
+            payload,
+            DummyClient(),
+            None,
+            LegacyExtractor(),
+            tmp_path / "legacy_required_fields.jsonl",
+            cache_ttl=10,
+            extraction_backend="deepseek",
+        )
+    )
+
     assert completed
     assert not failures
 

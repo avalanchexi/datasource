@@ -29,6 +29,27 @@ except Exception:  # pragma: no cover - 环境缺省时延迟导入
 class DeepSeekExtractionAgent:
     """从 Tavily 搜索结果里提取结构化指标的轻量代理"""
 
+    _EXTRA_NUMERIC_FIELDS = {
+        "previous_value",
+        "change_rate",
+        "change_from_120d",
+        "yoy_month",
+        "yoy_ytd",
+    }
+    _EXTRA_STRING_FIELDS = {
+        "value_type",
+        "rrr_type",
+    }
+    _EXTRA_FIELD_SCHEMA = {
+        "previous_value": '"previous_value": float|null',
+        "change_rate": '"change_rate": float|null',
+        "change_from_120d": '"change_from_120d": float|null',
+        "value_type": '"value_type": str|null',
+        "yoy_month": '"yoy_month": float|null',
+        "yoy_ytd": '"yoy_ytd": float|null',
+        "rrr_type": '"rrr_type": str|null',
+    }
+
     def __init__(
         self,
         api_key: Optional[str] = None,
@@ -352,8 +373,39 @@ class DeepSeekExtractionAgent:
             pass
         return fallback_url, False
 
-    @staticmethod
-    def _schema_hint(is_fund_flow: bool) -> str:
+    @classmethod
+    def _requested_extra_fields(cls, required_output_fields: Optional[List[str]]) -> List[str]:
+        fields: List[str] = []
+        for field in required_output_fields or []:
+            if field in cls._EXTRA_FIELD_SCHEMA and field not in fields:
+                fields.append(field)
+        return fields
+
+    @classmethod
+    def _empty_extra_fields(cls, required_output_fields: Optional[List[str]]) -> Dict[str, Any]:
+        return {field: None for field in cls._requested_extra_fields(required_output_fields)}
+
+    @classmethod
+    def _extract_extra_fields(
+        cls,
+        data: Dict[str, Any],
+        required_output_fields: Optional[List[str]],
+    ) -> Dict[str, Any]:
+        extras: Dict[str, Any] = {}
+        for field in cls._requested_extra_fields(required_output_fields):
+            if field in cls._EXTRA_NUMERIC_FIELDS:
+                extras[field] = cls._to_float(data.get(field))
+            else:
+                value = data.get(field)
+                extras[field] = None if value is None else str(value)
+        return extras
+
+    @classmethod
+    def _schema_hint(
+        cls,
+        is_fund_flow: bool,
+        required_output_fields: Optional[List[str]] = None,
+    ) -> str:
         fields = [
             '"value": float|null',
             '"unit": str|null',
@@ -371,6 +423,8 @@ class DeepSeekExtractionAgent:
                     '"trend": "inflow"|"outflow"|"unknown"',
                 ]
             )
+        for field in cls._requested_extra_fields(required_output_fields):
+            fields.append(cls._EXTRA_FIELD_SCHEMA[field])
         return "{" + ", ".join(fields) + "}"
 
     @staticmethod
@@ -404,6 +458,7 @@ class DeepSeekExtractionAgent:
         unit_hint: Optional[str] = None,
         issuer_hint: Optional[str] = None,
         request_timeout: Optional[float] = None,
+        required_output_fields: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         从 Tavily 结果中提取结构化字段。
@@ -417,6 +472,7 @@ class DeepSeekExtractionAgent:
         combined_text = self._combine_text(snippets).lower()
         first_url = snippets[0].get("url") if snippets else None
         is_fund_flow = self._is_fund_flow_indicator(indicator)
+        empty_extra_fields = self._empty_extra_fields(required_output_fields)
 
         # 兜底：无密钥或无法导入时直接返回简单提取
         if client is None:
@@ -443,9 +499,10 @@ class DeepSeekExtractionAgent:
                 "recent_5d": None,
                 "total_120d": None,
                 "trend": trend,
+                **empty_extra_fields,
             }
 
-        schema_hint = self._schema_hint(is_fund_flow)
+        schema_hint = self._schema_hint(is_fund_flow, required_output_fields=required_output_fields)
         prompt = (
             "你是财经数据抽取助手。"
             "必须仅基于提供的 snippets 抽取，不得猜测或补造。"
@@ -455,6 +512,12 @@ class DeepSeekExtractionAgent:
             "将 value 置 null，并设置 manual_required=true 与 manual_reason。"
             "若无法确认日期，as_of_date/report_period 可为 null。"
         )
+        requested_extra_fields = self._requested_extra_fields(required_output_fields)
+        if requested_extra_fields:
+            prompt += (
+                " Extract requested compare/window fields when evidence exists: "
+                f"{', '.join(requested_extra_fields)}."
+            )
         if unit_hint:
             prompt += f" 单位约束：优先提取单位为 {unit_hint} 的值。"
         if issuer_hint:
@@ -505,6 +568,7 @@ class DeepSeekExtractionAgent:
                     "recent_5d": None,
                     "total_120d": None,
                     "trend": "unknown",
+                    **empty_extra_fields,
                 }
             value = self._to_float(data.get("value"))
             unit_val = data.get("unit") or unit_hint
@@ -533,6 +597,7 @@ class DeepSeekExtractionAgent:
             recent_5d = self._to_float(data.get("recent_5d"))
             total_120d = self._to_float(data.get("total_120d"))
             trend = self._normalize_trend(data.get("trend"))
+            extra_fields = self._extract_extra_fields(data, required_output_fields)
             if is_fund_flow:
                 if trend == "unknown" and value is not None:
                     trend = "inflow" if value > 0 else ("outflow" if value < 0 else "unknown")
@@ -560,6 +625,7 @@ class DeepSeekExtractionAgent:
                 "recent_5d": recent_5d,
                 "total_120d": total_120d,
                 "trend": trend,
+                **extra_fields,
             }
         except Exception as exc:  # pragma: no cover - 网络异常兜底
             logger.warning(f"DeepSeek 请求失败，使用 regex 兜底: {exc}")
@@ -585,6 +651,7 @@ class DeepSeekExtractionAgent:
                 "recent_5d": None,
                 "total_120d": None,
                 "trend": trend,
+                **empty_extra_fields,
             }
 
 
