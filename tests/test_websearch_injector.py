@@ -879,7 +879,7 @@ def test_macro_entry_same_value_updates_metadata_without_force():
         {
             "category": "macro_indicators",
             "key": "cpi",
-            "reason": "same_numeric_value_metadata_updated",
+            "reason": "same_numeric_value_report_fields_merged",
             "existing_value": 2.1,
             "incoming_value": 2.1,
         }
@@ -1060,6 +1060,175 @@ def _has_quality_blocker(output, category, key, reason="estimated_not_allowed"):
         "key": key,
         "reason": reason,
     } in output["metadata"].get("quality_blockers", [])
+
+
+def test_apply_macro_entry_same_value_merges_compare_fields():
+    entry = {
+        "indicator_name": "industrial",
+        "current_value": 4.1,
+        "previous_value": None,
+        "change_rate": None,
+        "value_type": None,
+    }
+    payload = {
+        "current_value": 4.1,
+        "previous_value": 5.7,
+        "change_rate": -28.07,
+        "value_type": "yoy_month",
+        "yoy_month": 4.1,
+        "source": "manual",
+        "source_url": "https://www.stats.gov.cn/industrial",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_macro_entry(
+        "industrial",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(4.1)
+    assert entry["previous_value"] == pytest.approx(5.7)
+    assert entry["change_rate"] == pytest.approx(-28.07)
+    assert entry["value_type"] == "yoy_month"
+    assert entry["yoy_month"] == pytest.approx(4.1)
+    assert entry["source_url"] == "https://www.stats.gov.cn/industrial"
+
+
+def test_apply_monetary_entry_same_value_merges_change_and_non_estimated_flag():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 6.3,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manual_value():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
+    market_data = {
+        "metadata": {"date": "2026-04-30"},
+        "missing_items": [],
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "industrial",
+                "current_value": 4.1,
+                "previous_value": None,
+                "change_rate": None,
+                "value_type": None,
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {
+            "reserve_ratio": {
+                "policy_name": "reserve_ratio",
+                "current_value": 6.3,
+                "change_from_120d": None,
+                "is_estimated": True,
+            }
+        },
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    injector._apply_macro_entry(
+        "industrial",
+        market_data["macro_indicators"]["industrial"],
+        {
+            "current_value": 4.1,
+            "previous_value": 5.7,
+            "change_rate": -28.07,
+            "value_type": "yoy_month",
+            "yoy_month": 4.1,
+            "source": "manual",
+            "source_url": "https://www.stats.gov.cn/industrial",
+            "is_estimated": False,
+        },
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+    injector._apply_monetary_entry(
+        "reserve_ratio",
+        market_data["monetary_policy"]["reserve_ratio"],
+        {
+            "current_value": 6.3,
+            "change_from_120d": 0.0,
+            "source_url": "https://www.pbc.gov.cn/rrr",
+            "is_estimated": False,
+            "rrr_type": "weighted",
+        },
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    injector._apply_pipeline_quality_state(market_data)
+
+    assert not _has_quality_blocker(market_data, "macro_indicators", "industrial", "missing_compare_values")
+    assert not _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio", "missing_compare_values")
+    assert not _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio")
 
 
 @pytest.mark.parametrize(

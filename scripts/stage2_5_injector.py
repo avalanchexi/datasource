@@ -133,6 +133,9 @@ OFFICIAL_MANUAL_SOURCES = {
     },
     "bonds": {},
 }
+TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS = {
+    "reserve_ratio": ("pbc.gov.cn", "chinamoney.com.cn"),
+}
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
 
 _POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
@@ -2177,6 +2180,84 @@ def _update_metadata_only(entry: Dict[str, Any], payload: Dict[str, Any]) -> boo
     return changed
 
 
+def _merge_same_value_report_fields(
+    entry: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    category: str,
+    key: str,
+    is_manual: bool = False,
+) -> bool:
+    changed = _update_metadata_only(entry, payload)
+
+    def set_if_changed(field: str, value: Any) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if entry.get(field) != value:
+            entry[field] = value
+            changed = True
+
+    if category == "macro_indicators":
+        for field in ("previous_value", "change_rate", "yoy_month", "yoy_ytd"):
+            if field in payload:
+                set_if_changed(field, _coerce_float(payload.get(field)))
+        for field in ("value_type", "report_period"):
+            if field in payload:
+                set_if_changed(field, payload.get(field))
+    elif category == "monetary_policy":
+        if "change_from_120d" in payload:
+            change_value = payload.get("change_from_120d")
+        else:
+            change_value = payload.get("change_rate")
+        set_if_changed("change_from_120d", _coerce_float(change_value))
+
+        incoming_rrr_type = _normalize_rrr_type(payload.get("rrr_type") or payload.get("value_type"))
+        set_if_changed("rrr_type", incoming_rrr_type)
+
+        if is_manual:
+            before_estimated = entry.get("is_estimated")
+            before_note = entry.get("note")
+            _apply_manual_official_estimation_rule(category, key, payload, entry)
+            changed = (
+                changed
+                or before_estimated != entry.get("is_estimated")
+                or before_note != entry.get("note")
+            )
+
+    if changed and entry.get("current_value") is not None:
+        entry["is_stale"] = False
+        entry["stale_reason"] = None
+    return changed
+
+
+def _is_trusted_monetary_manual_quality_override(
+    indicator_key: str,
+    entry: Dict[str, Any],
+    payload: Dict[str, Any],
+    incoming_current_value: Optional[float],
+    *,
+    is_manual: bool,
+) -> bool:
+    key = "reserve_ratio" if indicator_key in {"rrr", "reserve_ratio"} else indicator_key
+    if not is_manual or key not in TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS:
+        return False
+    if incoming_current_value is None:
+        return False
+    if not bool(entry.get("is_estimated")):
+        return False
+    if "is_estimated" not in payload or _coerce_bool(payload.get("is_estimated")) is not False:
+        return False
+    source_url = _extract_source_url(payload)
+    if not source_url:
+        return False
+    domain = _extract_domain(source_url)
+    return any(
+        _official_domain_matches(domain, trusted_domain)
+        for trusted_domain in TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS[key]
+    )
+
+
 def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -2215,12 +2296,18 @@ def _apply_macro_entry(
     existing_stale = bool(entry.get("is_stale"))
     if not force_override and not existing_placeholder and not (override_stale and existing_stale):
         if _same_numeric_value(original_current_value, incoming_current_value):
-            if _update_metadata_only(entry, payload):
+            if _merge_same_value_report_fields(
+                entry,
+                payload,
+                category="macro_indicators",
+                key=indicator_key,
+                is_manual=is_manual,
+            ):
                 if summary is not None:
                     summary.metadata_updated(
                         "macro_indicators",
                         indicator_key,
-                        "same_numeric_value_metadata_updated",
+                        "same_numeric_value_report_fields_merged",
                         original_current_value,
                         incoming_current_value,
                     )
@@ -2453,40 +2540,48 @@ def _apply_monetary_entry(
     incoming_current_value = _coerce_float(payload.get("current_value"))
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
-    if not force_override and not existing_placeholder and not (override_stale and existing_stale):
+    trusted_quality_override = _is_trusted_monetary_manual_quality_override(
+        indicator_key,
+        entry,
+        payload,
+        incoming_current_value,
+        is_manual=is_manual,
+    )
+    if (
+        not force_override
+        and not existing_placeholder
+        and not (override_stale and existing_stale)
+    ):
         if _same_numeric_value(original_current_value, incoming_current_value):
-            changed = _update_metadata_only(entry, payload)
-            if is_manual:
-                before_estimated = entry.get("is_estimated")
-                before_note = entry.get("note")
-                _apply_manual_official_estimation_rule("monetary_policy", indicator_key, payload, entry)
-                changed = (
-                    changed
-                    or before_estimated != entry.get("is_estimated")
-                    or before_note != entry.get("note")
-                )
-            if changed:
+            if _merge_same_value_report_fields(
+                entry,
+                payload,
+                category="monetary_policy",
+                key=indicator_key,
+                is_manual=is_manual,
+            ):
                 if summary is not None:
                     summary.metadata_updated(
                         "monetary_policy",
                         indicator_key,
-                        "same_numeric_value_metadata_updated",
+                        "same_numeric_value_report_fields_merged",
                         original_current_value,
                         incoming_current_value,
                     )
                 return True
-        if summary is not None:
-            if incoming_current_value is None:
-                summary.skipped_no_parseable_value("monetary_policy", indicator_key)
-            else:
-                summary.skipped_existing(
-                    "monetary_policy",
-                    indicator_key,
-                    "existing_value_present",
-                    original_current_value,
-                    incoming_current_value,
-                )
-        return False
+        if not trusted_quality_override:
+            if summary is not None:
+                if incoming_current_value is None:
+                    summary.skipped_no_parseable_value("monetary_policy", indicator_key)
+                else:
+                    summary.skipped_existing(
+                        "monetary_policy",
+                        indicator_key,
+                        "existing_value_present",
+                        original_current_value,
+                        incoming_current_value,
+                    )
+            return False
     entry['policy_name'] = payload.get('policy_name', entry.get('policy_name'))
     incoming_value = _coerce_float(payload.get('current_value'))
     change_value = payload.get('change_from_120d', payload.get('change_rate'))
