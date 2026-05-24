@@ -1488,7 +1488,7 @@ git commit -m "docs: document stage2 quality gap closure"
 **Files:**
 - Verify only; no source edits in this task.
 
-- [ ] **Step 1: Run focused Stage2 planner/writeback tests**
+- [x] **Step 1: Run focused Stage2 planner/writeback tests**
 
 Run:
 
@@ -1504,7 +1504,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 2: Run focused Stage2.5 tests**
+- [x] **Step 2: Run focused Stage2.5 tests**
 
 Run:
 
@@ -1518,7 +1518,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 3: Run focused structured provider tests**
+- [x] **Step 3: Run focused structured provider tests**
 
 Run:
 
@@ -1532,7 +1532,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all selected tests pass.
 
-- [ ] **Step 4: Run broader regression set**
+- [x] **Step 4: Run broader regression set**
 
 Run:
 
@@ -1547,7 +1547,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: all selected files pass.
 
-- [ ] **Step 5: Commit verification-only checkpoint if code changed during fixes**
+- [x] **Step 5: Commit verification-only checkpoint if code changed during fixes**
 
 If Task 7 required source or test edits, commit them:
 
