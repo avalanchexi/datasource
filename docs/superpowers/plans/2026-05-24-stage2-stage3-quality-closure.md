@@ -1316,7 +1316,7 @@ git commit -m "feat: add tushare etf structured provider"
 **Files:**
 - Modify: `tests/test_stage2_structured_integration.py`
 
-- [ ] **Step 1: Add failing integration test**
+- [x] **Step 1: Add failing integration test**
 
 Append this registry and test to `tests/test_stage2_structured_integration.py`:
 
@@ -1415,7 +1415,7 @@ async def test_execute_tasks_quality_gap_force_refresh_does_not_skip_existing_ma
     assert stats["structured_provider"]["success"] == 1
 ```
 
-- [ ] **Step 2: Run integration test and verify pass**
+- [x] **Step 2: Run integration test and verify pass**
 
 Run:
 
@@ -1426,7 +1426,7 @@ bash run_clean.sh python -m pytest -q \
 
 Expected: pass after Tasks 1 and 2. Without `force_refresh=True`, this task would be skipped before structured provider lookup because `macro_indicators.industrial.current_value` already exists.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/test_stage2_structured_integration.py
