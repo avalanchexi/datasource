@@ -471,6 +471,100 @@ def test_apply_extraction_clears_stale_status_on_matching_force_refresh():
     assert entry["stale_reason"] is None
 
 
+def test_apply_extraction_writes_macro_compare_fields_for_quality_gap():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "工业增加值",
+                "current_value": 4.1,
+                "previous_value": None,
+                "change_rate": None,
+                "unit": "%",
+                "date": "2026-04",
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {},
+        "fund_flow": {},
+    }
+    task = {
+        "task_id": "quality-industrial",
+        "indicator_key": "industrial",
+        "stage_phase": "essential",
+        "search_backend": "structured",
+        "trigger_reason": "quality_gap",
+        "force_refresh": True,
+        "expected_period": "2026-04",
+    }
+    extraction = {
+        "value": 4.1,
+        "current_value": 4.1,
+        "previous_value": 5.7,
+        "change_rate": -28.07,
+        "value_type": "yoy_month",
+        "yoy_month": 4.1,
+        "unit": "%",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260518_1963731.html",
+        "note": "fixture",
+        "report_period": "2026-04",
+    }
+
+    target = _apply_extraction(payload, task, extraction, snippets=[])
+
+    assert target == "macro_indicators"
+    entry = payload["macro_indicators"]["industrial"]
+    assert entry["current_value"] == pytest.approx(4.1)
+    assert entry["previous_value"] == pytest.approx(5.7)
+    assert entry["change_rate"] == pytest.approx(-28.07)
+    assert entry["value_type"] == "yoy_month"
+    assert entry["yoy_month"] == pytest.approx(4.1)
+    assert entry["report_period"] == "2026-04"
+
+
+def test_apply_extraction_writes_monetary_change_from_120d_for_quality_gap():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "unit": "%",
+                "date": "2026-05-22",
+                "is_estimated": False,
+            }
+        },
+        "fund_flow": {},
+    }
+    task = {
+        "task_id": "quality-reverse-repo",
+        "indicator_key": "reverse_repo",
+        "stage_phase": "essential",
+        "search_backend": "structured",
+        "trigger_reason": "quality_gap",
+        "force_refresh": True,
+    }
+    extraction = {
+        "value": 1.4,
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "unit": "%",
+        "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+        "note": "fixture",
+        "as_of_date": "2026-05-22",
+    }
+
+    target = _apply_extraction(payload, task, extraction, snippets=[])
+
+    assert target == "monetary_policy"
+    entry = payload["monetary_policy"]["reverse_repo"]
+    assert entry["current_value"] == pytest.approx(1.4)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["as_of_date"] == "2026-05-22"
+
+
 def test_apply_extraction_uses_exa_deepseek_source_label():
     market_payload = {
         "commodities": [
