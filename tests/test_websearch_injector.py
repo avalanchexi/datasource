@@ -297,6 +297,40 @@ def test_merge_bond_entry_preserves_date_fields(monkeypatch):
     assert merged["as_of_date"] == "2026-02-09"
 
 
+def test_backfill_cdb_proxy_changes_from_cn10y_for_estimated_spread():
+    market_data = {
+        "bonds": [
+            {
+                "symbol": "CN10Y",
+                "current_yield": 1.7519,
+                "change_5d_bp": -1.39,
+                "change_120d_bp": -8.3,
+            },
+            {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 1.85,
+                "change_5d_bp": None,
+                "change_120d_bp": None,
+                "trend": "未知",
+                "is_estimated": True,
+                "source": "CN10Y plus observed CDB spread",
+                "estimation_method": "CN10Y plus observed CDB spread",
+                "note": "reason=trend_history_insufficient",
+            },
+        ]
+    }
+
+    changed = injector._backfill_cdb_proxy_changes_from_cn10y(market_data)
+
+    cdb = market_data["bonds"][1]
+    assert changed == 2
+    assert cdb["change_5d_bp"] == pytest.approx(-1.39)
+    assert cdb["change_120d_bp"] == pytest.approx(-8.3)
+    assert cdb["trend"] == "平稳"
+    assert "cn10y_proxy_change_basis" in cdb["note"]
+    assert cdb["is_estimated"] is True
+
+
 def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
     entry = {
         "policy_name": "MLF利率",

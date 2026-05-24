@@ -161,6 +161,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - Stage2.5 same-value merge 可在 incoming current 与 existing current 相同的情况下合并 `previous_value/change_rate/change_from_120d/value_type/rrr_type/is_estimated/source_url` 等 report-readiness 字段，用于关闭 Stage3 compare/window blockers；但不得用非官方 manual 来源覆盖已有官方 `source_url/source/note`。
 - official override 仅用于代码内 `official manual override allowlist`：`monetary_policy.mlf`、`forex.USDCNY`、`commodities.BCOM`。只有可信官方 HTTPS URL evidence 才会把显式 `is_estimated=True` 正规化为 `False`，并追加 `manual_official_not_estimated`。
 - `reserve_ratio` estimated fallback replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false` 且有单一显式 HTTPS PBoC URL（`pbc.gov.cn`）；`chinamoney.com.cn` 不释放该 quality override，文本 URL 只能作为一致性证据，多个/conflicting 文本 URL 拒绝。
+- `CN10Y_CDB` 使用 `CN10Y plus observed CDB spread` 估算时，Stage2.5 可沿用 `CN10Y` 的 5d/120d bp 变化作为估算变化口径；必须保留 `is_estimated=true` 和 `cn10y_proxy_change_basis`。
 - 代码内 `official manual override allowlist` 不同于 `config/policy_rules.yaml` 的 `estimated_allowlist_keys`；后者当前为 `CN10Y_CDB`、`bdi`，用于 Stage3/quality 对 `is_estimated=True` 的估计值评分/告警处理，不是 BCOM/USDCNY/MLF 的 estimated allowlist。
 - official override 要求显式 URL 字段是单个字符串 URL；混入说明文字、多个 URL、非 HTTPS、非法端口、untrusted/spoof/conflicting URL 均不触发。ETF/fund_flow 不在代码内 `official manual override allowlist`；普通 manual 来源不会因为不是官方域名而默认改成 estimated/blocked。
 - Stage2.5 中 `macro_indicators.change_rate` 统一为百分比口径（`(current-previous)/abs(previous)*100`），分母为 0 时保留缺口并标记质量阻断。

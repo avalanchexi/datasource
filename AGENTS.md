@@ -315,6 +315,7 @@ if comp < 0.8:
 - `USDCNH`: `fx_daily` 优先使用 `ts_code=USDCNH.FXCM`；`USDCNH` 常返回空。
 - `CN10Y`: 优先 `yc_cb(ts_code=1001.CB, curve_type=0, curve_term=10)`；若空则回退 `curve_type=1`。
 - `CN10Y_CDB`: 当前无稳定 TuShare 直采口径，仍需 WebSearch/手工注入；若为利差估算需保留 `is_estimated=True`。
+- `CN10Y_CDB` 若使用 `CN10Y plus observed CDB spread` 估算当前值，Stage2.5 可沿用同日 `CN10Y` 的 `change_5d_bp/change_120d_bp` 作为估算变化口径，并保留 `is_estimated=True` 与 `cn10y_proxy_change_basis` 说明。
 - 不得静默用近似 TuShare 接口替换 `commodities.GC=F/CL=F/BZ=F/HG=F`、`commodities.BCOM`、`commodities.GSG`、`bonds.CN10Y_CDB`、`macro_indicators.industrial`、`macro_indicators.industrial_sales`、`macro_indicators.bdi`、`monetary_policy.reserve_ratio`、`monetary_policy.reverse_repo`、`monetary_policy.mlf`；无稳定口径时应进入 Stage2/Stage2.5 或保留质量阻断。
 - 债券日期列展示“最近可用日期”，优先 `as_of_date/date/report_period`，不强制等于报告日。Stage1/Stage2 写入债券收益率时不得清空已存在日期字段。
 - 宏观 `change_rate` 统一为百分比：`(current-previous)/abs(previous)*100`；分母为 0 时标记 `reason=change_rate_pct_div_by_zero` 并进入质量阻断。

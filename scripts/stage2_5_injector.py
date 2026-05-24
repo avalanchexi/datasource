@@ -3334,6 +3334,45 @@ def _append_note(entry: Dict[str, Any], message: str) -> None:
     entry["note"] = note
 
 
+def _backfill_cdb_proxy_changes_from_cn10y(market_data: Dict[str, Any]) -> int:
+    bonds = market_data.get("bonds", []) or []
+    cn10y = next((item for item in bonds if isinstance(item, dict) and item.get("symbol") == "CN10Y"), None)
+    cdb = next((item for item in bonds if isinstance(item, dict) and item.get("symbol") == "CN10Y_CDB"), None)
+    if not isinstance(cn10y, dict) or not isinstance(cdb, dict):
+        return 0
+    if not _has_valid_value(cdb.get("current_yield")) or not bool(cdb.get("is_estimated")):
+        return 0
+    basis_text = " ".join(
+        str(cdb.get(field) or "")
+        for field in ("source", "note", "estimation_method", "metric_basis")
+    ).lower()
+    if "cn10y" not in basis_text and "国债" not in basis_text:
+        return 0
+
+    changed = 0
+    for field in ("change_5d_bp", "change_120d_bp"):
+        if not _should_backfill_numeric(cdb.get(field)):
+            continue
+        proxy_value = _coerce_float(cn10y.get(field))
+        if proxy_value is None:
+            continue
+        cdb[field] = proxy_value
+        changed += 1
+
+    if changed:
+        cdb["trend"] = _infer_asset_trend(
+            cdb.get("trend"),
+            cdb.get("change_5d_bp"),
+            cdb.get("change_120d_bp"),
+            "bond",
+        )
+        cdb["note"] = _append_note_once(
+            str(cdb.get("note") or ""),
+            "cn10y_proxy_change_basis",
+        )
+    return changed
+
+
 def _remove_note_markers(entry: Dict[str, Any], markers: Tuple[str, ...]) -> None:
     """从 note 中移除已过期的原因标记（如 no_previous_value）。"""
     note = entry.get("note")
@@ -3464,6 +3503,7 @@ def _backfill_trend_changes(
                 bond.get("change_120d_bp"),
                 "bond",
             )
+    stats["bonds"] += _backfill_cdb_proxy_changes_from_cn10y(market_data)
 
     for fx in market_data.get("forex", []) or []:
         symbol = fx.get("pair")
