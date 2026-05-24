@@ -247,6 +247,26 @@ class FakeTuShareETFPro:
         )
 
 
+class LargeMoveTuShareETFPro(FakeTuShareETFPro):
+    def etf_share_size(self, trade_date, exchange=None, market=None):
+        exchange_value = exchange or market
+        index = self.trade_dates.index(trade_date)
+        if index <= 115:
+            total_yi = 50435.1099 + (43166.5479 - 50435.1099) * (index / 115.0)
+        else:
+            total_yi = 43166.5479 + (40000.0 - 43166.5479) * ((index - 115) / 5.0)
+        total_size_wan = total_yi * 10000.0 / 2.0
+        return pd.DataFrame(
+            [
+                {
+                    "trade_date": trade_date,
+                    "exchange": exchange_value,
+                    "total_size": total_size_wan,
+                }
+            ]
+        )
+
+
 @pytest.mark.asyncio
 async def test_execute_tasks_structured_success_writes_back_and_skips_search(tmp_path: Path):
     payload = _commodity_payload()
@@ -504,6 +524,59 @@ async def test_execute_tasks_tushare_etf_keeps_direct_window_metadata(tmp_path: 
     assert client.search_calls == 0
     assert client.extract_calls == 0
     assert extractor.calls == 0
+    assert websearch_results[0]["search_backend"] == "structured"
+
+
+@pytest.mark.asyncio
+async def test_execute_tasks_tushare_etf_accepts_large_scale_delta_with_direct_window(
+    tmp_path: Path,
+):
+    task = {
+        "task_id": "fund-flow-etf",
+        "indicator_key": "etf",
+        "category": "fund_flow",
+        "stage_phase": "assets",
+        "search_backend": "tavily",
+        "fund_flow_backend": "tavily",
+        "extraction_backend": "deepseek",
+        "query": "A股 ETF 资金流向",
+        "unit": "亿元",
+        "preferred_domains": [],
+        "created_at": 1700000000,
+    }
+    payload = {
+        "metadata": {"date": "2026-05-23", "missing_items": {"fund_flow": [{"key": "etf"}]}},
+        "fund_flow": {"etf": {"recent_5d": None, "total_120d": None, "is_estimated": False}},
+        "missing_items": ["etf"],
+    }
+    client = FailingTavilyClient()
+    extractor = FailingExtractor()
+    registry = StructuredProviderRegistry([TuShareETFProvider(pro=LargeMoveTuShareETFPro())])
+    stats = {}
+
+    completed, failures, websearch_results = await _execute_tasks(
+        [task],
+        payload,
+        client,
+        None,
+        extractor,
+        tmp_path / "task_log.jsonl",
+        cache_ttl=None,
+        stats=stats,
+        structured_registry=registry,
+    )
+
+    etf = payload["fund_flow"]["etf"]
+    assert len(completed) == 1
+    assert failures == []
+    assert etf["recent_5d"] == pytest.approx(-3166.5479)
+    assert etf["total_120d"] == pytest.approx(-10435.1099)
+    assert etf["metric_basis"] == "etf_total_size_delta"
+    assert etf["window_evidence"] == "direct_balance_delta"
+    assert etf["is_estimated"] is False
+    assert client.search_calls == 0
+    assert extractor.calls == 0
+    assert stats.get("structured_policy_gate_blocked", 0) == 0
     assert websearch_results[0]["search_backend"] == "structured"
 
 

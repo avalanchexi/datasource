@@ -5766,7 +5766,7 @@ _FUND_FLOW_BOUNDS: Dict[str, Dict[str, Tuple[float, float]]] = {
         "total_120d": (-8000.0, 8000.0),
     },
     "etf": {
-        "recent_5d": (-3000.0, 3000.0),
+        "recent_5d": (-8000.0, 8000.0),
         "total_120d": (-30000.0, 30000.0),
     },
     "margin": {
