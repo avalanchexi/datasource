@@ -538,7 +538,10 @@ class OfficialChinaProvider(Stage2StructuredProvider):
                 continue
             if any(token in label for token in exclude_tokens):
                 continue
-            return urljoin(base_url, href)
+            candidate_url = urljoin(base_url, href)
+            if candidate_url.rstrip("/") == str(base_url or "").rstrip("/"):
+                continue
+            return candidate_url
         return None
 
     @staticmethod

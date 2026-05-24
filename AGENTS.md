@@ -231,7 +231,7 @@ if comp < 0.8:
 - Stage2 extraction 会写回宏观 compare 字段和货币 `change_from_120d`，用于补齐报告可读性和关闭 Stage3 compare/window blockers。
 - Real-time search params: `language=chinese`, `topic=news`, `time_range=day`, `max_results<=8`, `search_depth=advanced`；宏观/低时效指标用 `time_range=year/month`, `max_results<=6`, `search_depth=basic`。
 - `search_profiles` 支持 `query_families`、`queries`、`field_queries`、`exclude_domains`、`max_query_candidates`、`extract_policy`；Stage2 记录 `query_used/query_family_used/query_attempts`。
-- Stage2 query context 区分 `daily_quote` 与 `monthly_period`：日频 quote 类任务（商品、DXY、BDI、BCOM/GSG 等）使用 `closing_date/ref_date` 模板，不继承宏观 `expected_period_tokens`；月度宏观/政策任务才使用 `expected_period/report_period` 期次 token。
+- Stage2 query context 区分 `daily_quote` 与 `monthly_period`：日频 quote/操作公告类任务（商品、DXY、BDI、BCOM/GSG、`reverse_repo`、`mlf` 等）使用 `closing_date/ref_date` 模板，不继承宏观 `expected_period_tokens`；月度宏观/政策任务才使用 `expected_period/report_period` 期次 token。
 - PMI 等中文宏观指标优先使用 `site:stats.gov.cn` 与国家统计局中文 query；商品期货、BCOM/GSG、DXY、BDI 等日频 quote profile 优先使用带日期/收盘/报价语义的 query，避免纯 `latest` 或概念性页面。
 - Stage2 候选排序以报告可写值为目标：可信域名、关键词和 issuer 命中后，还要优先包含目标单位、日期/期次和可解析数字的片段；概念页、规格页、fact card、annual weights、forecast/analysis 等通过 `bad_url_patterns` 或 `value_evidence_miss` 降级或剔除。
 - DeepSeek extraction 默认开启 queue：`--use-queue --queue-concurrency 3 --deepseek-max-concurrency 3`；默认抽取输出 token 为 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`；需要串行排查时显式传 `--no-use-queue`。

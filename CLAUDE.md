@@ -148,7 +148,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖；Stage2 抽取输出 token 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`。
 - DeepSeek extraction 默认开启 queue，默认 `--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查时显式传 `--no-use-queue`。
 - Stage2 默认直连：Tavily/DeepSeek 都不读取环境代理；只有 `DATASOURCE_NETWORK_MODE=proxy` 时才允许 proxy env。VPN 切换后先跑 `bash run_preflight.sh`。
-- Stage2 quote 搜索看 `time_context_type`：`daily_quote` 不带宏观月度 token，`monthly_period` 才带 `expected_period_tokens`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated`、`field_retry_merged_count`。
+- Stage2 quote/操作公告搜索看 `time_context_type`：`daily_quote` 不带宏观月度 token，并为官方来源校验提供 `ref_date`；`reverse_repo/mlf` 与商品、DXY、BDI、BCOM/GSG 同属该类。`monthly_period` 才带 `expected_period_tokens`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated`、`field_retry_merged_count`。
 - `search_profiles` 支持 `max_query_candidates` 与 `extract_policy`；`BCOM/GSG/DXY/CN10Y_CDB` 默认限制 3 个 query candidates，并跳过 Tavily extract 直接用 snippets 抽取，降低 422 和 Stage2.5 手工补数压力。
 - `USDCNY` 是 quote profile 的受控例外：ChinaMoney/CFETS 官方表格页可走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
 - dated quote profiles 会用 `bad_url_patterns` 和 `value_evidence_miss` 降权/剔除概念页、规格页、annual weights、forecast 等不可写报告页面。

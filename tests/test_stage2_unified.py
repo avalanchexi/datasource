@@ -638,6 +638,58 @@ def test_apply_extraction_does_not_copy_generic_monetary_change_rate_to_120d():
     assert payload["monetary_policy"]["reverse_repo"]["change_from_120d"] is None
 
 
+def test_apply_extraction_marks_official_reverse_repo_non_estimated_with_ref_date():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {
+            "reverse_repo": {
+                "policy_name": "7天逆回购利率",
+                "current_value": 1.4,
+                "change_from_120d": None,
+                "unit": "%",
+                "date": "2026-05-22",
+                "is_estimated": True,
+            }
+        },
+        "fund_flow": {},
+    }
+    source_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    task = {
+        "task_id": "official-reverse-repo",
+        "category": "monetary_policy",
+        "indicator_key": "reverse_repo",
+        "stage_phase": "essential",
+        "search_backend": "structured",
+        "trigger_reason": "quality_gap",
+        "force_refresh": True,
+        "unit": "%",
+        "ref_date": "2026-05-22",
+    }
+    extraction = {
+        "value": 1.4,
+        "unit": "%",
+        "source_url": source_url,
+        "note": "structured_provider:official_china",
+        "as_of_date": "2026-05-22",
+    }
+
+    target = _apply_extraction(
+        payload,
+        task,
+        extraction,
+        snippets=[{"url": source_url, "content": "2026年5月22日 7天期逆回购操作利率1.40%"}],
+    )
+
+    assert target == "monetary_policy"
+    entry = payload["monetary_policy"]["reverse_repo"]
+    assert entry["is_estimated"] is False
+    assert "official_source_period_unit_match" in entry["note"]
+
+
 def test_apply_extraction_copies_monetary_change_rate_when_marked_120d_basis():
     payload = {
         "metadata": {"date": "2026-05-22"},
@@ -1429,6 +1481,9 @@ def test_task_planner_adds_force_refresh_task_for_monetary_quality_gap(tmp_path:
     assert task["quality_gap_reason"] == "missing_compare_values"
     assert task["force_refresh"] is True
     assert task["required_output_fields"] == ["current_value", "change_from_120d"]
+    assert task["time_context_type"] == "daily_quote"
+    assert task["expected_period_tokens"] == []
+    assert task["ref_date"] == "2026-05-22"
 
 
 def test_task_planner_adds_force_refresh_task_for_etf_window_gap(tmp_path: Path):

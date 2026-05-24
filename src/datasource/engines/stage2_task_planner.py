@@ -54,6 +54,8 @@ DAILY_QUOTE_KEYS = {
     "US10Y",
     "CN10Y",
     "CN10Y_CDB",
+    "reverse_repo",
+    "mlf",
     "bdi",
     "000001",
     "000016",
@@ -596,6 +598,7 @@ class Stage2TaskPlanner:
             "time_context_type": time_context_type,
             "expected_period": expected_period,
             "expected_period_tokens": expected_period_tokens,
+            "ref_date": task_context.get("ref_date") if time_context_type == "daily_quote" else None,
             "retry_count": 0,
             "created_at": int(time.time()),
         }

@@ -986,6 +986,7 @@ async def test_official_china_provider_follows_reverse_repo_list_detail():
         "125475/2026052208514823570/index.html"
     )
     list_html = (
+        '<a href="./index.html">公开市场业务交易公告</a>'
         '<a href="./2026052208514823570/index.html">'
         "公开市场业务交易公告 [2026]第96号</a>"
     )
