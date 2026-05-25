@@ -213,7 +213,9 @@ def check_bdi_estimated_allow(
         reference_dt = reference_dt or datetime.now()
         age = (reference_dt.date() - dt.date()).days
         monday_after_friday = reference_dt.weekday() == 0 and dt.weekday() == 4 and age == 3
-        if age > max_age_days and not (weekend_grace and monday_after_friday):
+        if age < 0:
+            reasons.append(f"bdi_date_in_future:{age}d")
+        elif age > max_age_days and not (weekend_grace and monday_after_friday):
             reasons.append(f"bdi_date_stale:{age}d")
 
     return len(reasons) == 0, reasons
