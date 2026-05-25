@@ -344,6 +344,7 @@ def test_quality_gate_does_not_red_flag_estimated_allowlist_items():
         },
     }
     market = _base_market()
+    market["metadata"]["date"] = "2026-05-08"
     market["bonds"] = [
         {
             "symbol": "CN10Y_CDB",
@@ -371,6 +372,41 @@ def test_quality_gate_does_not_red_flag_estimated_allowlist_items():
     issues = simple_report._collect_quality_issues(market, policy_rules=rules)
 
     assert not issues
+
+
+def test_report_quality_section_uses_unified_state_for_manual_source_url(tmp_path: Path):
+    market = _base_market()
+    market["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "name": "COMEX Gold",
+            "current_price": 2650.5,
+            "unit": "$/oz",
+            "source": "websearch_manual",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_date": market["metadata"]["date"]},
+        "fallback_used": False,
+        "pending_websearch": [],
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "commodities.GC=F" in text
+    assert "缺失（缺少来源URL）" in text
 
 
 def test_report_shows_bdi_estimated_date_instead_of_pending_websearch(tmp_path: Path):

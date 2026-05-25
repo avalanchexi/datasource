@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from datasource.utils.coercion import to_float
-from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
+from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.quality_metrics import build_quality_metrics
 from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import load_series_values
@@ -43,6 +43,10 @@ QUALITY_REASON_LABELS = {
     "source_latest_only": "来源仅提供最新值",
     "manual_incomplete": "补数不完整",
     "estimated_not_allowed": "估算值禁用",
+    "missing_source_url": "缺少来源URL",
+    "primary_value_missing": "当前值缺失",
+    "missing_compare_values": "缺少对比值",
+    "fund_flow_window_missing": "资金流窗口缺失",
 }
 STOCK_INDEX_COMPAT_KEYS = {
     "000001": "上证指数",
@@ -576,79 +580,44 @@ def _bond_display_date(bond: dict, report_date: str) -> str:
     return "N/A"
 
 
-def _collect_quality_issues(market_data: dict, policy_rules: Optional[dict] = None) -> list[dict]:
-    issues: list[dict] = []
-    rules = policy_rules or load_policy_rules()
+def _default_quality_field(category: Any, reason: Any) -> str:
+    reason_text = str(reason or "")
+    category_text = str(category or "")
+    if reason_text == "missing_source_url":
+        return "source_url"
+    if reason_text == "missing_compare_values":
+        return "previous_value/change_rate" if category_text == "macro_indicators" else "change_from_120d"
+    if reason_text == "fund_flow_window_missing":
+        return "recent_5d/total_120d"
+    if reason_text == "primary_value_missing":
+        return "current_value"
+    return "value"
 
-    def _issue(category: str, key: str, field: str, reason: str, detail: Optional[str] = None) -> None:
-        if reason not in QUALITY_REASONS:
-            reason = "manual_incomplete"
+
+def _collect_quality_issues(market_data: dict, policy_rules: Optional[dict] = None) -> list[dict]:
+    state = build_pipeline_quality_state(
+        market_data,
+        policy_rules=policy_rules,
+        stage="stage4",
+        allow_estimated=True,
+    )
+    issues = []
+    for issue in state.get("quality_blockers") or []:
+        if not isinstance(issue, dict):
+            continue
+        details = issue.get("details")
+        field = ""
+        if isinstance(details, dict):
+            field = str(details.get("field") or "")
         issues.append(
             {
-                "category": category,
-                "key": key,
-                "field": field,
-                "reason": reason,
-                "detail": detail or "",
+                "category": issue.get("category"),
+                "key": issue.get("key"),
+                "field": field or _default_quality_field(issue.get("category"), issue.get("reason")),
+                "reason": issue.get("reason") or "manual_incomplete",
+                "detail": details or "",
             }
         )
-
-    def _as_list(section: Any) -> list:
-        if isinstance(section, dict):
-            return list(section.values())
-        return section or []
-
-    def _estimated_allowed(category: str, key: str, entry: dict) -> bool:
-        allowed, _ = is_estimated_allowlisted(category, key, entry, rules=rules)
-        return allowed
-
-    # Bonds: change_120d_bp 缺失
-    for bond in _as_list(market_data.get("bonds", [])):
-        symbol = bond.get("symbol") or bond.get("name") or "bond"
-        current = bond.get("current_yield")
-        if current in (None, 0.0):
-            _issue("bonds", symbol, "current_yield", "manual_incomplete")
-            continue
-        if bond.get("is_estimated") and not _estimated_allowed("bonds", str(symbol), bond):
-            _issue("bonds", str(symbol), "current_yield", "estimated_not_allowed")
-        change_120d = bond.get("change_120d_bp")
-        if change_120d is None:
-            source = str(bond.get("source", "")).lower()
-            if not _has_trend_history("bonds", str(symbol)):
-                reason = "trend_history_missing"
-            elif "tushare" in source or "us_tycr" in source:
-                reason = "source_latest_only"
-            else:
-                reason = "manual_incomplete"
-            _issue("bonds", str(symbol), "change_120d_bp", reason)
-
-    # Macro indicators: previous_value / change_rate
-    for key, indicator in (market_data.get("macro_indicators", {}) or {}).items():
-        if _is_non_macro_key(key):
-            continue
-        curr = indicator.get("current_value")
-        if curr in (None, "N/A"):
-            _issue("macro_indicators", key, "current_value", "manual_incomplete")
-            continue
-        if indicator.get("is_estimated") and not _estimated_allowed("macro_indicators", key, indicator):
-            _issue("macro_indicators", key, "current_value", "estimated_not_allowed")
-        reason = _extract_reason(indicator.get("note"))
-        if indicator.get("previous_value") is None and indicator.get("change_rate") is None:
-            _issue("macro_indicators", key, "previous_value", reason or "no_previous_value")
-
-    # Monetary policy: change_from_120d
-    for key, policy in (market_data.get("monetary_policy", {}) or {}).items():
-        curr = policy.get("current_value")
-        if curr in (None, "N/A"):
-            _issue("monetary_policy", key, "current_value", "manual_incomplete")
-            continue
-        if policy.get("is_estimated") and not _estimated_allowed("monetary_policy", key, policy):
-            _issue("monetary_policy", key, "current_value", "estimated_not_allowed")
-        reason = _extract_reason(policy.get("note"))
-        change = policy.get("change_from_120d")
-        if change is None:
-            _issue("monetary_policy", key, "change_from_120d", reason or "no_previous_value")
-
     return issues
 
 
