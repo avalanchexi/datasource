@@ -214,6 +214,41 @@ def test_pipeline_quality_state_blocks_estimated_fund_flow_with_diagnostics_when
     assert "etf" in state["gap_monitor_view"]["manual_required"]
 
 
+def test_pipeline_quality_state_passes_report_date_to_bdi_allowlist():
+    payload = _base_payload()
+    payload["metadata"]["date"] = "2026-05-25"
+    payload["metadata"]["missing_items"] = {}
+    payload["macro_indicators"] = {
+        "bdi": {
+            "current_value": 1450.0,
+            "previous_value": 1430.0,
+            "change_rate": 1.4,
+            "unit": "points",
+            "as_of_date": "2026-05-22",
+            "date": "2026-05-22",
+            "source_url": "https://www.tradingeconomics.com/commodity/baltic",
+            "is_estimated": True,
+        }
+    }
+    payload["monetary_policy"] = {}
+    rules = {
+        "block_on_stale": True,
+        "critical_stale_keys": [],
+        "estimated_allowlist_keys": ["bdi"],
+        "bdi_estimated_allow_conditions": {
+            "trusted_domains": ["tradingeconomics.com"],
+            "max_age_days": 2,
+            "weekend_grace": True,
+            "value_range": [200.0, 10000.0],
+            "unit_keywords": ["points"],
+        },
+    }
+
+    state = build_pipeline_quality_state(payload, policy_rules=rules, allow_estimated=True)
+
+    assert state["quality_blockers"] == []
+
+
 def test_pipeline_quality_state_blocks_missing_zero_and_placeholder_primary_values():
     payload = _base_payload()
     payload["macro_indicators"]["industrial"]["current_value"] = None

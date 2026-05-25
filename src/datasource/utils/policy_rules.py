@@ -27,6 +27,7 @@ DEFAULT_RULES = {
             "eastmoney.com",
         ],
         "max_age_days": 2,
+        "weekend_grace": True,
         "value_range": [200.0, 10000.0],
         "unit_keywords": ["点", "point", "points"],
     },
@@ -165,7 +166,12 @@ def _parse_date(value: Any) -> Optional[datetime]:
         return None
 
 
-def check_bdi_estimated_allow(entry: Dict[str, Any], rules: Optional[Dict[str, Any]] = None) -> Tuple[bool, List[str]]:
+def check_bdi_estimated_allow(
+    entry: Dict[str, Any],
+    rules: Optional[Dict[str, Any]] = None,
+    *,
+    report_date: Any = None,
+) -> Tuple[bool, List[str]]:
     cfg = get_bdi_estimated_allow_conditions(rules)
     reasons: List[str] = []
 
@@ -198,12 +204,16 @@ def check_bdi_estimated_allow(entry: Dict[str, Any], rules: Optional[Dict[str, A
         reasons.append("bdi_trusted_domains_empty")
 
     max_age_days = int(cfg.get("max_age_days") or 2)
+    weekend_grace = bool(cfg.get("weekend_grace", False))
     dt = _parse_date(entry.get("as_of_date") or entry.get("date") or entry.get("report_period"))
     if dt is None:
         reasons.append("bdi_date_missing")
     else:
-        age = (datetime.now() - dt).days
-        if age > max_age_days:
+        reference_dt = _parse_date(report_date) if report_date not in (None, "") else None
+        reference_dt = reference_dt or datetime.now()
+        age = (reference_dt.date() - dt.date()).days
+        monday_after_friday = reference_dt.weekday() == 0 and dt.weekday() == 4 and age == 3
+        if age > max_age_days and not (weekend_grace and monday_after_friday):
             reasons.append(f"bdi_date_stale:{age}d")
 
     return len(reasons) == 0, reasons
@@ -215,6 +225,7 @@ def is_estimated_allowlisted(
     entry: Optional[Dict[str, Any]] = None,
     *,
     rules: Optional[Dict[str, Any]] = None,
+    report_date: Any = None,
 ) -> Tuple[bool, List[str]]:
     allowlist = {_normalize_key(item) for item in get_estimated_allowlist_keys(rules)}
     key_norm = _normalize_key(key)
@@ -224,7 +235,7 @@ def is_estimated_allowlisted(
     if key_norm == "bdi":
         if not isinstance(entry, dict):
             return False, ["bdi_entry_missing"]
-        ok, reasons = check_bdi_estimated_allow(entry, rules)
+        ok, reasons = check_bdi_estimated_allow(entry, rules, report_date=report_date)
         return ok, reasons
     return True, []
 

@@ -38,6 +38,7 @@ def build_pipeline_quality_state(
     """Build a derived quality state without mutating market payload values."""
     rules = policy_rules or load_policy_rules()
     payload = market_payload if isinstance(market_payload, dict) else {}
+    report_date = _payload_report_date(payload)
 
     missing_items: Dict[str, List[Dict[str, Any]]] = {}
     quality_blockers: List[Dict[str, Any]] = []
@@ -87,7 +88,13 @@ def build_pipeline_quality_state(
                 source_url_issues.append(issue)
 
         if entry.get("is_estimated") is True:
-            allowed, reasons = is_estimated_allowlisted(category, key, entry, rules=rules)
+            allowed, reasons = is_estimated_allowlisted(
+                category,
+                key,
+                entry,
+                rules=rules,
+                report_date=report_date,
+            )
             if not allowed:
                 issue = add_issue(
                     category,
@@ -161,6 +168,18 @@ def _iter_entries(payload: Dict[str, Any]) -> Iterable[Tuple[str, str, Dict[str,
             key = _entry_key(category, entry)
             if key:
                 yield category, key, entry
+
+
+def _payload_report_date(payload: Dict[str, Any]) -> Any:
+    metadata = payload.get("metadata")
+    for source in (metadata, payload):
+        if not isinstance(source, dict):
+            continue
+        for field in ("date", "end_date", "start_date"):
+            value = source.get(field)
+            if value not in (None, ""):
+                return value
+    return None
 
 
 def _iter_fund_flow(rows: Any) -> Iterable[Tuple[str, Dict[str, Any]]]:
