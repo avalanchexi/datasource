@@ -214,7 +214,12 @@ def test_require_data_completeness_allows_cn10y_cdb_estimated():
         "metadata": {"data_completeness": 0.9},
         "missing_items": [],
         "bonds": [
-            {"symbol": "CN10Y_CDB", "current_yield": 1.97, "is_estimated": True},
+            {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 1.97,
+                "change_120d_bp": -27.69,
+                "is_estimated": True,
+            },
         ],
     }
     s3._require_data_completeness(payload, 0.8, allow_estimated=False)

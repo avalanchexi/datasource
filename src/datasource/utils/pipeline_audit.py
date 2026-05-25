@@ -30,6 +30,8 @@ def build_rule_inventory() -> Dict[str, Any]:
             _rule("missing_compare_values", _QUALITY_STATE_MODULE, True, False),
             _rule("critical_stale", _QUALITY_STATE_MODULE, True, False),
             _rule("missing_source_url", _QUALITY_STATE_MODULE, True, False),
+            _rule("daily_change_from_change_5d", _QUALITY_STATE_MODULE, True, False),
+            _rule("ytd_change_from_change_120d", _QUALITY_STATE_MODULE, True, False),
             _rule(
                 "estimated_not_allowed",
                 "datasource.utils.pipeline_quality_state + datasource.utils.policy_rules",

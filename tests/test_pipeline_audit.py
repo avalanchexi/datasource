@@ -12,6 +12,8 @@ def test_rule_inventory_includes_core_gate_rules():
         "missing_source_url",
         "fund_flow_window_missing",
         "estimated_not_allowed",
+        "daily_change_from_change_5d",
+        "ytd_change_from_change_120d",
     }.issubset(rule_ids)
 
 
@@ -57,3 +59,30 @@ def test_pipeline_audit_blocks_fallback_pring_result_for_production_reports():
     message = fallback_errors[0]["message"]
     assert "fallback_used=true" in message
     assert "production report" in message.lower()
+
+
+def test_pipeline_audit_inventory_covers_commodity_window_blockers():
+    market_payload = {
+        "commodities": [
+            {
+                "symbol": "GC=F",
+                "current_price": 3450.0,
+                "daily_change": 2.0,
+                "daily_change_basis": "change_5d",
+                "ytd_change": 12.0,
+                "ytd_change_basis": "change_120d",
+                "source_url": "https://example.com/gold",
+            }
+        ]
+    }
+
+    audit = build_pipeline_audit(market_payload)
+    raw_reasons = {blocker["reason"] for blocker in audit["raw_quality_blockers"]}
+    inventory_reasons = {rule["rule_id"] for rule in build_rule_inventory()["rules"]}
+    commodity_window_reasons = {
+        "daily_change_from_change_5d",
+        "ytd_change_from_change_120d",
+    }
+
+    assert commodity_window_reasons.issubset(raw_reasons)
+    assert commodity_window_reasons.issubset(inventory_reasons)
