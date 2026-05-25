@@ -18,6 +18,8 @@ _NUMERIC_FIELDS = (
     "current_yield",
     "recent_5d",
     "total_120d",
+    "previous_value",
+    "change_rate",
 )
 _PREVIOUS_FIELDS = ("previous_value", "change_rate")
 _SOURCE_TEXT_FIELDS = ("source", "provider", "note")

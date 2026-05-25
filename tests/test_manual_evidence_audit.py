@@ -87,3 +87,25 @@ def test_manual_audit_warns_when_previous_value_lacks_evidence_note():
         "previous_value_without_evidence_note",
         "bonds.US10Y",
     )
+
+
+def test_manual_audit_treats_previous_value_as_numeric_manual_value():
+    audit = audit_manual_evidence(
+        {"macro_indicators": {"industrial": {"previous_value": 5.7}}}
+    )
+
+    _issue(audit, "errors", "missing_source_url", "macro_indicators.industrial")
+    _issue(
+        audit,
+        "warnings",
+        "previous_value_without_evidence_note",
+        "macro_indicators.industrial",
+    )
+
+
+def test_manual_audit_treats_change_rate_string_as_numeric_manual_value():
+    audit = audit_manual_evidence(
+        {"macro_indicators": {"industrial": {"change_rate": "1.2"}}}
+    )
+
+    _issue(audit, "errors", "missing_source_url", "macro_indicators.industrial")
