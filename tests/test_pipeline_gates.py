@@ -5,6 +5,7 @@ from datasource.utils.pipeline_gates import (
     assert_no_fallback_pring_result,
     effective_gap_items,
     effective_quality_blockers,
+    gap_item_key,
     gap_item_label,
 )
 
@@ -36,6 +37,40 @@ def test_effective_quality_blockers_keeps_fund_flow_source_url_issues():
     ]
 
     assert effective_quality_blockers(blockers, skip_fund_flow_check=True) == blockers
+
+
+def test_effective_quality_blockers_filters_non_dict_items_before_skip_policy():
+    blockers = [
+        "legacy_missing",
+        None,
+        3,
+        {"category": "fund_flow", "key": "etf", "reason": "fund_flow_window_missing"},
+        {"category": "fund_flow", "key": "northbound", "reason": "missing_source_url"},
+        {"category": "macro_indicators", "key": "bdi", "reason": "missing_compare_values"},
+    ]
+
+    assert effective_quality_blockers(blockers, skip_fund_flow_check=True) == [
+        {"category": "fund_flow", "key": "northbound", "reason": "missing_source_url"},
+        {"category": "macro_indicators", "key": "bdi", "reason": "missing_compare_values"},
+    ]
+
+
+def test_gap_item_key_supports_stage3_compatibility_fields():
+    assert gap_item_key({"task": "fund_flow_window"}) == "fund_flow_window"
+    assert gap_item_key({"type": "macro_gap"}) == "macro_gap"
+    assert gap_item_key({"name": "BDI"}) == "BDI"
+    assert gap_item_key({"field": "change_rate"}) == "change_rate"
+    assert (
+        gap_item_key(
+            {
+                "task": "task_value",
+                "type": "type_value",
+                "name": "name_value",
+                "field": "field_value",
+            }
+        )
+        == "task_value"
+    )
 
 
 def test_gap_item_label_prefers_category_and_key():

@@ -32,9 +32,9 @@ def effective_quality_blockers(
     blockers: Iterable[Any],
     *,
     skip_fund_flow_check: bool = False,
-) -> List[Any]:
+) -> List[Dict[str, Any]]:
     """Return blockers after applying the optional fund-flow skip policy."""
-    rows = list(blockers or [])
+    rows = [issue for issue in blockers or [] if isinstance(issue, dict)]
     if not skip_fund_flow_check:
         return rows
     return [issue for issue in rows if not is_fund_flow_skippable_issue(issue)]
@@ -43,7 +43,16 @@ def effective_quality_blockers(
 def gap_item_key(item: Any) -> Optional[str]:
     """Extract a stable key from a gap item."""
     if isinstance(item, dict):
-        value = item.get("key") or item.get("indicator_key") or item.get("symbol") or item.get("pair")
+        value = (
+            item.get("key")
+            or item.get("indicator_key")
+            or item.get("symbol")
+            or item.get("pair")
+            or item.get("task")
+            or item.get("type")
+            or item.get("name")
+            or item.get("field")
+        )
     else:
         value = item
     if value is None:
