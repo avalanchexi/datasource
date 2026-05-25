@@ -586,7 +586,11 @@ def _default_quality_field(category: Any, reason: Any) -> str:
     if reason_text == "missing_source_url":
         return "source_url"
     if reason_text == "missing_compare_values":
-        return "previous_value/change_rate" if category_text == "macro_indicators" else "change_from_120d"
+        if category_text == "macro_indicators":
+            return "previous_value/change_rate"
+        if category_text == "bonds":
+            return "change_120d_bp"
+        return "change_from_120d"
     if reason_text == "fund_flow_window_missing":
         return "recent_5d/total_120d"
     if reason_text == "primary_value_missing":

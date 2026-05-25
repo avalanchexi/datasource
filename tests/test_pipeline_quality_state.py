@@ -61,6 +61,48 @@ def test_pipeline_quality_state_blocks_missing_compare_values():
     assert "industrial" in state["gap_monitor_view"]["manual_required"]
 
 
+def test_pipeline_quality_state_blocks_missing_bond_compare_values():
+    payload = _base_payload()
+    payload["bonds"] = [
+        {
+            "symbol": "US10Y",
+            "name": "US 10Y Treasury",
+            "current_yield": 4.25,
+            "source_url": "https://example.com/us10y",
+        }
+    ]
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    expected = {
+        "category": "bonds",
+        "key": "US10Y",
+        "reason": "missing_compare_values",
+        "details": {"field": "change_120d_bp"},
+    }
+    assert expected in state["quality_blockers"]
+    assert expected in state["manual_required"]
+    assert expected in state["gap_monitor_view"]["quality_blockers"]
+    assert {"key": "US10Y", "reason": "missing_compare_values"} in state["missing_items"]["bonds"]
+    assert "US10Y" in state["gap_monitor_view"]["manual_required"]
+
+
+def test_pipeline_quality_state_skips_macro_compat_keys_for_compare_rules():
+    payload = _base_payload()
+    payload["macro_indicators"]["DXY"] = {
+        "current_value": 99.5,
+        "source_url": "https://example.com/dxy",
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    assert {
+        "category": "macro_indicators",
+        "key": "DXY",
+        "reason": "missing_compare_values",
+    } not in state["quality_blockers"]
+
+
 def test_pipeline_quality_state_requires_source_url_for_manual_values():
     payload = _base_payload()
     payload["commodities"] = [
