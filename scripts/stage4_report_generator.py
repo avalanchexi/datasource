@@ -21,6 +21,11 @@ from datasource.utils.gate_formatting import (
     format_gate_blocks,
     format_quality_issue,
 )
+from datasource.utils.pipeline_gates import (
+    assert_no_fallback_pring_result,
+    effective_gap_items,
+    effective_quality_blockers,
+)
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.run_paths import build_run_paths_from_reference
 
@@ -51,18 +56,38 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="gap_monitor JSON 路径（默认: data/runs/YYYYMMDD/gap_monitor.json）",
     )
+    parser.add_argument(
+        "--skip-fund-flow-check",
+        action="store_true",
+        help="仅跳过 fund_flow 中可跳过的质量阻断项",
+    )
+    parser.add_argument(
+        "--allow-fallback-report",
+        action="store_true",
+        help="DEBUG ONLY: 允许 fallback_used=true 的 Pring 结果生成报告",
+    )
     return parser.parse_args()
 
 
-def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
+def _assert_stage4_quality_gate(
+    market_payload: Dict[str, Any],
+    *,
+    skip_fund_flow_check: bool = False,
+) -> None:
     quality_state = build_pipeline_quality_state(
         market_payload,
         stage="stage4",
         allow_estimated=True,
     )
-    quality_blockers = quality_state.get("quality_blockers") or []
+    original_quality_blockers = quality_state.get("quality_blockers") or []
+    quality_blockers = effective_quality_blockers(
+        original_quality_blockers,
+        skip_fund_flow_check=skip_fund_flow_check,
+    )
     policy = quality_state.get("policy_evaluation") or {}
     policy_blocked = bool(policy.get("block_stage3"))
+    if policy_blocked and original_quality_blockers and not quality_blockers:
+        policy_blocked = False
 
     if not quality_blockers and not policy_blocked:
         return
@@ -153,25 +178,17 @@ def _unresolved_gap_items(
     market_payload: Dict[str, Any],
     quality_state: Dict[str, Any],
     gap_items: Any,
+    *,
+    skip_fund_flow_check: bool = False,
 ) -> List[Any]:
     if not isinstance(gap_items, list):
         return []
-
-    blocker_pairs = {
-        (str(issue.get("category") or "").lower(), str(issue.get("key") or "").lower())
-        for issue in quality_state.get("quality_blockers") or []
-        if isinstance(issue, dict)
-    }
-
-    unresolved: List[Any] = []
-    for item in gap_items:
-        matches = _matching_payload_entries(market_payload, item)
-        if not matches:
-            unresolved.append(item)
-            continue
-        if any((category.lower(), key.lower()) in blocker_pairs for category, key in matches):
-            unresolved.append(item)
-    return unresolved
+    return effective_gap_items(
+        market_payload,
+        quality_state.get("quality_blockers") or [],
+        gap_items,
+        skip_fund_flow_check=skip_fund_flow_check,
+    )
 
 
 def _market_report_date(market_payload: Dict[str, Any]) -> Optional[str]:
@@ -241,8 +258,18 @@ def main() -> None:
             stage="stage4",
             allow_estimated=True,
         )
-        pending = _unresolved_gap_items(market_payload, quality_state, pending)
-        manual = _unresolved_gap_items(market_payload, quality_state, manual)
+        pending = _unresolved_gap_items(
+            market_payload,
+            quality_state,
+            pending,
+            skip_fund_flow_check=args.skip_fund_flow_check,
+        )
+        manual = _unresolved_gap_items(
+            market_payload,
+            quality_state,
+            manual,
+            skip_fund_flow_check=args.skip_fund_flow_check,
+        )
         if pending or manual:
             raise RuntimeError(
                 f"gap_monitor 未清空（{gap_path}），pending={pending}, "
@@ -256,8 +283,15 @@ def main() -> None:
     if not meta.get("ai_websearch_enhanced"):
         raise RuntimeError("metadata.ai_websearch_enhanced 未设置，Stage4 已阻断。请先完成 Stage2。")
 
-    _assert_stage4_quality_gate(market_payload)
+    _assert_stage4_quality_gate(
+        market_payload,
+        skip_fund_flow_check=args.skip_fund_flow_check,
+    )
     _assert_pring_matches_market(market_payload, pring_payload)
+    assert_no_fallback_pring_result(
+        pring_payload,
+        allow_fallback_report=args.allow_fallback_report,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():

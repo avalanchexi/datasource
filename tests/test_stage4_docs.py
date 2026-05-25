@@ -85,7 +85,7 @@ def test_stage4_prefers_dated_gap_monitor(tmp_path, monkeypatch):
     assert "data/runs/20260409/gap_monitor.json" in str(exc.value).replace("\\", "/")
 
 
-def test_stage4_ignores_stale_gap_when_live_quality_state_is_clean(tmp_path, monkeypatch):
+def test_stage4_blocks_gap_monitor_item_even_when_live_quality_state_is_clean(tmp_path, monkeypatch):
     data_dir = tmp_path / "data" / "runs" / "20260427"
     reports_dir = tmp_path / "reports"
     data_dir.mkdir(parents=True)
@@ -119,9 +119,7 @@ def test_stage4_ignores_stale_gap_when_live_quality_state_is_clean(tmp_path, mon
     )
     gap_path.write_text('{"pending_tasks": [], "manual_required": ["industrial"]}', encoding="utf-8")
 
-    called = []
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(stage4, "generate_report", lambda *args: called.append(args))
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -135,9 +133,10 @@ def test_stage4_ignores_stale_gap_when_live_quality_state_is_clean(tmp_path, mon
         ],
     )
 
-    stage4.main()
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
 
-    assert called == [(market_path, pring_path, output_path)]
+    assert "industrial" in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -147,7 +146,7 @@ def test_stage4_ignores_stale_gap_when_live_quality_state_is_clean(tmp_path, mon
         ["COMEX Gold"],
     ],
 )
-def test_stage4_ignores_stale_commodity_gap_by_symbol_or_name_when_live_quality_is_clean(
+def test_stage4_blocks_commodity_gap_by_symbol_or_name_even_when_live_quality_is_clean(
     tmp_path,
     monkeypatch,
     manual_required,
@@ -189,6 +188,67 @@ def test_stage4_ignores_stale_commodity_gap_by_symbol_or_name_when_live_quality_
         encoding="utf-8",
     )
 
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    assert str(manual_required[0]) in str(exc.value)
+
+
+def test_stage4_skip_fund_flow_check_allows_etf_only_gap(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+    output_path = reports_dir / "out.md"
+
+    market_path.write_text(
+        """
+{
+  "metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"},
+  "fund_flow": {
+    "etf": {
+      "recent_5d": null,
+      "total_120d": null,
+      "trend": "待补",
+      "source": "待人工补数(Stage2 manual_required)"
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}, "fallback_used": false}',
+        encoding="utf-8",
+    )
+    gap_path.write_text(
+        json.dumps(
+            {
+                "pending_tasks": [{"category": "fund_flow", "key": "etf"}],
+                "manual_required": [{"category": "fund_flow", "key": "etf"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
     called = []
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(stage4, "generate_report", lambda *args: called.append(args))
@@ -202,6 +262,150 @@ def test_stage4_ignores_stale_commodity_gap_by_symbol_or_name_when_live_quality_
             str(pring_path),
             "--output",
             str(output_path),
+            "--skip-fund-flow-check",
+        ],
+    )
+
+    stage4.main()
+
+    assert called == [(market_path, pring_path, output_path)]
+
+
+def test_stage4_skip_fund_flow_check_does_not_allow_non_fund_flow_gap(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+
+    market_path.write_text(
+        """
+{
+  "metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"},
+  "macro_indicators": {
+    "industrial": {
+      "current_value": 5.2,
+      "source": "websearch_manual(https://example.com/industrial)",
+      "source_url": "https://example.com/industrial"
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}, "fallback_used": false}',
+        encoding="utf-8",
+    )
+    gap_path.write_text(
+        json.dumps(
+            {
+                "pending_tasks": [{"category": "macro_indicators", "key": "industrial"}],
+                "manual_required": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(reports_dir / "out.md"),
+            "--skip-fund-flow-check",
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    assert "industrial" in str(exc.value)
+
+
+def test_stage4_blocks_fallback_pring_by_default(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+
+    market_path.write_text(
+        '{"metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"}}',
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}, "fallback_used": true}',
+        encoding="utf-8",
+    )
+    gap_path.write_text('{"pending_tasks": [], "manual_required": []}', encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(reports_dir / "out.md"),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    assert "fallback_used=true" in str(exc.value)
+
+
+def test_stage4_allows_fallback_report_only_with_debug_flag(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260427"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+    output_path = reports_dir / "out.md"
+
+    market_path.write_text(
+        '{"metadata": {"ai_websearch_enhanced": true, "date": "2026-04-27"}}',
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-04-27"}, "fallback_used": true}',
+        encoding="utf-8",
+    )
+    gap_path.write_text('{"pending_tasks": [], "manual_required": []}', encoding="utf-8")
+
+    called = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stage4, "generate_report", lambda *args: called.append(args))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+            "--allow-fallback-report",
         ],
     )
 
