@@ -371,6 +371,66 @@ def test_stage4_blocks_fallback_pring_by_default(tmp_path, monkeypatch):
     assert "fallback_used=true" in str(exc.value)
 
 
+def test_stage4_blocks_manual_evidence_audit_errors(tmp_path, monkeypatch):
+    data_dir = tmp_path / "data" / "runs" / "20260525"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+    audit_path = data_dir / "manual_evidence_audit.json"
+    output_path = reports_dir / "out.md"
+
+    market_path.write_text(
+        '{"metadata": {"ai_websearch_enhanced": true, "date": "2026-05-25"}}',
+        encoding="utf-8",
+    )
+    pring_path.write_text(
+        '{"metadata": {"analysis_date": "2026-05-25"}, "fallback_used": false}',
+        encoding="utf-8",
+    )
+    gap_path.write_text('{"pending_tasks": [], "manual_required": []}', encoding="utf-8")
+    audit_path.write_text(
+        json.dumps(
+            {
+                "errors": [
+                    {
+                        "code": "source_provider_mismatch",
+                        "path": "commodities.BCOM",
+                        "message": "bad url",
+                    }
+                ],
+                "warnings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stage4, "generate_report", lambda *args: None)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    message = str(exc.value)
+    assert "manual_evidence_audit" in message
+    assert "commodities.BCOM" in message
+
+
 def test_stage4_allows_fallback_report_only_with_debug_flag(tmp_path, monkeypatch):
     data_dir = tmp_path / "data" / "runs" / "20260427"
     reports_dir = tmp_path / "reports"

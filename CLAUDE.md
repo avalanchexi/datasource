@@ -21,6 +21,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Exa failover 边界**: Stage2 是 structured-provider-first + Tavily-first；`EXA_API_KEY` 用于 Tavily quota/rate/payment failover。结构化源失败、超时、解析失败或质量 gate 阻断时继续搜索链路；环境/proxy/SOCKS/DNS/TLS 错误和普通 Tavily extract 422 不切 Exa；非 quota fallback 仍需 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1`
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
 - **采集优先级固定**: `TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover) -> Stage2.5`；排障可用 `--disable-structured-providers` 回到搜索-only 诊断路径，当前流程不使用旧版外部补数链路
+- **生产报告禁用边界**: 正式 Stage3/Stage4 禁止 `--allow-fallback`、`--skip-gap-check`、`--allow-fallback-report`，也禁止直接调用 `generate_report()` 生成正式报告。Stage4 默认拒绝 `pring_result.fallback_used=true`；debug flag 只限本地排障
+- **fund_flow skip 语义**: 仅剩 ETF/fund_flow 窗口或估算 blocker 时，Stage3 和 Stage4 可同时使用 `--skip-fund-flow-check`；它只过滤 fund_flow 窗口/估算 blocker，不绕过其他 gate 或 audit errors
+- **重跑顺序**: 修改 `config/policy_rules.yaml` 或当日 `_manual.json` 后，必须按 Stage2.5 -> Stage3 -> Stage4 重跑，不能只重跑报告
+- **source_url 证据**: manual `source_url` 必须直接支持填入的数值、日期/期次和口径；不得用官网首页、品牌入口、占位 URL，或与 `source` 声称平台不一致的 URL
 
 ## Quick Start
 
@@ -111,11 +115,25 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/websearch_results_manual.json" \
   "data/runs/${DATE_NH}/market_data_complete.json"
 
+# Audit: manual source_url 证据审计，errors 非空时正式 Stage4 阻断
+bash run_clean.sh python scripts/audit_manual_evidence.py \
+  --manual-data "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --stage2-log "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --output "data/runs/${DATE_NH}/manual_evidence_audit.json"
+
 # Stage 3: Pring 分析（--allow-estimated 让 is_estimated=True 的数据参与评分）
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
   --allow-estimated
+
+# Audit: Stage3/Stage4 gate 一致性审计，errors 非空时正式 Stage4 阻断
+bash run_clean.sh python scripts/audit_pipeline_consistency.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
+  --output "data/runs/${DATE_NH}/pipeline_audit.json"
 
 # Stage 4: 报告生成（正式入口）
 bash run_clean.sh python scripts/stage4_report_generator.py \
@@ -127,6 +145,8 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 # 验证：确保无缺口
 cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manual_required
 ```
+
+仅剩 ETF/fund_flow 窗口或估算 blocker 且业务确认可降级展示时，Stage3 和 Stage4 才可同时追加 `--skip-fund-flow-check`；正式报告不要默认加 skip。生产禁止 `--allow-fallback`、`--skip-gap-check`、`--allow-fallback-report`，也不要绕过 Stage4 直接调用 `generate_report()`。
 
 ### Stage2 运行模式
 
@@ -152,7 +172,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 - `search_profiles` 支持 `max_query_candidates` 与 `extract_policy`；`BCOM/GSG/DXY/CN10Y_CDB` 默认限制 3 个 query candidates，并跳过 Tavily extract 直接用 snippets 抽取，降低 422 和 Stage2.5 手工补数压力。
 - `USDCNY` 是 quote profile 的受控例外：ChinaMoney/CFETS 官方表格页可走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
 - dated quote profiles 会用 `bad_url_patterns` 和 `value_evidence_miss` 降权/剔除概念页、规格页、annual weights、forecast 等不可写报告页面。
-- `source_url` 必须能在 snippets 中找到证据；若不满足或 `value` 缺失，强制 `manual_required=true`。
+- `source_url` 必须能在 snippets 中找到证据；manual URL 必须直接支持填入值、日期/期次和口径，不能用官网首页、品牌入口、占位 URL 或与 `source` 声称平台不一致的 URL。若不满足或 `value` 缺失，强制 `manual_required=true`。
 - Tavily quota/rate/payment 后，若有 `EXA_API_KEY` 会从 `tavily_active` 切到 `exa_active`，重试当前失败任务并让剩余任务走 Exa；没有 Exa 或 Exa 不可用才转 `manual_required` skeleton。不要新增 quota probe 或重跑 Tavily。
 - Stage2 summary 中 `task_completed/task_total` 只是 legacy completion；日常判断 Stage2 是否达标优先看 `stage2_effective_hit_rate`，并用 `stage2_effective_success/stage2_effective_failure/stage2_effective_denominator` 审计分子分母。该指标包含 structured-provider 成功 + 搜索抽取成功，不含 `skipped_existing` 与 Stage2.5 manual 注入。质量缺口任务只有写回 `required_output_fields` 后才算成功；structured-provider 只写当前值但缺 `previous_value/change_rate/change_from_120d` 时要继续 fallback 或转 `manual_required`。搜索链路命中率只看 `task_search_success/task_search_failed/search_success_rate_incremental`；`search_success_rate_incremental=0.0` 只表示 Tavily/Exa 搜索链路未写回，不代表 Stage2 总命中率为 0。结构化源看 `task_structured_success`、`structured_provider_attempt_count/structured_provider_success_count/structured_provider_fallback_to_search_count/structured_provider_error_breakdown`。Exa failover 看 `search_backend_final`、`tavily_to_exa_failover_count`、`exa_failover_success/empty/error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`；其他失败分类结合 `retrieval_diagnostics`、`manual_reason_breakdown`、`field_retry_merged_count/field_retry_missing_fields`。
 - Stage2 task planner 会从 Stage2.5/Stage3 质量状态生成 `trigger_reason=quality_gap`、`force_refresh=true` 任务，覆盖 `missing_compare_values`、`estimated_not_allowed`、`fund_flow_window_missing`；这些任务要求 compare/window 字段，不能因已有 current value 跳过。Stage2 extraction 会写回宏观 compare 字段和货币 `change_from_120d`。
@@ -194,6 +214,10 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 **Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
 **gap_monitor 只读诊断**: 不直接手改 `gap_monitor`，也不把手工清空作为正常流程；只为诊断读取该文件，实际修复应补齐/修正源数据后重跑 Stage2.5/Stage3。
+
+**Stage4 production gate**: 正式报告入口是 `scripts/stage4_report_generator.py`，不要直接调用 `generate_report()`。Stage4 会读取 `manual_evidence_audit.json` 与 `pipeline_audit.json`；若 `errors` 非空会阻断。`--allow-fallback-report` 仅本地调试，生产遇到 `fallback_used=true` 要回到 Stage3 修复。若仅剩 ETF/fund_flow 窗口或估算 blocker，Stage3、`audit_pipeline_consistency.py` 和 Stage4 才同步使用 `--skip-fund-flow-check`。
+
+**config/manual 修改后重跑**: 改 `config/policy_rules.yaml` 或当日 `_manual.json` 后，按 Stage2.5 -> Stage3 -> audit -> Stage4 重跑；只重跑 Stage4 会复用旧的 complete/pring/audit 产物。
 
 **TuShare 股指日内时间差**: Stage1 在 15:00 CST 前运行时，当日收盘价尚未生成，Stage1 返回前一交易日数据 — 属预期行为，下午收盘后无需重跑 Stage1
 
@@ -268,6 +292,8 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 | 代理/TLS 问题 | `env -u http_proxy -u https_proxy` 前缀 |
 | 完整度 <80% | 检查 macro/monetary null 字段，手动补数后重注入 |
 | 报告出现 N/A | 检查 `gap_monitor`，确保数值为可解析数字 |
+| Stage4 阻断 `manual_evidence_audit` | 检查 manual `source_url` 是否为支持该值的证据 URL，不要用品牌入口、占位 URL 或与 `source` 平台不一致的 URL；修正后重跑 Stage2.5/audit/Stage3/Stage4 |
+| Stage4 阻断 `pipeline_audit` | 按 audit errors 修正 complete/pring/gap 状态；仅剩 ETF/fund_flow blocker 时 Stage3、audit、Stage4 同步加 `--skip-fund-flow-check` |
 | SyntaxError 启动失败 | `python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py` |
 | 搜索相关性低 | 调整 `search_profiles.queries/exclude_domains`，或提高 `--low-score-threshold` |
 
@@ -276,6 +302,8 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 **诊断工具**:
 - `bash run_clean.sh python scripts/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
 - `bash run_clean.sh python scripts/stage2_low_score_audit.py --date YYYY-MM-DD` — 审计低分仍进入抽取的指标
+- `bash run_clean.sh python scripts/audit_manual_evidence.py --manual-data data/runs/${DATE_NH}/websearch_results_manual.json --market-data data/runs/${DATE_NH}/market_data_complete.json --stage2-log logs/runs/${DATE_NH}/stage2_unified_log.json --output data/runs/${DATE_NH}/manual_evidence_audit.json` — 审计 manual/source_url 证据
+- `bash run_clean.sh python scripts/audit_pipeline_consistency.py --market-data data/runs/${DATE_NH}/market_data_complete.json --pring-result data/runs/${DATE_NH}/pring_result.json --gap-monitor data/runs/${DATE_NH}/gap_monitor.json --output data/runs/${DATE_NH}/pipeline_audit.json` — 审计 Stage3/Stage4 gate 一致性
 
 ## Code Standards
 

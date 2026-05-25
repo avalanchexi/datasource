@@ -23,9 +23,12 @@
 - `trend_history` 禁止从 `reports/*.md` 反向回填；只允许 Stage1/Stage2.5 写入或 TuShare 回补。
 - 当日 Stage2 Tavily search/extract 只跑 1 次。Stage2 默认先跑 structured-provider；结构化源失败、超时、解析失败或质量 gate 阻断后才进入 Tavily-first 搜索。Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切换 Exa；422、低分或网络类错误不要反复消耗 Tavily，缺口转 Stage2.5 `_manual.json` 注入。
 - 采集优先级固定：TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover + DeepSeek/regex) -> Stage2.5(manual/WebSearch 注入)。排障可传 `--disable-structured-providers` 只跑原搜索链路；旧版 Yahoo/AKShare 外部补数链路仅作为 legacy 应急。
-- 手工填写的数值必须有实时来源证据；`_manual.json` 中凡填写数值的条目必须带 `source_url`，或在 `source`/`note` 中包含 URL。
+- 手工填写的数值必须有实时来源证据；`_manual.json` 中凡填写数值的条目必须带 `source_url`，或在 `source`/`note` 中包含 URL。`source_url` 必须是支持该数值的证据 URL，不得填写品牌入口、占位 URL，或与 `source` 声称平台不一致的 URL。
 - `0/None`、窗口值缺失、`no_value/deepseek_no_value/no_deepseek_key` 一律进入 `manual_required`；零值标记为 `异常零值-需核查`。
 - Stage3 的 `--allow-estimated` 只允许 `is_estimated=True` 数据参与评分，不绕过 `compare_gaps`、`stale_redlist` 或 policy gate。
+- 生产正式报告禁止使用 `--allow-fallback`、`--skip-gap-check`、`--allow-fallback-report`，也禁止直接调用 `generate_report()` 绕过 Stage4 gate；Stage4 默认拒绝 `pring_result.fallback_used=true`，`--allow-fallback-report` 仅限本地调试。
+- 若仅剩 ETF/fund_flow 窗口或估算 blocker，可在 Stage3 和 Stage4 同时使用 `--skip-fund-flow-check`；该参数只过滤 fund_flow 窗口/估算 blocker，不绕过 gap、policy、stale、compare、manual evidence audit 或 pipeline audit 的其他 gate。
+- 任意修改 `config/policy_rules.yaml` 或当日 `_manual.json` 后，必须按 Stage2.5 -> Stage3 -> Stage4 顺序重跑，不能只重跑 Stage4。
 
 ## 3. Setup & Health Check
 1. Create env:
@@ -169,6 +172,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 - 输入也可用 Stage2 自动结果 `websearch_results_auto.json`；脚本会自动转换 `results` 结构，并保留 `manual_required/manual_reason` 生成 `metadata.manual_required` 骨架；自动结果转换必须保留 `is_estimated/estimation_method/metric_basis/confidence`，尤其是 `CN10Y_CDB` 这类估算债券，避免估算值被转换成非估算值。
 - 手工补数优先从 `data/runs/templates/manual_template.json` 复制对应 category 示例到当日 `websearch_results_manual.json`，再替换数值、日期和 `source_url`。
+- manual `source_url` 必须直接支持填入的数值、日期/期次和口径；不得填官网首页、品牌入口、搜索页、占位 URL，或与 `source` 声称平台不一致的 URL。URL 只作为真实证据，不作为“来源名”的装饰字段。
 - 官方发布值、官方中间价、交易所/指数商实时值默认 `is_estimated=false`；只有利差估算、公式推导、代理序列、外推或明确近似值才写 `is_estimated=true`。
 - Stage2.5 same-value merge 可在 incoming `current_value` 与 existing `current_value` 相同的情况下合并 `previous_value`、`change_rate`、`change_from_120d`、`value_type`、`rrr_type`、`is_estimated`、`source_url` 等 report-readiness 字段，用于关闭 Stage3 compare/window blockers；这不计入 Stage2 真实命中率。
 - `reserve_ratio` quality replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false`，且提供单一显式 HTTPS PBoC URL（`pbc.gov.cn`）。可替换估算 fallback，或替换缺 `change_from_120d` 且带“缺少发布机构”诊断的非官方 structured 值；`chinamoney.com.cn` 不释放 `reserve_ratio` quality override；文本 URL 只能作为一致性证据，多个或 conflicting 文本 URL 均拒绝。
@@ -195,7 +199,32 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --allow-estimated
 ```
 
+若仅剩 ETF/fund_flow 窗口或估算 blocker，且业务确认可降级展示，Stage3 可同步追加 `--skip-fund-flow-check`；Stage4 也必须使用同一 skip，不能只跳过其中一段：
+```bash
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated \
+  --skip-fund-flow-check
+```
+
 ### 5.6 Stage4 Report
+正式 Stage4 默认不带 skip，并会读取同 run 目录下的 `manual_evidence_audit.json` 与 `pipeline_audit.json`；任一文件存在且 `errors` 非空时阻断报告生成。正式出报告前建议先生成 audit 输出：
+
+```bash
+bash run_clean.sh python scripts/audit_manual_evidence.py \
+  --manual-data "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --stage2-log "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --output "data/runs/${DATE_NH}/manual_evidence_audit.json"
+
+bash run_clean.sh python scripts/audit_pipeline_consistency.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
+  --output "data/runs/${DATE_NH}/pipeline_audit.json"
+```
+
 ```bash
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
@@ -203,8 +232,27 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
   --output "reports/${DATE}-背景扫描120.md"
 ```
 
+仅剩 ETF/fund_flow 窗口或估算 blocker，且 Stage3 已同步使用 `--skip-fund-flow-check` 时，`audit_pipeline_consistency.py` 与 Stage4 才可追加同名参数：
+```bash
+bash run_clean.sh python scripts/audit_pipeline_consistency.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
+  --output "data/runs/${DATE_NH}/pipeline_audit.json" \
+  --skip-fund-flow-check
+
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md" \
+  --skip-fund-flow-check
+```
+
+生产禁止使用 `--allow-fallback-report`，也禁止直接调用 `generate_report()` 生成正式报告；`pring_result.fallback_used=true` 必须回到 Stage3 修复。
+
 ### 5.7 收尾校验
 - `data/runs/${DATE_NH}/gap_monitor.json` 无 `pending_tasks/manual_required`。
+- `data/runs/${DATE_NH}/manual_evidence_audit.json` 与 `data/runs/${DATE_NH}/pipeline_audit.json` 无 `errors`。
 - 报告内无 `N/A（待 WebSearch）`、`无数据`。
 - 关键月度字段 `is_stale=False`。
 - 估计值清单可接受且有来源说明。
@@ -335,6 +383,8 @@ if comp < 0.8:
 | Stage2 | `data/runs/${DATE_NH}/run_snapshot.json` | 运行快照/审计 |
 | Stage2 | `logs/runs/${DATE_NH}/observability.json` | 指标级耗时/来源/失败类型 |
 | Stage2.5 | `data/runs/${DATE_NH}/market_data_complete.json` | 注入完成后数据 |
+| Audit | `data/runs/${DATE_NH}/manual_evidence_audit.json` | manual/source_url 证据审计，Stage4 读取 errors |
+| Audit | `data/runs/${DATE_NH}/pipeline_audit.json` | Stage3/Stage4 gate 一致性审计，Stage4 读取 errors |
 | Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
 | Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 

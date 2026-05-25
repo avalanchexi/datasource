@@ -227,6 +227,17 @@ def _assert_pring_matches_market(
         )
 
 
+def _assert_json_audit_clean(path: Path, audit_name: str) -> None:
+    if not path.exists():
+        return
+    payload = json.load(path.open("r", encoding="utf-8"))
+    errors = payload.get("errors") or []
+    if errors:
+        raise RuntimeError(
+            f"{audit_name} contains blocking errors ({path}): {errors}"
+        )
+
+
 def main() -> None:
     args = parse_args()
     market_path = Path(args.market_data)
@@ -288,6 +299,15 @@ def main() -> None:
         skip_fund_flow_check=args.skip_fund_flow_check,
     )
     _assert_pring_matches_market(market_payload, pring_payload)
+    run_dir = getattr(run_paths, "run_dir", run_paths.data_dir)
+    _assert_json_audit_clean(
+        run_dir / "manual_evidence_audit.json",
+        "manual_evidence_audit",
+    )
+    _assert_json_audit_clean(
+        run_dir / "pipeline_audit.json",
+        "pipeline_audit",
+    )
     assert_no_fallback_pring_result(
         pring_payload,
         allow_fallback_report=args.allow_fallback_report,
