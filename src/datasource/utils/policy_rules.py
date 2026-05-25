@@ -128,6 +128,14 @@ def _extract_domain(url_or_text: str) -> str:
         return ""
 
 
+def _domain_matches_trusted(domain: str, trusted_domain: str) -> bool:
+    domain = str(domain or "").strip().lower()
+    trusted_domain = str(trusted_domain or "").strip().lower()
+    return bool(domain and trusted_domain) and (
+        domain == trusted_domain or domain.endswith(f".{trusted_domain}")
+    )
+
+
 def _extract_domain_candidates(entry: Dict[str, Any]) -> List[str]:
     candidates: List[str] = []
     for field in ("source_url", "url"):
@@ -198,7 +206,10 @@ def check_bdi_estimated_allow(
     domains = [_extract_domain(item) for item in _extract_domain_candidates(entry)]
     domains = [d for d in domains if d]
     if trusted_domains:
-        if not any(any(domain.endswith(td) for td in trusted_domains) for domain in domains):
+        if not any(
+            any(_domain_matches_trusted(domain, td) for td in trusted_domains)
+            for domain in domains
+        ):
             reasons.append("bdi_untrusted_domain")
     else:
         reasons.append("bdi_trusted_domains_empty")

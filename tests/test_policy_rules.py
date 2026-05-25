@@ -167,6 +167,36 @@ def test_bdi_allowlist_blocks_future_entry_date():
     assert "bdi_date_in_future:-1d" in reasons
 
 
+def test_bdi_allowlist_rejects_spoofed_trusted_domain_suffix():
+    rules = {
+        "estimated_allowlist_keys": ["bdi"],
+        "bdi_estimated_allow_conditions": {
+            "trusted_domains": ["tradingeconomics.com"],
+            "max_age_days": 2,
+            "weekend_grace": True,
+            "value_range": [200.0, 10000.0],
+            "unit_keywords": ["points"],
+        },
+    }
+
+    ok, reasons = is_estimated_allowlisted(
+        "macro_indicators",
+        "bdi",
+        {
+            "current_value": 1450.0,
+            "unit": "points",
+            "date": "2026-05-25",
+            "source_url": "https://eviltradingeconomics.com/commodity/baltic",
+            "is_estimated": True,
+        },
+        rules=rules,
+        report_date="2026-05-25",
+    )
+
+    assert ok is False
+    assert "bdi_untrusted_domain" in reasons
+
+
 def test_non_blocking_warning_defaults_loaded():
     warning_cfg = get_non_blocking_warning_rules()
     assert "gc_f_risk_domains" in warning_cfg
