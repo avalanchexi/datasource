@@ -171,15 +171,16 @@ def effective_gap_items(
             continue
 
         category = gap_item_category(item)
-        candidate_pairs: Set[Tuple[str, str]] = set()
-        if category:
+        matches = matching_payload_entries(market_payload, item)
+        candidate_pairs = {(entry_category, entry_key) for entry_category, entry_key, _entry in matches}
+        if not matches and category:
             candidate_pairs.add((category, key))
-        for entry_category, entry_key, _entry in matching_payload_entries(market_payload, item):
-            candidate_pairs.add((entry_category, entry_key))
 
-        if candidate_pairs and candidate_pairs.issubset(skippable_pairs):
-            continue
-        if ("fund_flow", key) in candidate_pairs and ("fund_flow", key) in skippable_pairs:
+        if (
+            candidate_pairs
+            and all(pair[0] == "fund_flow" for pair in candidate_pairs)
+            and candidate_pairs.issubset(skippable_pairs)
+        ):
             continue
         effective.append(item)
     return effective

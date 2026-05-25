@@ -98,6 +98,33 @@ def test_effective_gap_items_keeps_fund_flow_gap_with_non_skippable_blocker():
     ]
 
 
+def test_effective_gap_items_keeps_ambiguous_non_fund_flow_gap():
+    market_payload = {
+        "fund_flow": {
+            "shared": {"recent_5d": None, "total_120d": None},
+        },
+        "macro_indicators": {
+            "shared": {"current_value": 2991.0},
+        },
+    }
+    quality_blockers = [
+        {"category": "fund_flow", "key": "shared", "reason": "fund_flow_window_missing"},
+        {"category": "macro_indicators", "key": "shared", "reason": "missing_compare_values"},
+    ]
+    gap_items = [
+        {"key": "shared"},
+    ]
+
+    assert effective_gap_items(
+        market_payload,
+        quality_blockers,
+        gap_items,
+        skip_fund_flow_check=True,
+    ) == [
+        {"key": "shared"},
+    ]
+
+
 def test_assert_no_fallback_pring_result_blocks_by_default():
     with pytest.raises(RuntimeError) as exc:
         assert_no_fallback_pring_result({"fallback_used": True})
