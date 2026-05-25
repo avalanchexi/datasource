@@ -665,3 +665,85 @@ def test_run_analysis_does_not_block_on_stale_gap_monitor_when_live_state_clean(
     ]
     assert "gap_monitor_file_diagnostic_only" in warning_codes
     assert output_path.exists()
+
+
+def test_run_analysis_blocks_ambiguous_gap_monitor_item_when_fund_flow_skipped(
+    tmp_path: Path,
+    monkeypatch,
+):
+    market_payload = {
+        "metadata": {
+            "date": "2026-05-25",
+            "data_completeness": 1.0,
+            "ai_websearch_enhanced": True,
+        },
+        "macro_indicators": {
+            "shared": {
+                "current_value": 5.2,
+                "previous_value": 5.0,
+                "change_rate": 4.0,
+                "source_url": "https://example.com/shared-macro",
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {
+            "shared": {
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "待补",
+                "source": "待人工补数(Stage2 manual_required)",
+                "is_estimated": False,
+            }
+        },
+    }
+    run_dir = tmp_path / "data" / "runs" / "20260525"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "gap_monitor.json").write_text(
+        json.dumps(
+            {"manual_required": [{"key": "shared"}], "pending_tasks": []},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    market_path = tmp_path / "market.json"
+    output_path = tmp_path / "pring.json"
+    market_path.write_text(json.dumps(market_payload, ensure_ascii=False), encoding="utf-8")
+
+    class DummyContract:
+        def __init__(self, **payload):
+            self.metadata = payload.get("metadata", {})
+            self.macro_indicators = payload.get("macro_indicators", {})
+            self.monetary_policy = payload.get("monetary_policy", {})
+
+    class DummyAnalyzer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def analyze_pring_stage(self, days):
+            return {"stage": "Expansion", "confidence": 0.9}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(s3, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(s3, "get_manager", lambda: object())
+
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            s3._run_analysis(
+                market_path=market_path,
+                output_path=output_path,
+                allow_fallback=False,
+                skip_gap_check=False,
+                skip_fund_flow_check=True,
+            )
+        )
+
+    msg = str(exc.value)
+    assert "[gap_monitor]" in msg
+    assert "shared" in msg
+    assert "gap_monitor_file_diagnostic_only" not in msg

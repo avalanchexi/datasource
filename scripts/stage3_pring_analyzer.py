@@ -27,6 +27,7 @@ from datasource.utils.gate_formatting import (
 )
 from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
 from datasource.utils.pipeline_gates import (
+    effective_gap_items,
     effective_quality_blockers,
     gap_item_key as _shared_gap_item_key,
     gap_item_label as _shared_gap_item_label,
@@ -458,6 +459,9 @@ async def _run_analysis(
             skip_fund_flow_check=skip_fund_flow_check,
         )
     )
+    gap_quality_blocker_keys = _quality_blocker_keys(
+        live_quality_state.get("quality_blockers") or []
+    )
     meta_date = (
         market_payload.get("metadata", {}).get("date")
         or market_payload.get("metadata", {}).get("end_date")
@@ -565,6 +569,18 @@ async def _run_analysis(
         gap = _load_gap_monitor(gap_path)
         pending = gap.get("pending_tasks", []) or []
         manual_raw = gap.get("manual_required", []) or []
+        pending = effective_gap_items(
+            market_payload,
+            live_quality_state.get("quality_blockers") or [],
+            pending,
+            skip_fund_flow_check=skip_fund_flow_check,
+        )
+        manual_raw = effective_gap_items(
+            market_payload,
+            live_quality_state.get("quality_blockers") or [],
+            manual_raw,
+            skip_fund_flow_check=skip_fund_flow_check,
+        )
         pending_blocking: List[str] = []
         stale_gap_items: List[str] = []
 
@@ -583,7 +599,7 @@ async def _run_analysis(
                         "message": f"gap_monitor pending allowlist pass: {label}",
                     },
                 )
-            elif _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
+            elif _policy_item_matches_live_blocker(item, gap_quality_blocker_keys):
                 pending_blocking.append(label)
             elif _policy_item_has_current_entry(market_payload, item):
                 stale_gap_items.append(label)
@@ -606,7 +622,7 @@ async def _run_analysis(
                         "message": f"gap_monitor allowlist pass: {label}",
                     },
                 )
-            elif _policy_item_matches_live_blocker(item, live_quality_blocker_keys):
+            elif _policy_item_matches_live_blocker(item, gap_quality_blocker_keys):
                 manual_blocking.append(label)
             elif _policy_item_has_current_entry(market_payload, item):
                 stale_gap_items.append(label)
