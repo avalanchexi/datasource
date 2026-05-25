@@ -102,6 +102,50 @@ def test_require_data_completeness_does_not_skip_fund_flow_missing_source_url():
     assert "missing_source_url" in str(exc.value)
 
 
+def test_stage3_skip_fund_flow_check_keeps_non_fund_flow_blockers():
+    payload = {
+        "metadata": {
+            "date": "2026-05-25",
+            "data_completeness": 0.95,
+            "ai_websearch_enhanced": True,
+        },
+        "macro_indicators": {
+            "industrial": {
+                "current_value": 4.1,
+                "source_url": "https://example.com/industrial",
+            }
+        },
+        "fund_flow": {
+            "etf": {"recent_5d": None, "total_120d": None},
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(
+            payload,
+            0.8,
+            allow_estimated=True,
+            skip_fund_flow_check=True,
+        )
+
+    message = str(exc.value)
+    assert "macro_indicators.industrial missing_compare_values" in message
+    assert "fund_flow.etf fund_flow_window_missing" not in message
+
+
+def test_stage3_skip_fund_flow_check_uses_shared_skip_reasons():
+    quality_state = {
+        "quality_blockers": [
+            {"category": "fund_flow", "key": "etf", "reason": "fund_flow_window_missing"},
+            {"category": "fund_flow", "key": "northbound", "reason": "missing_value"},
+        ]
+    }
+
+    assert s3._filtered_quality_blockers(quality_state, skip_fund_flow_check=True) == [
+        {"category": "fund_flow", "key": "northbound", "reason": "missing_value"},
+    ]
+
+
 def test_require_data_completeness_blocks_estimated_fund_flow_even_with_allow_estimated():
     payload = {
         "metadata": {"data_completeness": 0.95},

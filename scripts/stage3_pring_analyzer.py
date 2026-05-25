@@ -26,17 +26,16 @@ from datasource.utils.gate_formatting import (
     format_quality_issue,
 )
 from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
+from datasource.utils.pipeline_gates import (
+    effective_quality_blockers,
+    gap_item_key as _shared_gap_item_key,
+    gap_item_label as _shared_gap_item_label,
+)
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 MIN_COMPLETENESS_DEFAULT = 0.80
-FUND_FLOW_SKIP_REASONS = {
-    "fund_flow_window_missing",
-    "missing_or_zero_value",
-    "missing_value",
-    "placeholder_value",
-}
 
 
 def _flatten_missing_items(market_payload: Dict[str, Any]) -> List[str]:
@@ -210,29 +209,14 @@ def _filtered_quality_blockers(
     skip_fund_flow_check: bool,
 ) -> List[Dict[str, Any]]:
     blockers = quality_state.get("quality_blockers") or []
-    if not isinstance(blockers, list):
-        return []
-    if not skip_fund_flow_check:
-        return [item for item in blockers if isinstance(item, dict)]
-    return [
-        item
-        for item in blockers
-        if isinstance(item, dict)
-        and not (
-            item.get("category") == "fund_flow"
-            and item.get("reason") in FUND_FLOW_SKIP_REASONS
-        )
-    ]
+    return effective_quality_blockers(
+        blockers,
+        skip_fund_flow_check=skip_fund_flow_check,
+    )
 
 
 def _gap_item_key(item: Any) -> str:
-    if isinstance(item, dict):
-        for field in ("key", "indicator_key", "symbol", "pair", "task", "type", "name"):
-            value = item.get(field)
-            if value not in (None, ""):
-                return str(value)
-        return ""
-    return str(item)
+    return _shared_gap_item_key(item) or ""
 
 
 def _quality_blocker_keys(blockers: List[Dict[str, Any]]) -> Set[str]:
@@ -249,10 +233,7 @@ def _quality_blocker_keys(blockers: List[Dict[str, Any]]) -> Set[str]:
 
 
 def _item_label(item: Any) -> str:
-    key = _gap_item_key(item)
-    if isinstance(item, dict) and item.get("category"):
-        return f"{item.get('category')}.{key}"
-    return key
+    return _shared_gap_item_label(item)
 
 
 def _policy_item_matches_live_blocker(item: Any, live_quality_blocker_keys: Set[str]) -> bool:
