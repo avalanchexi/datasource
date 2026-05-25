@@ -130,6 +130,23 @@ def quality_blocker_pairs(blockers: Iterable[Any]) -> Set[Tuple[str, str]]:
     return pairs
 
 
+def _fully_skippable_fund_flow_pairs(blockers: Iterable[Any]) -> Set[Tuple[str, str]]:
+    grouped: Dict[Tuple[str, str], List[Any]] = {}
+    for issue in blockers or []:
+        if not isinstance(issue, dict):
+            continue
+        category = gap_item_category(issue)
+        key = gap_item_key(issue)
+        if category != "fund_flow" or not key:
+            continue
+        grouped.setdefault((category, key), []).append(issue)
+    return {
+        pair
+        for pair, issues in grouped.items()
+        if issues and all(is_fund_flow_skippable_issue(issue) for issue in issues)
+    }
+
+
 def effective_gap_items(
     market_payload: Any,
     quality_blockers: Iterable[Any],
@@ -142,9 +159,7 @@ def effective_gap_items(
     if not skip_fund_flow_check:
         return rows
 
-    skippable_pairs = quality_blocker_pairs(
-        issue for issue in quality_blockers or [] if is_fund_flow_skippable_issue(issue)
-    )
+    skippable_pairs = _fully_skippable_fund_flow_pairs(quality_blockers)
     if not skippable_pairs:
         return rows
 

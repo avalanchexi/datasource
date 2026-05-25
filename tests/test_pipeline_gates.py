@@ -74,6 +74,30 @@ def test_effective_gap_items_filters_matching_fund_flow_quality_blockers():
     ]
 
 
+def test_effective_gap_items_keeps_fund_flow_gap_with_non_skippable_blocker():
+    market_payload = {
+        "fund_flow": {
+            "etf": {"recent_5d": None, "total_120d": None},
+        },
+    }
+    quality_blockers = [
+        {"category": "fund_flow", "key": "etf", "reason": "fund_flow_window_missing"},
+        {"category": "fund_flow", "key": "etf", "reason": "missing_source_url"},
+    ]
+    gap_items = [
+        {"category": "fund_flow", "key": "etf"},
+    ]
+
+    assert effective_gap_items(
+        market_payload,
+        quality_blockers,
+        gap_items,
+        skip_fund_flow_check=True,
+    ) == [
+        {"category": "fund_flow", "key": "etf"},
+    ]
+
+
 def test_assert_no_fallback_pring_result_blocks_by_default():
     with pytest.raises(RuntimeError) as exc:
         assert_no_fallback_pring_result({"fallback_used": True})
