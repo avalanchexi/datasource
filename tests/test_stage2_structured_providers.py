@@ -1391,6 +1391,48 @@ async def test_official_china_provider_returns_mlf_multi_price_reference_result(
 
 
 @pytest.mark.asyncio
+async def test_official_china_provider_rejects_mlf_interest_rate_tender_without_multi_price_marker():
+    list_html = (
+        '<a href="./2026052217453752767/index.html">'
+        "2026年5月中期借贷便利招标公告</a>"
+    )
+    detail_html = "开展6000亿元中期借贷便利（MLF）操作，固定数量、利率招标方式。"
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.MLF_URL:
+            return list_html
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "mlf", "ref_date": "2026-05-23"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "missing_value"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_rejects_mlf_multi_price_non_pbc_source_url():
+    list_html = (
+        '<a href="https://news.example.com/2026052217453752767/index.html">'
+        "2026年5月中期借贷便利招标公告</a>"
+    )
+    detail_html = "2026年5月15日开展6000亿元中期借贷便利（MLF）操作，固定数量、利率招标、多重价位中标方式。"
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.MLF_URL:
+            return list_html
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "mlf", "ref_date": "2026-05-23"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "untrusted_source_url"
+
+
+@pytest.mark.asyncio
 async def test_official_china_provider_rejects_mlf_multi_price_wrong_month():
     list_html = (
         '<a href="./2026052217453752767/index.html">'

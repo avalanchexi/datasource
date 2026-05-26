@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html as html_lib
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from datasource.providers.stage2_structured.base import (
@@ -348,10 +348,19 @@ class OfficialChinaProvider(Stage2StructuredProvider):
         normalized = OfficialChinaProvider._normalize_text(html)
         return (
             "中期借贷便利" in normalized
-            and any(marker in normalized for marker in ("多重价位", "利率招标", "无统一利率"))
+            and any(marker in normalized for marker in ("多重价位", "无统一利率"))
         )
 
     def _build_mlf_multi_price_reference(self, raw_key, html, url, operation_date):
+        if not self._is_trusted_pbc_url(url):
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=raw_key,
+                reason="untrusted_source_url",
+                message="PBoC MLF multi-price reference requires a trusted PBoC source URL",
+                diagnostics={"url": url, "evidence_text": self._evidence(html)},
+            )
+
         operation_amount = self._parse_operation_amount(html)
         note = "多重价位中标，无统一利率；展示参考值；manual_official_not_estimated"
         payload = {
@@ -385,6 +394,11 @@ class OfficialChinaProvider(Stage2StructuredProvider):
                 "note": note,
             },
         )
+
+    @staticmethod
+    def _is_trusted_pbc_url(url):
+        hostname = urlparse(str(url or "")).hostname
+        return str(hostname or "").lower() in {"pbc.gov.cn", "www.pbc.gov.cn"}
 
     def _parse_usdcny_result(self, raw_key, html, url, reference_date):
         value = self._parse_usdcny_value(html)
