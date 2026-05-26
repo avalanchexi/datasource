@@ -980,7 +980,7 @@ def _strict_indicator_tokens(indicator_key: Optional[str]) -> List[str]:
         "cl=f": ["cl=f", "wti", "原油", "nymex"],
         "bz=f": ["bz=f", "brent", "布伦特", "ice"],
         "hg=f": ["hg=f", "copper", "铜", "comex"],
-        "bcom": ["bcom", "彭博商品指数"],
+        "bcom": ["bcom", "bloomberg commodity index", "彭博商品指数"],
         "gsg": ["gsg"],
         "usdcny": ["usdcny", "usd/cny", "在岸", "中间价", "美元", "人民币"],
         "usdcnh": ["usdcnh", "usd/cnh", "离岸"],

@@ -1141,28 +1141,28 @@ def test_bcom_profile_includes_investing_historical_close_family():
     assert "investing.com/indices/bloomberg-commodity-historical-data" in bcom["good_url_patterns"]
     assert "ca.investing.com/indices/bloomberg-commodity-historical-data" in bcom["good_url_patterns"]
     assert "BCOMTR" in bcom["bad_url_patterns"]
+    assert "weights" in bcom["bad_url_patterns"]
 
 
-def test_candidate_query_quality_accepts_bcom_investing_historical_close():
-    task = {
-        "indicator_key": "BCOM",
-        "unit": "points",
-        "preferred_domains": ["investing.com", "ca.investing.com"],
-        "required_keywords": ["Bloomberg Commodity Index"],
-        "exclude_keywords": ["BCOMTR", "GSCI", "GSG", "methodology"],
-        "evidence_keywords": ["Bloomberg Commodity Index", "historical data", "close", "points"],
-        "good_url_patterns": [
-            "investing.com/indices/bloomberg-commodity-historical-data",
-            "ca.investing.com/indices/bloomberg-commodity-historical-data",
-        ],
-        "bad_url_patterns": ["BCOMTR", "GSCI", "GSG", "methodology", "weights"],
-        "required_output_fields": ["current_price"],
+def test_candidate_query_quality_accepts_bcom_investing_historical_close(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "missing_items": [{"key": "BCOM"}],
     }
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "BCOM")
+    family = next(
+        family
+        for family in task["query_families"]
+        if family["name"] == "investing_historical_close"
+    )
+    assert task["strict_required_keywords"] is True
+
     candidate = {
-        "query": "Bloomberg Commodity Index historical data close 2026-05-22",
-        "preferred_domains": task["preferred_domains"],
-        "required_keywords": ["Bloomberg Commodity Index"],
-        "exclude_keywords": ["BCOMTR", "GSCI", "GSG", "methodology"],
+        "query": family["queries"][0],
+        "preferred_domains": family["preferred_domains"],
+        "required_keywords": family["required_keywords"],
+        "exclude_keywords": family["exclude_keywords"],
     }
     quality = _candidate_query_quality(
         task,

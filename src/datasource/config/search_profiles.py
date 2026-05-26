@@ -1499,6 +1499,7 @@ def _apply_report_usage_profiles() -> None:
                     "GSCI",
                     "sub-index",
                     "subindex",
+                    "weights",
                     "target weights",
                     "annual rebalance",
                     "methodology",
