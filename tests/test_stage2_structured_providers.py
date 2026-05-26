@@ -9,7 +9,10 @@ from datasource.providers.stage2_structured.base import (
     StructuredResult,
 )
 from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
-from datasource.providers.stage2_structured.cdb_estimator import CDBEstimatorProvider
+from datasource.providers.stage2_structured.cdb_estimator import (
+    CDBEstimatorProvider,
+    build_provider as build_cdb_estimator_provider,
+)
 from datasource.providers.stage2_structured.eastmoney_etf import EastMoneyETFProvider
 from datasource.providers.stage2_structured.official_china import (
     MLF_URL,
@@ -955,7 +958,7 @@ async def test_chinabond_provider_rejects_unreasonable_yield_value():
 
 @pytest.mark.asyncio
 async def test_cdb_estimator_provider_uses_cn10y_proxy_plus_spread():
-    provider = CDBEstimatorProvider(default_spread_bp=10.0)
+    provider = CDBEstimatorProvider()
     market_payload = {
         "bonds": [
             {
@@ -969,7 +972,11 @@ async def test_cdb_estimator_provider_uses_cn10y_proxy_plus_spread():
         ]
     }
 
-    result = await provider.fetch({"indicator_key": "CN10Y_CDB"}, market_payload, "2026-05-26")
+    result = await provider.fetch(
+        {"indicator_key": "CN10Y_CDB", "cdb_spread_bp": 10.0},
+        market_payload,
+        "2026-05-26",
+    )
 
     extraction = result.to_extraction()
     assert result.provider == "cdb_estimator"
@@ -981,6 +988,31 @@ async def test_cdb_estimator_provider_uses_cn10y_proxy_plus_spread():
     assert extraction["is_estimated"] is True
     assert extraction["estimation_method"] == "CN10Y plus observed CDB spread"
     assert extraction["metric_basis"] == "cn10y_proxy_plus_spread"
+    assert "cn10y_proxy_change_basis" in extraction["estimation_basis"]
+    assert extraction["diagnostics"]["spread_source"] == "task.cdb_spread_bp"
+    assert "cn10y_proxy_change_basis" in extraction["diagnostics"]["estimation_basis"]
+
+
+@pytest.mark.asyncio
+async def test_cdb_estimator_provider_fails_without_explicit_spread():
+    provider = build_cdb_estimator_provider()
+    market_payload = {
+        "bonds": [
+            {
+                "symbol": "CN10Y",
+                "current_yield": 1.7484,
+                "change_5d_bp": -1.01,
+                "change_120d_bp": -10.62,
+                "date": "2026-05-25",
+            }
+        ]
+    }
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "CN10Y_CDB"}, market_payload, "2026-05-26")
+
+    assert exc_info.value.reason == "missing_cdb_spread"
+    assert "task.cdb_spread_bp" in exc_info.value.diagnostics["required_spread_fields"]
 
 
 @pytest.mark.asyncio

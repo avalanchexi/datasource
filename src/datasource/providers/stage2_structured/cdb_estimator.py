@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Tuple
 
 from datasource.providers.stage2_structured.base import (
     Stage2StructuredProvider,
@@ -20,10 +20,12 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
     def __init__(
         self,
         *,
-        default_spread_bp: float = 10.0,
+        default_spread_bp: Optional[float] = None,
         source_url: str = ChinaBondProvider.source_url,
     ) -> None:
-        self.default_spread_bp = float(default_spread_bp)
+        self.default_spread_bp = (
+            None if default_spread_bp is None else float(default_spread_bp)
+        )
         self.source_url = source_url
 
     async def fetch(self, task, market_payload, reference_date):
@@ -47,10 +49,15 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
                 diagnostics={"source_url": self.source_url},
             )
 
-        spread_bp = self._spread_bp(task, market_payload)
+        spread_bp, spread_source = self._spread_bp(task, market_payload)
         estimated_yield = round(proxy_yield + spread_bp / 100.0, 4)
         change_5d = self._safe_number(cn10y.get("change_5d_bp"))
         change_120d = self._safe_number(cn10y.get("change_120d_bp"))
+        estimation_basis = (
+            "cn10y_proxy_change_basis; "
+            "CN10Y_CDB estimated from CN10Y proxy yield and explicit CDB spread; "
+            "spread_source={0}".format(spread_source)
+        )
         note = (
             "CN10Y_CDB estimated from CN10Y proxy plus configured CDB spread; "
             "cn10y_proxy_change_basis"
@@ -64,6 +71,7 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
             "is_estimated": True,
             "estimation_method": "CN10Y plus observed CDB spread",
             "metric_basis": "cn10y_proxy_plus_spread",
+            "estimation_basis": estimation_basis,
             "note": note,
         }
         return StructuredResult(
@@ -80,8 +88,10 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
                 "proxy_symbol": "CN10Y",
                 "proxy_yield": proxy_yield,
                 "spread_bp": spread_bp,
+                "spread_source": spread_source,
                 "estimated_yield": estimated_yield,
                 "estimation_method": "CN10Y plus observed CDB spread",
+                "estimation_basis": estimation_basis,
                 "source_url": self.source_url,
             },
         )
@@ -93,17 +103,37 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
                 return entry
         return {}
 
-    def _spread_bp(self, task: Mapping[str, Any], market_payload: Mapping[str, Any]) -> float:
-        for value in (
-            task.get("cdb_spread_bp"),
-            market_payload.get("metadata", {}).get("cn10y_cdb_spread_bp")
-            if isinstance(market_payload.get("metadata"), Mapping)
-            else None,
-        ):
-            parsed = self._safe_number(value)
-            if parsed is not None:
-                return parsed
-        return self.default_spread_bp
+    def _spread_bp(
+        self,
+        task: Mapping[str, Any],
+        market_payload: Mapping[str, Any],
+    ) -> Tuple[float, str]:
+        task_spread = self._safe_number(task.get("cdb_spread_bp"))
+        if task_spread is not None:
+            return task_spread, "task.cdb_spread_bp"
+
+        metadata = market_payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            metadata_spread = self._safe_number(metadata.get("cn10y_cdb_spread_bp"))
+            if metadata_spread is not None:
+                return metadata_spread, "metadata.cn10y_cdb_spread_bp"
+
+        if self.default_spread_bp is not None:
+            return self.default_spread_bp, "constructor_default_spread_bp"
+
+        raise StructuredProviderError(
+            provider=self.name,
+            indicator_key=str(task.get("indicator_key") or ""),
+            reason="missing_cdb_spread",
+            message="CN10Y_CDB estimator requires explicit CDB spread provenance",
+            diagnostics={
+                "source_url": self.source_url,
+                "required_spread_fields": [
+                    "task.cdb_spread_bp",
+                    "metadata.cn10y_cdb_spread_bp",
+                ],
+            },
+        )
 
     @staticmethod
     def _safe_number(value: Any) -> Optional[float]:
