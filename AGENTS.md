@@ -238,6 +238,9 @@ if comp < 0.8:
 - DeepSeek extraction 默认开启 queue：`--use-queue --queue-concurrency 3 --deepseek-max-concurrency 3`；默认抽取输出 token 为 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`；需要串行排查时显式传 `--no-use-queue`。
 - Stage2 网络默认直连：Tavily 与 DeepSeek 客户端都不读取环境代理（`trust_env=false`），`run_clean.sh` 还会清理 `http_proxy/https_proxy/ALL_PROXY`。只有显式设置 `DATASOURCE_NETWORK_MODE=proxy` 时，Stage2 才允许客户端读取环境代理；常规 VPN 切换后先重跑 `bash run_preflight.sh`。
 - `BCOM/GSG/DXY/CN10Y_CDB` 等实时报价高缺口 profile 默认 `max_query_candidates=3`，并跳过 Tavily extract，直接将 Tavily search snippets 交给 DeepSeek 减负 schema 抽取，以减少 422 冷却和 Stage2.5 补数压力。
+- `BCOM` Stage2 search may use Investing Bloomberg Commodity historical-data pages when the snippet proves the plain Bloomberg Commodity Index close/last price, date, numeric value and source URL. `BCOMTR`/Total Return、`BCOMX`、`GSCI/GSG`、methodology、weights、sub-index 页面仍必须拒绝。
+- `mlf` 的 PBoC 多重价位公告可由 Stage2 官方结构化源写成非估算参考值：`current_value=2.00`、`is_estimated=false`，但必须通过 PBoC URL gate、公告月份匹配任务月份，且 note 必须包含“多重价位中标/无统一利率/展示参考值”等显式 marker；plain `利率招标` 不能单独释放官方参考口径。
+- `CN10Y_CDB` 在 ChinaBond 直采和搜索均失败时，可使用显式 `CN10Y + observed CDB spread` 估算兜底；estimator 必须有明确 spread provenance（`task.cdb_spread_bp` 或 `metadata.cn10y_cdb_spread_bp`），无 provenance 时 fail closed；输出必须保留 `is_estimated=true`、`estimation_method`、ChinaBond 或等效 `source_url`，只能因为 `estimated_allowlist_keys` 中包含 `CN10Y_CDB` 才释放 estimated gate。
 - `USDCNY` 是受控例外：可对 ChinaMoney/CFETS 官方表格页走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
 - 多 query 选优按后过滤质量，而不是原始 `score_max`：先做域名、时效、关键词、发布机构、期次过滤，再选 `usable_count` 更高的 query，并统计 `post_filter_query_switch_count`。
 - 全部结果 `score_max < low_score_threshold`（默认 0.2）则跳过抽取，标记 `manual_required`，统计 `low_score_drop`。
@@ -273,6 +276,7 @@ if comp < 0.8:
 - Exa quota failover 覆盖 fund_flow，但 fund_flow gate 不变：`source_tier`、`window_evidence`、`metric_basis`、`is_estimated`、`estimated_not_allowed` 仍按原规则判定。
 - `metric_basis=net_flow_sum` 仅用于目标窗口内日频净流入求和；`balance_delta` 用于余额类窗口差值；`news_net_flow` 和 `estimated_net_flow` 均不能作为真实窗口值通过 gate。
 - ETF 全市场资金流可由 TuShare `etf_share_size` 完整窗口释放 gate：121 个交易日、SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析时，按 `metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false` 写入。该口径是 ETF 规模 delta，不等同于新闻净流入；新闻、季度报告和 EastMoney 未验证全市场窗口时仍默认 `is_estimated=true`。
+- `fund_flow.etf` 搜索 fallback 必须过滤 `data.eastmoney.com/stockdata/*`、个股页、单只 ETF 页和新闻页；这些页面应记录 `search_result_scope_mismatch`，不得释放 `fund_flow_window_missing`。
 - Stage2 资金流定向命令：
   ```bash
   bash run_clean.sh python scripts/stage2_unified_enhancer.py \
