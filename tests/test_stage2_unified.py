@@ -579,6 +579,7 @@ def test_apply_extraction_preserves_bond_estimated_metadata():
         "is_estimated": True,
         "estimation_method": "CN10Y plus observed CDB spread",
         "metric_basis": "cn10y_proxy_spread",
+        "estimation_basis": "cn10y_proxy_change_basis; spread_source=task.cdb_spread_bp",
         "confidence": 0.62,
         "note": "CN10Y proxy",
         "as_of_date": "2026-05-22",
@@ -592,6 +593,7 @@ def test_apply_extraction_preserves_bond_estimated_metadata():
     assert entry["is_estimated"] is True
     assert entry["estimation_method"] == "CN10Y plus observed CDB spread"
     assert entry["metric_basis"] == "cn10y_proxy_spread"
+    assert entry["estimation_basis"] == "cn10y_proxy_change_basis; spread_source=task.cdb_spread_bp"
     assert entry["confidence"] == pytest.approx(0.62)
 
 
@@ -1304,6 +1306,59 @@ def test_candidate_query_quality_rejects_top_level_bcomtr_alias_historical_close
     )
 
     assert quality["unusable_reason"] == "strict_keyword_miss"
+    assert quality["usable_count"] == 0
+
+
+def test_candidate_query_quality_rejects_all_bad_bcom_scope_hits():
+    bcom = SEARCH_PROFILES["BCOM"]
+    task = {
+        "indicator_key": "BCOM",
+        "preferred_domains": bcom["preferred_domains"],
+        "required_keywords": bcom["required_keywords"],
+        "exclude_keywords": bcom["exclude_keywords"],
+        "strict_required_keywords": bcom["strict_required_keywords"],
+        "evidence_keywords": bcom["evidence_keywords"],
+        "good_url_patterns": bcom["good_url_patterns"],
+        "bad_url_patterns": bcom["bad_url_patterns"],
+        "required_output_fields": ["current_price"],
+        "expected_period_tokens": [],
+        "issuer": bcom["issuer"],
+        "issuer_aliases": bcom["issuer_aliases"],
+        "unit": bcom["unit"],
+    }
+    candidate = {
+        "query": bcom["query"],
+        "preferred_domains": bcom["preferred_domains"],
+        "required_keywords": bcom["required_keywords"],
+        "exclude_keywords": bcom["exclude_keywords"],
+    }
+
+    quality = _candidate_query_quality(
+        task,
+        candidate,
+        [
+            {
+                "url": "https://assets.bbhub.io/professional/sites/10/BCOM-Methodology.pdf",
+                "title": "Bloomberg Commodity Index Methodology",
+                "content": "Bloomberg Commodity Index BCOM methodology says the index level starts at 100 points.",
+                "score": 0.95,
+            },
+            {
+                "url": "https://www.bloomberg.com/company/press/bloomberg-commodity-index-2026-target-weights/",
+                "title": "Bloomberg Commodity Index 2026 Target Weights",
+                "content": "Bloomberg Commodity Index BCOM target weights mention a level of 100 points.",
+                "score": 0.92,
+            },
+            {
+                "url": "https://www.bloomberg.com/professional/product/indices/bloomberg-commodity-sub-indexes/",
+                "title": "Bloomberg Commodity Sub-Index Family",
+                "content": "Bloomberg Commodity Index BCOM sub-index pages list levels and points for components.",
+                "score": 0.91,
+            },
+        ],
+    )
+
+    assert quality["unusable_reason"] == "search_result_scope_mismatch"
     assert quality["usable_count"] == 0
 
 
@@ -2560,7 +2615,7 @@ def test_candidate_query_quality_keeps_low_score_value_evidence_over_high_score_
     assert quality["value_evidence_score"] > 0
 
 
-def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusable_page():
+def test_candidate_query_quality_marks_bcom_scope_mismatch_for_trusted_but_unusable_page():
     task = {
         "indicator_key": "BCOM",
         "preferred_domains": ["bloomberg.com"],
@@ -2585,7 +2640,7 @@ def test_candidate_query_quality_marks_value_evidence_miss_for_trusted_but_unusa
 
     quality = _candidate_query_quality(task, candidate, snippets)
 
-    assert quality["unusable_reason"] == "value_evidence_miss"
+    assert quality["unusable_reason"] == "search_result_scope_mismatch"
     assert quality["usable_count"] == 0
 
 

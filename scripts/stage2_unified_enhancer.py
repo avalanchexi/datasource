@@ -1187,8 +1187,18 @@ def _candidate_query_quality(
         usable_scores = _score_usable(usable)
         scored_usable = usable_scores["scored"]
 
+    indicator_key_normalized = str(task.get("indicator_key") or "")
     if (
-        str(task.get("indicator_key") or "").lower() == "etf"
+        indicator_key_normalized.lower() == "etf"
+        and scored_usable
+        and all(item["bad_hits"] for item in scored_usable)
+    ):
+        unusable_reason = "search_result_scope_mismatch"
+        usable = []
+        usable_scores = _score_usable(usable)
+        scored_usable = usable_scores["scored"]
+    elif (
+        indicator_key_normalized == "BCOM"
         and scored_usable
         and all(item["bad_hits"] for item in scored_usable)
     ):
@@ -1854,7 +1864,7 @@ def _apply_extraction(
         entry["note"] = note
         if source_url:
             entry["source_url"] = source_url
-        for field in ("is_estimated", "estimation_method", "metric_basis", "confidence"):
+        for field in ("is_estimated", "estimation_method", "metric_basis", "estimation_basis", "confidence"):
             if field in extraction and extraction.get(field) is not None:
                 entry[field] = extraction.get(field)
 
@@ -2049,6 +2059,7 @@ def _apply_extraction(
             "is_estimated": extraction.get("is_estimated") is True,
             "estimation_method": extraction.get("estimation_method"),
             "metric_basis": extraction.get("metric_basis"),
+            "estimation_basis": extraction.get("estimation_basis"),
             "confidence": extraction.get("confidence"),
             "stage_task_id": task["task_id"],
             "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),

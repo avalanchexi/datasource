@@ -291,6 +291,15 @@ class OfficialChinaProvider(Stage2StructuredProvider):
                 )
             return None
 
+        if key == "mlf" and self._is_mlf_multi_price_notice(html) and not self._is_trusted_pbc_url(url):
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=raw_key,
+                reason="untrusted_source_url",
+                message="PBoC MLF multi-price parsed rate requires a trusted PBoC source URL",
+                diagnostics={"url": url, "evidence_text": self._evidence(html)},
+            )
+
         payload = {"value": value, "unit": "%", "is_estimated": False}
         operation_amount = self._parse_operation_amount(html)
         if operation_amount is not None and key in {"reverse_repo", "mlf"}:

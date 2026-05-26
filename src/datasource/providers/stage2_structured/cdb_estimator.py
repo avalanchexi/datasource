@@ -39,7 +39,7 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
             )
 
         cn10y = self._find_cn10y_entry(market_payload)
-        proxy_yield = self._safe_number(cn10y.get("current_yield") or cn10y.get("current_value"))
+        proxy_yield = self._safe_number(self._proxy_yield_value(cn10y))
         if proxy_yield is None:
             raise StructuredProviderError(
                 provider=self.name,
@@ -47,6 +47,14 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
                 reason="missing_cn10y_proxy",
                 message="CN10Y_CDB estimator requires an existing CN10Y yield",
                 diagnostics={"source_url": self.source_url},
+            )
+        if proxy_yield <= 0:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="invalid_cn10y_proxy",
+                message="CN10Y_CDB estimator requires a positive CN10Y yield",
+                diagnostics={"source_url": self.source_url, "proxy_yield": proxy_yield},
             )
 
         spread_bp, spread_source = self._spread_bp(task, market_payload)
@@ -102,6 +110,13 @@ class CDBEstimatorProvider(Stage2StructuredProvider):
             if isinstance(entry, Mapping) and str(entry.get("symbol") or "") == "CN10Y":
                 return entry
         return {}
+
+    @staticmethod
+    def _proxy_yield_value(cn10y: Mapping[str, Any]) -> Any:
+        current_yield = cn10y.get("current_yield")
+        if current_yield not in (None, "", "N/A"):
+            return current_yield
+        return cn10y.get("current_value")
 
     def _spread_bp(
         self,

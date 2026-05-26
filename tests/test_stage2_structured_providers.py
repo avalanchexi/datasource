@@ -1026,6 +1026,27 @@ async def test_cdb_estimator_provider_fails_without_cn10y_proxy():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cn10y_entry",
+    [
+        {"symbol": "CN10Y", "current_yield": 0},
+        {"symbol": "CN10Y", "current_value": "0"},
+    ],
+)
+async def test_cdb_estimator_provider_rejects_zero_cn10y_proxy(cn10y_entry):
+    provider = CDBEstimatorProvider(default_spread_bp=10.0)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch(
+            {"indicator_key": "CN10Y_CDB", "cdb_spread_bp": 10.0},
+            {"bonds": [cn10y_entry]},
+            "2026-05-26",
+        )
+
+    assert exc_info.value.reason == "invalid_cn10y_proxy"
+
+
+@pytest.mark.asyncio
 async def test_default_registry_orders_cdb_estimator_after_chinabond():
     provider_names = [
         provider.name
@@ -1501,6 +1522,30 @@ async def test_official_china_provider_rejects_mlf_multi_price_non_pbc_source_ur
         "2026年5月中期借贷便利招标公告</a>"
     )
     detail_html = "2026年5月15日开展6000亿元中期借贷便利（MLF）操作，固定数量、利率招标、多重价位中标方式。"
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.MLF_URL:
+            return list_html
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "mlf", "ref_date": "2026-05-23"}, {}, "2026-05-23")
+
+    assert exc_info.value.reason == "untrusted_source_url"
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_rejects_mlf_multi_price_rate_from_non_pbc_source_url():
+    list_html = (
+        '<a href="https://news.example.com/2026052217453752767/index.html">'
+        "2026年5月中期借贷便利招标公告</a>"
+    )
+    detail_html = (
+        "2026年5月15日开展6000亿元中期借贷便利（MLF）操作，"
+        "固定数量、利率招标、多重价位中标方式，中标利率2.00%。"
+    )
 
     async def fetch_text(url, params=None):
         if url == OfficialChinaProvider.MLF_URL:
