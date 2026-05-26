@@ -1,0 +1,119 @@
+"""Estimated fallback provider for the 10Y CDB yield."""
+
+from __future__ import annotations
+
+from typing import Any, Mapping, Optional
+
+from datasource.providers.stage2_structured.base import (
+    Stage2StructuredProvider,
+    StructuredProviderError,
+    StructuredResult,
+)
+from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
+from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
+
+
+class CDBEstimatorProvider(Stage2StructuredProvider):
+    name = "cdb_estimator"
+    supported_keys = {"CN10Y_CDB"}
+
+    def __init__(
+        self,
+        *,
+        default_spread_bp: float = 10.0,
+        source_url: str = ChinaBondProvider.source_url,
+    ) -> None:
+        self.default_spread_bp = float(default_spread_bp)
+        self.source_url = source_url
+
+    async def fetch(self, task, market_payload, reference_date):
+        key = str(task.get("indicator_key") or "")
+        if key != "CN10Y_CDB":
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="unsupported_key",
+                message="CDB estimator provider does not support {0}".format(key),
+            )
+
+        cn10y = self._find_cn10y_entry(market_payload)
+        proxy_yield = self._safe_number(cn10y.get("current_yield") or cn10y.get("current_value"))
+        if proxy_yield is None:
+            raise StructuredProviderError(
+                provider=self.name,
+                indicator_key=key,
+                reason="missing_cn10y_proxy",
+                message="CN10Y_CDB estimator requires an existing CN10Y yield",
+                diagnostics={"source_url": self.source_url},
+            )
+
+        spread_bp = self._spread_bp(task, market_payload)
+        estimated_yield = round(proxy_yield + spread_bp / 100.0, 4)
+        change_5d = self._safe_number(cn10y.get("change_5d_bp"))
+        change_120d = self._safe_number(cn10y.get("change_120d_bp"))
+        note = (
+            "CN10Y_CDB estimated from CN10Y proxy plus configured CDB spread; "
+            "cn10y_proxy_change_basis"
+        )
+        payload = {
+            "value": estimated_yield,
+            "current_yield": estimated_yield,
+            "unit": "%",
+            "change_5d_bp": change_5d,
+            "change_120d_bp": change_120d,
+            "is_estimated": True,
+            "estimation_method": "CN10Y plus observed CDB spread",
+            "metric_basis": "cn10y_proxy_plus_spread",
+            "note": note,
+        }
+        return StructuredResult(
+            provider=self.name,
+            indicator_key=key,
+            category="bonds",
+            payload=payload,
+            source="CN10Y proxy plus configured CDB spread",
+            source_url=self.source_url,
+            source_tier=classify_structured_source_tier(self.source_url),
+            as_of_date=str(cn10y.get("date") or cn10y.get("as_of_date") or reference_date),
+            confidence=0.65,
+            diagnostics={
+                "proxy_symbol": "CN10Y",
+                "proxy_yield": proxy_yield,
+                "spread_bp": spread_bp,
+                "estimated_yield": estimated_yield,
+                "estimation_method": "CN10Y plus observed CDB spread",
+                "source_url": self.source_url,
+            },
+        )
+
+    @staticmethod
+    def _find_cn10y_entry(market_payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        for entry in market_payload.get("bonds") or []:
+            if isinstance(entry, Mapping) and str(entry.get("symbol") or "") == "CN10Y":
+                return entry
+        return {}
+
+    def _spread_bp(self, task: Mapping[str, Any], market_payload: Mapping[str, Any]) -> float:
+        for value in (
+            task.get("cdb_spread_bp"),
+            market_payload.get("metadata", {}).get("cn10y_cdb_spread_bp")
+            if isinstance(market_payload.get("metadata"), Mapping)
+            else None,
+        ):
+            parsed = self._safe_number(value)
+            if parsed is not None:
+                return parsed
+        return self.default_spread_bp
+
+    @staticmethod
+    def _safe_number(value: Any) -> Optional[float]:
+        try:
+            if value in (None, "", "N/A"):
+                return None
+            return float(value)
+        except Exception:
+            return None
+
+
+def build_provider() -> CDBEstimatorProvider:
+    return CDBEstimatorProvider()

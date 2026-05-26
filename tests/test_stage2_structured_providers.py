@@ -9,6 +9,7 @@ from datasource.providers.stage2_structured.base import (
     StructuredResult,
 )
 from datasource.providers.stage2_structured.chinabond import ChinaBondProvider
+from datasource.providers.stage2_structured.cdb_estimator import CDBEstimatorProvider
 from datasource.providers.stage2_structured.eastmoney_etf import EastMoneyETFProvider
 from datasource.providers.stage2_structured.official_china import (
     MLF_URL,
@@ -950,6 +951,56 @@ async def test_chinabond_provider_rejects_unreasonable_yield_value():
         await provider.fetch({"indicator_key": "CN10Y_CDB"}, {}, "2026-05-23")
 
     assert exc_info.value.reason in {"missing_value", "parse_error"}
+
+
+@pytest.mark.asyncio
+async def test_cdb_estimator_provider_uses_cn10y_proxy_plus_spread():
+    provider = CDBEstimatorProvider(default_spread_bp=10.0)
+    market_payload = {
+        "bonds": [
+            {
+                "symbol": "CN10Y",
+                "current_yield": 1.7484,
+                "change_5d_bp": -1.01,
+                "change_120d_bp": -10.62,
+                "date": "2026-05-25",
+                "source_url": "https://yield.chinabond.com.cn/cn10y",
+            }
+        ]
+    }
+
+    result = await provider.fetch({"indicator_key": "CN10Y_CDB"}, market_payload, "2026-05-26")
+
+    extraction = result.to_extraction()
+    assert result.provider == "cdb_estimator"
+    assert result.source_url.startswith("https://yield.chinabond.com.cn/")
+    assert extraction["value"] == pytest.approx(1.8484)
+    assert extraction["current_yield"] == pytest.approx(1.8484)
+    assert extraction["change_5d_bp"] == pytest.approx(-1.01)
+    assert extraction["change_120d_bp"] == pytest.approx(-10.62)
+    assert extraction["is_estimated"] is True
+    assert extraction["estimation_method"] == "CN10Y plus observed CDB spread"
+    assert extraction["metric_basis"] == "cn10y_proxy_plus_spread"
+
+
+@pytest.mark.asyncio
+async def test_cdb_estimator_provider_fails_without_cn10y_proxy():
+    provider = CDBEstimatorProvider(default_spread_bp=10.0)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "CN10Y_CDB"}, {"bonds": []}, "2026-05-26")
+
+    assert exc_info.value.reason == "missing_cn10y_proxy"
+
+
+@pytest.mark.asyncio
+async def test_default_registry_orders_cdb_estimator_after_chinabond():
+    provider_names = [
+        provider.name
+        for provider in build_default_registry().providers_for("CN10Y_CDB")
+    ]
+
+    assert provider_names[:2] == ["chinabond", "cdb_estimator"]
 
 
 def test_official_china_provider_exposes_module_url_constants():

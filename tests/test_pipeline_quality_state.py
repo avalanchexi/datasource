@@ -130,6 +130,31 @@ def test_pipeline_quality_state_accepts_official_mlf_multi_price_reference():
     assert {"category": "monetary_policy", "key": "mlf", "reason": "missing_compare_values"} not in state["quality_blockers"]
 
 
+def test_pipeline_quality_state_allows_cn10y_cdb_estimated_fallback():
+    payload = _base_payload()
+    payload["bonds"] = [
+        {
+            "symbol": "CN10Y_CDB",
+            "name": "10年期国开债收益率",
+            "current_yield": 1.8484,
+            "change_5d_bp": -1.01,
+            "change_120d_bp": -10.62,
+            "unit": "%",
+            "date": "2026-05-26",
+            "source": "CN10Y proxy plus configured CDB spread",
+            "source_url": "https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/more?locale=cn_ZH",
+            "is_estimated": True,
+            "estimation_method": "CN10Y plus observed CDB spread",
+            "metric_basis": "cn10y_proxy_plus_spread",
+        }
+    ]
+
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    assert {"category": "bonds", "key": "CN10Y_CDB", "reason": "estimated_not_allowed"} not in state["quality_blockers"]
+    assert "bonds.CN10Y_CDB" not in state["policy_evaluation"]["estimated_blockers"]
+
+
 def test_pipeline_quality_state_flags_commodity_window_mismatch():
     payload = _base_payload()
     payload["commodities"] = [
