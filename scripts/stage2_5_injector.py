@@ -10,6 +10,7 @@ import argparse
 import json
 import re
 import sys
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
@@ -40,6 +41,7 @@ from datasource.utils.policy_rules import (
     get_non_blocking_warning_rules,
 )
 from datasource.utils.run_paths import build_run_paths_from_reference
+from datasource.utils.source_trust import is_official_source_url
 from datasource.utils.text_markers import contains_ytd_marker
 
 FUND_FLOW_KEY_MAP = {
@@ -132,9 +134,84 @@ OFFICIAL_MANUAL_SOURCES = {
     },
     "bonds": {},
 }
+TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS = {
+    "reserve_ratio": ("pbc.gov.cn",),
+}
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
 
 _POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class InjectionSummary:
+    injected_items: List[Dict[str, Any]] = field(default_factory=list)
+    metadata_updated_items: List[Dict[str, Any]] = field(default_factory=list)
+    skipped_existing_items: List[Dict[str, Any]] = field(default_factory=list)
+    skipped_no_parseable_value_items: List[Dict[str, Any]] = field(default_factory=list)
+    forced_override_items: List[Dict[str, Any]] = field(default_factory=list)
+    fund_flow_forced_estimated_items: List[Dict[str, Any]] = field(default_factory=list)
+
+    def _record(self, bucket: List[Dict[str, Any]], category: str, key: str, **details: Any) -> None:
+        item = {"category": category, "key": str(key)}
+        item.update({k: v for k, v in details.items() if v is not None})
+        bucket.append(item)
+
+    def injected(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.injected_items, category, key, **details)
+
+    def metadata_updated(
+        self, category: str, key: str, reason: str, existing: Any, incoming: Any
+    ) -> None:
+        self._record(
+            self.metadata_updated_items,
+            category,
+            key,
+            reason=reason,
+            existing_value=existing,
+            incoming_value=incoming,
+        )
+
+    def skipped_existing(
+        self, category: str, key: str, reason: str, existing: Any, incoming: Any
+    ) -> None:
+        self._record(
+            self.skipped_existing_items,
+            category,
+            key,
+            reason=reason,
+            existing_value=existing,
+            incoming_value=incoming,
+        )
+
+    def skipped_no_parseable_value(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.skipped_no_parseable_value_items, category, key, **details)
+
+    def forced_override(self, category: str, key: str, existing: Any, incoming: Any) -> None:
+        self._record(
+            self.forced_override_items,
+            category,
+            key,
+            reason="force_override",
+            existing_value=existing,
+            incoming_value=incoming,
+        )
+
+    def fund_flow_forced_estimated(self, category: str, key: str, **details: Any) -> None:
+        self._record(self.fund_flow_forced_estimated_items, category, key, **details)
+
+    def to_dict(self) -> Dict[str, Any]:
+        buckets = {
+            "injected": self.injected_items,
+            "metadata_updated": self.metadata_updated_items,
+            "skipped_existing": self.skipped_existing_items,
+            "skipped_no_parseable_value": self.skipped_no_parseable_value_items,
+            "forced_override": self.forced_override_items,
+            "fund_flow_forced_estimated": self.fund_flow_forced_estimated_items,
+        }
+        return {
+            "counts": {name: len(items) for name, items in buckets.items()},
+            **{name: list(items) for name, items in buckets.items()},
+        }
 
 
 def _policy_rules() -> Dict[str, Any]:
@@ -403,6 +480,14 @@ def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
         target["source_url"] = url
 
 
+def _should_preserve_existing_official_source(target: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    existing_url = _extract_source_url(target)
+    if not existing_url or not is_official_source_url(existing_url):
+        return False
+    incoming_url = _extract_source_url(payload)
+    return not (incoming_url and is_official_source_url(incoming_url))
+
+
 def _normalize_manual_official_key(category: str, key: str) -> str:
     if category == "monetary_policy":
         return canonical_monetary_key(str(key)).lower()
@@ -415,6 +500,13 @@ def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
         evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
     for field in OFFICIAL_MANUAL_TEXT_FIELDS:
         evidence.extend(_iter_http_like_evidence(payload.get(field)))
+    return evidence
+
+
+def _iter_explicit_url_evidence(payload: Dict[str, Any]) -> List[str]:
+    evidence: List[str] = []
+    for field in EXPLICIT_URL_FIELDS:
+        evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
     return evidence
 
 
@@ -453,8 +545,48 @@ def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
     return domains
 
 
-def _payload_has_url_like_evidence(payload: Dict[str, Any]) -> bool:
-    return bool(_iter_url_like_evidence(payload))
+def _extract_domains_from_evidence(url_like_evidence: List[str]) -> List[str]:
+    domains: List[str] = []
+    for value in url_like_evidence:
+        domain = _extract_domain(value)
+        if domain:
+            domains.append(domain)
+    return domains
+
+
+def _single_trusted_explicit_https_url(
+    payload: Dict[str, Any],
+    trusted_domains: Tuple[str, ...],
+) -> Optional[str]:
+    if _has_invalid_explicit_url_evidence(payload):
+        return None
+    if _has_multi_value_explicit_url_evidence(payload):
+        return None
+    url_like_evidence = _iter_explicit_url_evidence(payload)
+    if len(url_like_evidence) != 1:
+        return None
+    source_url = url_like_evidence[0]
+    if not _is_https_url_evidence(source_url):
+        return None
+    domain = _extract_domain(source_url)
+    if not domain:
+        return None
+    if not any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains):
+        return None
+    text_url_evidence: List[str] = []
+    for field in OFFICIAL_MANUAL_TEXT_FIELDS:
+        text_url_evidence.extend(_iter_http_like_evidence(payload.get(field)))
+    if len(text_url_evidence) > 1:
+        return None
+    for value in text_url_evidence:
+        if not _is_https_url_evidence(value):
+            return None
+        text_domain = _extract_domain(value)
+        if not text_domain:
+            return None
+        if not any(_official_domain_matches(text_domain, trusted_domain) for trusted_domain in trusted_domains):
+            return None
+    return source_url
 
 
 def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
@@ -476,21 +608,9 @@ def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) 
         return False
     if _has_multi_value_explicit_url_evidence(payload):
         return False
-    if _payload_has_url_like_evidence(payload):
-        url_like_evidence = _iter_url_like_evidence(payload)
-        if not trusted_domains:
-            return False
-        if not all(_is_https_url_evidence(value) for value in url_like_evidence):
-            return False
-        payload_domains = _extract_domains_from_payload(payload)
-        if len(payload_domains) != len(url_like_evidence):
-            return False
-        return all(
-            any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains)
-            for domain in payload_domains
-        )
-
-    return False
+    if not trusted_domains:
+        return False
+    return _single_trusted_explicit_https_url(payload, trusted_domains) is not None
 
 
 def _apply_manual_official_estimation_rule(
@@ -918,6 +1038,196 @@ def _default_fund_flow_metric_basis(key: str, payload: Dict[str, Any]) -> str:
     return "net_flow_sum"
 
 
+FUND_FLOW_TIER1_DOMAINS = (
+    "hkex.com.hk",
+    "sse.com.cn",
+    "szse.cn",
+)
+FUND_FLOW_TIER2_STRUCTURED_PATHS = {
+    "data.eastmoney.com": (
+        "/hsgt",
+        "/etf",
+        "/fund",
+        "/rzrq",
+    ),
+    "tushare.pro": ("/document",),
+}
+FUND_FLOW_TIER3_DOMAINS = (
+    "finance.sina.com.cn",
+    "sina.com.cn",
+    "stcn.com",
+    "cs.com.cn",
+    "cls.cn",
+    "10jqka.com.cn",
+)
+FUND_FLOW_DIRECT_WINDOW_EVIDENCE = {
+    "direct_window",
+    "direct_daily_series",
+    "direct_balance_delta",
+}
+FUND_FLOW_WEAK_WINDOW_EVIDENCE = {
+    "news_summary",
+    "derived",
+    "unknown",
+}
+FUND_FLOW_ESTIMATED_METRIC_BASIS = {
+    "news_net_flow",
+    "estimated_net_flow",
+}
+
+
+def _normalize_source_tier(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    if text in {"tier1", "tier2", "tier3", "unknown"}:
+        return text
+    return None
+
+
+def _normalize_window_evidence(value: Any) -> Optional[str]:
+    text = str(value or "").strip().lower()
+    allowed = FUND_FLOW_DIRECT_WINDOW_EVIDENCE | FUND_FLOW_WEAK_WINDOW_EVIDENCE
+    if text in allowed:
+        return text
+    return None
+
+
+def _domain_matches(domain: str, suffixes: Any) -> bool:
+    return bool(domain) and any(domain == suffix or domain.endswith(f".{suffix}") for suffix in suffixes)
+
+
+def _parse_url_domain_path(value: Optional[str]) -> Tuple[str, str]:
+    if not value:
+        return "", ""
+    text = str(value).strip().strip("<>()[]{}\"'")
+    if not text:
+        return "", ""
+    parsed = urlparse(text)
+    if not parsed.hostname and "://" not in text and not text.startswith("//"):
+        parsed = urlparse(f"//{text}")
+    try:
+        parsed.port
+    except ValueError:
+        return "", ""
+    return (parsed.hostname or "").lower().strip(), parsed.path or "/"
+
+
+def _path_matches_prefix(path: str, prefixes: Any) -> bool:
+    normalized = path or "/"
+    return any(
+        prefix == "/"
+        or normalized == prefix
+        or normalized.startswith(f"{prefix}/")
+        for prefix in prefixes
+    )
+
+
+def _is_fund_flow_tier2_structured_source(url: Optional[str]) -> bool:
+    domain, path = _parse_url_domain_path(url)
+    prefixes = FUND_FLOW_TIER2_STRUCTURED_PATHS.get(domain)
+    if not prefixes:
+        return False
+    return _path_matches_prefix(path, prefixes)
+
+
+def _infer_fund_flow_source_tier(payload: Dict[str, Any]) -> str:
+    url = _extract_source_url(payload)
+    domain = _extract_domain(url)
+    if _domain_matches(domain, FUND_FLOW_TIER1_DOMAINS):
+        return "tier1"
+    if _is_fund_flow_tier2_structured_source(url):
+        return "tier2"
+    if _domain_matches(domain, FUND_FLOW_TIER3_DOMAINS):
+        return "tier3"
+    return "unknown"
+
+
+def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_basis: str) -> str:
+    metric = str(metric_basis or "").strip().lower()
+    if metric == "estimated_net_flow":
+        return "derived"
+    if metric == "news_net_flow":
+        return "news_summary"
+
+    explicit = _normalize_window_evidence(payload.get("window_evidence"))
+    field_retry_evidence = payload.get("field_retry_evidence")
+    if isinstance(field_retry_evidence, dict):
+        recent = field_retry_evidence.get("recent_5d")
+        total = field_retry_evidence.get("total_120d")
+        if isinstance(recent, dict) and isinstance(total, dict):
+            recent_trusted = _fund_flow_has_trusted_window(
+                _infer_fund_flow_source_tier(recent),
+                str(recent.get("window_evidence") or "unknown"),
+                str(recent.get("metric_basis") or metric_basis),
+            )
+            total_trusted = _fund_flow_has_trusted_window(
+                _infer_fund_flow_source_tier(total),
+                str(total.get("window_evidence") or "unknown"),
+                str(total.get("metric_basis") or metric_basis),
+            )
+            if recent_trusted and total_trusted:
+                if explicit in FUND_FLOW_DIRECT_WINDOW_EVIDENCE:
+                    return explicit
+                return "direct_window"
+        return "unknown"
+
+    if explicit:
+        return explicit
+
+    text = " ".join(
+        str(payload.get(field) or "")
+        for field in ("source", "note", "estimation_method", "description")
+    ).lower()
+    if any(token in text for token in ("季度", "q1", "q2", "q3", "q4", "年内", "年度", "单日", "外推")):
+        return "news_summary"
+    if key == "margin" and metric == "balance_delta" and any(token in text for token in ("余额", "balance")):
+        return "direct_balance_delta"
+    if "recent_5d_field_retry" in text and "total_120d_field_retry" in text:
+        return "unknown"
+    if ("近5日" in text or "5日" in text or "5-day" in text) and ("120" in text or "一百二十" in text):
+        return "direct_window"
+    return "unknown"
+
+
+def _fund_flow_has_trusted_window(source_tier: str, window_evidence: str, metric_basis: str) -> bool:
+    metric = str(metric_basis or "").strip().lower()
+    if metric in FUND_FLOW_ESTIMATED_METRIC_BASIS:
+        return False
+    if source_tier not in {"tier1", "tier2"}:
+        return False
+    return window_evidence in FUND_FLOW_DIRECT_WINDOW_EVIDENCE
+
+
+def _append_note_once(note: str, addition: str) -> str:
+    if not addition:
+        return note
+    if addition in note:
+        return note
+    if note:
+        return f"{note}；{addition}"
+    return addition
+
+
+def _normalize_fund_flow_estimation(entry: Dict[str, Any], payload: Dict[str, Any]) -> None:
+    source_tier = str(entry.get("source_tier") or "unknown")
+    window_evidence = str(entry.get("window_evidence") or "unknown")
+    metric_basis = str(entry.get("metric_basis") or "")
+    trusted = _fund_flow_has_trusted_window(source_tier, window_evidence, metric_basis)
+
+    if trusted:
+        entry["is_estimated"] = False
+        return
+
+    entry["is_estimated"] = True
+    entry.setdefault("estimation_method", "fund_flow_manual_window_not_direct")
+    note_addition = (
+        "fund_flow_estimated_gate:"
+        f"source_tier={source_tier},"
+        f"window_evidence={window_evidence},"
+        f"metric_basis={metric_basis or 'unknown'}"
+    )
+    entry["note"] = _append_note_once(str(entry.get("note") or ""), note_addition)
+
+
 def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     将 Stage2 Unified 的 websearch_results（results 数组，含 task/extraction）转换为
@@ -972,6 +1282,18 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 rows[i] = payload
                 return
         rows.append(payload)
+
+    def _stage2_quality_metadata(extraction: Dict[str, Any]) -> Dict[str, Any]:
+        fields = (
+            "is_estimated",
+            "estimation_method",
+            "metric_basis",
+            "confidence",
+            "note",
+            "as_of_date",
+            "report_period",
+        )
+        return {field: extraction.get(field) for field in fields if extraction.get(field) is not None}
 
     def _append_manual_skeleton(
         key: str,
@@ -1181,6 +1503,7 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                     "trend": extraction.get("trend") or "未知",
                     "source": source,
                     "source_url": src,
+                    **_stage2_quality_metadata(extraction),
                 },
             )
         elif cat == "stock_indices":
@@ -1211,6 +1534,13 @@ def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
                 "source": source,
                 "note": extraction.get("note"),
                 "source_url": src,
+                "is_estimated": extraction.get("is_estimated"),
+                "estimation_method": extraction.get("estimation_method"),
+                "confidence": extraction.get("confidence"),
+                "metric_basis": extraction.get("metric_basis"),
+                "window_evidence": extraction.get("window_evidence"),
+                "source_tier": extraction.get("source_tier"),
+                "field_retry_evidence": extraction.get("field_retry_evidence"),
             }
         elif cat == "macro_indicators":
             schema["macro_indicators"][key] = {
@@ -1340,6 +1670,7 @@ def inject_websearch_data(
             _attach_source_url(payload)
 
     inject_count = 0
+    summary = InjectionSummary()
 
     # 1. 注入宏观指标
     print("\n[STEP 1] 注入宏观指标数据...")
@@ -1349,6 +1680,7 @@ def inject_websearch_data(
         if key not in macro_section:
             # 缺失即创建占位，避免 industrial_sales 等被跳过
             macro_section[key] = _create_macro_placeholder(key, payload, metadata)
+        metadata_updated_before = len(summary.metadata_updated_items)
         updated = _apply_macro_entry(
             key,
             macro_section[key],
@@ -1358,9 +1690,11 @@ def inject_websearch_data(
             override_stale=override_stale,
             force_override=force_override,
             trend_history_base_dir=trend_base_dir,
+            summary=summary,
         )
         if updated:
-            inject_count += 1
+            if len(summary.metadata_updated_items) == metadata_updated_before:
+                inject_count += 1
             print(f"  [OK] {payload.get('indicator_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'macro_indicators', key)
             _remove_top_missing(market_data, key)
@@ -1374,6 +1708,7 @@ def inject_websearch_data(
         key = MONETARY_KEY_MAP.get(raw_key, raw_key)
         if key not in monetary_section:
             monetary_section[key] = _create_monetary_placeholder(key, payload, metadata)
+        metadata_updated_before = len(summary.metadata_updated_items)
         updated = _apply_monetary_entry(
             key,
             monetary_section[key],
@@ -1383,9 +1718,11 @@ def inject_websearch_data(
             override_stale=override_stale,
             force_override=force_override,
             trend_history_base_dir=trend_base_dir,
+            summary=summary,
         )
         if updated:
-            inject_count += 1
+            if len(summary.metadata_updated_items) == metadata_updated_before:
+                inject_count += 1
             print(f"  [OK] {payload.get('policy_name', key)}: {payload.get('current_value')} {payload.get('unit', '')}".strip())
             _remove_missing_item(metadata, 'monetary_policy', key)
             _remove_top_missing(market_data, key)
@@ -1401,14 +1738,17 @@ def inject_websearch_data(
         if key not in market_data.get('fund_flow', {}):
             continue
         normalized_payload = _normalize_fund_flow_payload(raw_key, payload)
-        if _apply_fund_flow_entry(market_data['fund_flow'][key], key, normalized_payload):
+        if _apply_fund_flow_entry(market_data['fund_flow'][key], key, normalized_payload, summary=summary):
             inject_count += 1
+            summary.injected("fund_flow", key)
             print(
                 f"  [OK] {key}: recent_5d={market_data['fund_flow'][key]['recent_5d']} "
                 f"total_120d={market_data['fund_flow'][key]['total_120d']} source={market_data['fund_flow'][key]['source']}"
             )
             _remove_missing_item(metadata, 'fund_flow', key)
             _remove_top_missing(market_data, key)
+        else:
+            summary.skipped_no_parseable_value("fund_flow", key)
 
     # 4. 注入外汇数据
     print("\n[STEP 4] 注入外汇数据...")
@@ -1433,6 +1773,7 @@ def inject_websearch_data(
         if not updated:
             market_forex.append(_build_forex_entry(fx, is_manual=is_manual, trend_history_base_dir=trend_base_dir))
         inject_count += 1
+        summary.injected("forex", pair)
         print(f"  [OK] {fx.get('name', pair)}: {fx.get('current_rate')} (source={fx.get('source')})")
         _remove_missing_item(metadata, 'forex', pair)
         _remove_top_missing(market_data, pair)
@@ -1449,6 +1790,7 @@ def inject_websearch_data(
         price = _coerce_float(idx_payload.get('current_price') or idx_payload.get('close') or idx_payload.get('price'))
         if price is None:
             print(f"  [WARN] {symbol} 缺少可解析价格，跳过注入")
+            summary.skipped_no_parseable_value("stock_indices", symbol)
             continue
         merged = False
         for i, existing in enumerate(stock_indices_section):
@@ -1459,6 +1801,7 @@ def inject_websearch_data(
         if not merged:
             stock_indices_section.append(_build_stock_index_entry(symbol, idx_payload))
         inject_count += 1
+        summary.injected("stock_indices", symbol)
         print(f"  [OK] {idx_payload.get('name', symbol)}: {price}")
         _remove_missing_item(metadata, 'stock_indices', symbol)
         _remove_top_missing(market_data, symbol)
@@ -1476,6 +1819,7 @@ def inject_websearch_data(
         bond_data['current_yield'] = _coerce_float(bond_data.get('current_yield'))
         if bond_data['current_yield'] is None:
             print(f"  [WARN] {symbol} 缺少 current_yield，跳过注入")
+            summary.skipped_no_parseable_value("bonds", symbol)
             continue
         # 在bonds列表中找到对应项并更新
         updated = False
@@ -1488,6 +1832,7 @@ def inject_websearch_data(
                     trend_history_base_dir=trend_base_dir,
                 )
                 inject_count += 1
+                summary.injected("bonds", symbol)
                 print(f"  [OK] {bond_data['name']}: {bond_data['current_yield']}%")
                 _remove_missing_item(metadata, 'bonds', symbol)
                 _remove_top_missing(market_data, symbol)
@@ -1502,6 +1847,7 @@ def inject_websearch_data(
             )
             market_data.setdefault('bonds', []).append(merged_entry)
             inject_count += 1
+            summary.injected("bonds", symbol)
             _remove_missing_item(metadata, 'bonds', symbol)
             _remove_top_missing(market_data, symbol)
 
@@ -1518,6 +1864,7 @@ def inject_websearch_data(
         commodity_data['current_price'] = _coerce_float(commodity_data.get('current_price'))
         if commodity_data['current_price'] is None:
             print(f"  [WARN] {symbol} 缺少 current_price，跳过注入")
+            summary.skipped_no_parseable_value("commodities", symbol)
             continue
         # 在commodities列表中找到对应项并更新
         updated = False
@@ -1541,6 +1888,7 @@ def inject_websearch_data(
                 )
             )
         inject_count += 1
+        summary.injected("commodities", symbol)
         price_val = commodity_data.get('current_price') or 0.0
         ytd_val = commodity_data.get('ytd_change') or 0.0
         print(f"  [OK] {commodity_data['name']}: {commodity_data.get('unit','')}{price_val:.2f} (YTD {ytd_val:+.2f}%)")
@@ -1625,13 +1973,19 @@ def inject_websearch_data(
     quality_state = _apply_pipeline_quality_state(market_data)
     quality_blockers = quality_state.get("quality_blockers") or []
 
+    metadata["injection_summary"] = summary.to_dict()
+
     # 保存到输出文件
     print(f"\n[INFO] 保存完整数据到: {output_path}")
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(market_data, f, ensure_ascii=False, indent=2)
 
+    summary_counts = metadata["injection_summary"]["counts"]
     print(f"\n[SUCCESS] 数据注入完成！")
     print(f"  - 注入数据项: {inject_count}")
+    print(f"  - 元数据更新项: {summary_counts.get('metadata_updated', 0)}")
+    print(f"  - 已有值跳过项: {summary_counts.get('skipped_existing', 0)}")
+    print(f"  - 资金流强制估算项: {summary_counts.get('fund_flow_forced_estimated', 0)}")
     print(f"  - 数据完整性: {market_data['metadata']['data_completeness']:.1%}")
     print(f"  - 输出文件: {output_path}")
     if quality_blockers:
@@ -1786,6 +2140,24 @@ def _coerce_float(value: Any) -> Optional[float]:
     return None
 
 
+def _pct_change(current: Any, previous: Any) -> Optional[float]:
+    current_value = _coerce_float(current)
+    previous_value = _coerce_float(previous)
+    if current_value is None or previous_value is None:
+        return None
+    if abs(previous_value) < 1e-9:
+        return None
+    return round((current_value - previous_value) / abs(previous_value) * 100.0, 4)
+
+
+def _same_numeric_value(left: Any, right: Any) -> bool:
+    left_value = _coerce_float(left)
+    right_value = _coerce_float(right)
+    if left_value is None or right_value is None:
+        return False
+    return abs(left_value - right_value) < 1e-9
+
+
 def _calc_change_rate_pct(current_value: Optional[float], previous_value: Optional[float]) -> Optional[float]:
     """按百分比口径计算变化率：(current - previous) / abs(previous) * 100。"""
     if current_value is None or previous_value is None:
@@ -1834,6 +2206,158 @@ def _format_source_label(raw_source: Optional[str]) -> str:
     return f"{DEFAULT_SOURCE_LABEL}({source_text})"
 
 
+def _update_metadata_only(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    changed = False
+    preserve_existing_official_source = _should_preserve_existing_official_source(entry, payload)
+
+    def set_if_changed(field: str, value: Any) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if entry.get(field) != value:
+            entry[field] = value
+            changed = True
+
+    incoming_date = payload.get("date") or payload.get("as_of_date") or payload.get("report_period")
+    if incoming_date:
+        set_if_changed("date", incoming_date)
+    if payload.get("as_of_date") or payload.get("report_period"):
+        set_if_changed("as_of_date", payload.get("as_of_date") or payload.get("report_period"))
+    if "report_period" in payload:
+        set_if_changed("report_period", payload.get("report_period"))
+    if "source" in payload and not preserve_existing_official_source:
+        set_if_changed("source", _format_source_label(payload.get("source")))
+    source_url = _extract_source_url(payload)
+    if source_url and not preserve_existing_official_source:
+        set_if_changed("source_url", source_url)
+    if "note" in payload and not preserve_existing_official_source:
+        note_val = payload.get("note")
+        set_if_changed("note", note_val if isinstance(note_val, str) else "")
+    for field_name in ("confidence", "estimation_method"):
+        if field_name in payload:
+            set_if_changed(field_name, payload.get(field_name))
+    if "is_estimated" in payload:
+        incoming_estimated = _coerce_bool(payload.get("is_estimated"))
+        if not (
+            preserve_existing_official_source
+            and entry.get("is_estimated") is False
+            and incoming_estimated is True
+        ):
+            set_if_changed("is_estimated", incoming_estimated)
+    return changed
+
+
+def _merge_same_value_report_fields(
+    entry: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    category: str,
+    key: str,
+    is_manual: bool = False,
+    override_stale: bool = True,
+) -> bool:
+    metadata_payload = payload
+    if category == "monetary_policy" and "is_estimated" in payload:
+        metadata_payload = dict(payload)
+        metadata_payload.pop("is_estimated", None)
+    changed = _update_metadata_only(entry, metadata_payload)
+
+    def set_if_changed(field: str, value: Any) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if entry.get(field) != value:
+            entry[field] = value
+            changed = True
+
+    if category == "macro_indicators":
+        for field in ("previous_value", "change_rate", "yoy_month", "yoy_ytd"):
+            if field in payload:
+                set_if_changed(field, _coerce_float(payload.get(field)))
+        for field in ("value_type", "report_period"):
+            if field in payload:
+                set_if_changed(field, payload.get(field))
+    elif category == "monetary_policy":
+        if "change_from_120d" in payload:
+            change_value = payload.get("change_from_120d")
+        else:
+            change_value = payload.get("change_rate")
+        set_if_changed("change_from_120d", _coerce_float(change_value))
+
+        rrr_type_conflict = _has_rrr_type_conflict(entry, payload) if key in {"rrr", "reserve_ratio"} else False
+        incoming_rrr_type = _normalize_rrr_type(payload.get("rrr_type") or payload.get("value_type"))
+        if not rrr_type_conflict:
+            set_if_changed("rrr_type", incoming_rrr_type)
+
+        if is_manual:
+            before_estimated = entry.get("is_estimated")
+            before_note = entry.get("note")
+            _apply_manual_official_estimation_rule(category, key, payload, entry)
+            if _is_trusted_monetary_manual_quality_override(
+                key,
+                entry,
+                payload,
+                _coerce_float(payload.get("current_value")),
+                is_manual=is_manual,
+            ):
+                entry["is_estimated"] = False
+            changed = (
+                changed
+                or before_estimated != entry.get("is_estimated")
+                or before_note != entry.get("note")
+            )
+
+    if changed and entry.get("current_value") is not None:
+        if override_stale or not bool(entry.get("is_stale")):
+            entry["is_stale"] = False
+            entry["stale_reason"] = None
+    return changed
+
+
+def _has_rrr_type_conflict(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    existing_rrr_type = _normalize_rrr_type(entry.get("rrr_type"))
+    incoming_rrr_type = _normalize_rrr_type(payload.get("rrr_type") or payload.get("value_type"))
+    return bool(
+        existing_rrr_type
+        and incoming_rrr_type
+        and incoming_rrr_type != existing_rrr_type
+        and entry.get("current_value") is not None
+    )
+
+
+def _is_trusted_monetary_manual_quality_override(
+    indicator_key: str,
+    entry: Dict[str, Any],
+    payload: Dict[str, Any],
+    incoming_current_value: Optional[float],
+    *,
+    is_manual: bool,
+) -> bool:
+    key = "reserve_ratio" if indicator_key in {"rrr", "reserve_ratio"} else indicator_key
+    if not is_manual or key not in TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS:
+        return False
+    if _has_rrr_type_conflict(entry, payload):
+        return False
+    if incoming_current_value is None:
+        return False
+    if not bool(entry.get("is_estimated")):
+        existing_source_url = _extract_source_url(entry)
+        existing_official = bool(existing_source_url and is_official_source_url(existing_source_url))
+        existing_compare_gap = _coerce_float(entry.get("change_from_120d")) is None
+        note_text = str(entry.get("note") or "")
+        if existing_official or not existing_compare_gap or "缺少发布机构" not in note_text:
+            return False
+    if "is_estimated" not in payload or _coerce_bool(payload.get("is_estimated")) is not False:
+        return False
+    source_url = _single_trusted_explicit_https_url(
+        payload,
+        TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS[key],
+    )
+    if not source_url:
+        return False
+    return True
+
+
 def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -1862,12 +2386,44 @@ def _apply_macro_entry(
     override_stale: bool = True,
     force_override: bool = False,
     trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
+    summary: Optional[InjectionSummary] = None,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
+    original_current_value = entry.get("current_value")
+    incoming_current_value = _coerce_float(payload.get("current_value"))
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
     if not force_override and not existing_placeholder and not (override_stale and existing_stale):
+        if _same_numeric_value(original_current_value, incoming_current_value):
+            if _merge_same_value_report_fields(
+                entry,
+                payload,
+                category="macro_indicators",
+                key=indicator_key,
+                is_manual=is_manual,
+                override_stale=override_stale,
+            ):
+                if summary is not None:
+                    summary.metadata_updated(
+                        "macro_indicators",
+                        indicator_key,
+                        "same_numeric_value_report_fields_merged",
+                        original_current_value,
+                        incoming_current_value,
+                    )
+                return True
+        if summary is not None:
+            if incoming_current_value is None:
+                summary.skipped_no_parseable_value("macro_indicators", indicator_key)
+            else:
+                summary.skipped_existing(
+                    "macro_indicators",
+                    indicator_key,
+                    "existing_value_present",
+                    original_current_value,
+                    incoming_current_value,
+                )
         return False
     entry['indicator_name'] = payload.get('indicator_name', entry.get('indicator_name'))
     entry['unit'] = payload.get('unit', entry.get('unit', ''))
@@ -2008,6 +2564,19 @@ def _apply_macro_entry(
         raise ValueError(f"macro_indicators.{entry.get('indicator_name', 'unknown')} current_value is missing after injection")
     entry["is_stale"] = False
     entry["stale_reason"] = None
+    if summary is not None:
+        if (
+            force_override
+            and _coerce_float(original_current_value) is not None
+            and not _same_numeric_value(original_current_value, entry.get("current_value"))
+        ):
+            summary.forced_override(
+                "macro_indicators",
+                indicator_key,
+                original_current_value,
+                incoming_current_value,
+            )
+        summary.injected("macro_indicators", indicator_key)
     return True
 
 
@@ -2064,13 +2633,73 @@ def _apply_monetary_entry(
     override_stale: bool = True,
     force_override: bool = False,
     trend_history_base_dir: Optional[Path] = DEFAULT_BASE_DIR,
+    summary: Optional[InjectionSummary] = None,
 ) -> bool:
     if not isinstance(entry, dict):
         return False
+    original_current_value = entry.get("current_value")
+    incoming_current_value = _coerce_float(payload.get("current_value"))
     existing_placeholder = _is_placeholder_numeric(entry.get("current_value"))
     existing_stale = bool(entry.get("is_stale"))
-    if not force_override and not existing_placeholder and not (override_stale and existing_stale):
+    preserve_stale = existing_stale and not override_stale
+    original_stale_reason = entry.get("stale_reason")
+    rrr_type_conflict = (
+        indicator_key in {"rrr", "reserve_ratio"} and _has_rrr_type_conflict(entry, payload)
+    )
+    if rrr_type_conflict:
+        if summary is not None:
+            summary.skipped_existing(
+                "monetary_policy",
+                indicator_key,
+                "rrr_type_conflict",
+                original_current_value,
+                incoming_current_value,
+            )
         return False
+    trusted_quality_override = _is_trusted_monetary_manual_quality_override(
+        indicator_key,
+        entry,
+        payload,
+        incoming_current_value,
+        is_manual=is_manual,
+    )
+    preserve_existing_official_source = _should_preserve_existing_official_source(entry, payload)
+    if (
+        not force_override
+        and not existing_placeholder
+        and not (override_stale and existing_stale)
+    ):
+        if _same_numeric_value(original_current_value, incoming_current_value):
+            if _merge_same_value_report_fields(
+                entry,
+                payload,
+                category="monetary_policy",
+                key=indicator_key,
+                is_manual=is_manual,
+                override_stale=override_stale,
+            ):
+                if summary is not None:
+                    summary.metadata_updated(
+                        "monetary_policy",
+                        indicator_key,
+                        "same_numeric_value_report_fields_merged",
+                        original_current_value,
+                        incoming_current_value,
+                    )
+                return True
+        if not trusted_quality_override:
+            if summary is not None:
+                if incoming_current_value is None:
+                    summary.skipped_no_parseable_value("monetary_policy", indicator_key)
+                else:
+                    summary.skipped_existing(
+                        "monetary_policy",
+                        indicator_key,
+                        "existing_value_present",
+                        original_current_value,
+                        incoming_current_value,
+                    )
+            return False
     entry['policy_name'] = payload.get('policy_name', entry.get('policy_name'))
     incoming_value = _coerce_float(payload.get('current_value'))
     change_value = payload.get('change_from_120d', payload.get('change_rate'))
@@ -2082,13 +2711,15 @@ def _apply_monetary_entry(
     if payload.get("expected_period"):
         entry["expected_period"] = payload.get("expected_period")
     entry['as_of_date'] = payload.get('as_of_date') or entry.get('as_of_date')
-    entry['source'] = _format_source_label(payload.get('source'))
-    _copy_source_url(entry, payload)
+    if not preserve_existing_official_source:
+        entry['source'] = _format_source_label(payload.get('source'))
+        _copy_source_url(entry, payload)
     _copy_payload_metadata_fields(entry, payload, ("estimation_method", "metric_basis", "confidence"))
     note_val = payload.get('note', entry.get('note'))
     if is_manual and 'note' not in payload:
         note_val = ""
-    entry['note'] = note_val
+    if not preserve_existing_official_source:
+        entry['note'] = note_val
     incoming_rrr_type = _normalize_rrr_type(payload.get('rrr_type') or payload.get('value_type'))
     if indicator_key in {"rrr", "reserve_ratio"}:
         existing_rrr_type = _normalize_rrr_type(entry.get('rrr_type'))
@@ -2104,15 +2735,22 @@ def _apply_monetary_entry(
 
     # is_estimated 规则：手工注入默认不估算；regex_only/明确标注才估算
     if 'is_estimated' in payload:
-        entry['is_estimated'] = _coerce_bool(payload.get('is_estimated'))
+        incoming_estimated = _coerce_bool(payload.get('is_estimated'))
+        if not (
+            preserve_existing_official_source
+            and entry.get('is_estimated') is False
+            and incoming_estimated is True
+        ):
+            entry['is_estimated'] = incoming_estimated
     else:
-        source_text = str(payload.get('source') or entry.get('source') or "")
-        note_text = str(entry.get('note') or "")
-        estimated_markers = ("regex_only", "regex_fallback", "bond_etf_proxy", "ETF代理", "估", "estimated")
-        if any(m in source_text or m in note_text for m in estimated_markers):
-            entry['is_estimated'] = True
-        else:
-            entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
+        if not preserve_existing_official_source:
+            source_text = str(payload.get('source') or entry.get('source') or "")
+            note_text = str(entry.get('note') or "")
+            estimated_markers = ("regex_only", "regex_fallback", "bond_etf_proxy", "ETF代理", "估", "estimated")
+            if any(m in source_text or m in note_text for m in estimated_markers):
+                entry['is_estimated'] = True
+            else:
+                entry['is_estimated'] = False if entry.get('current_value') is not None else bool(entry.get('is_estimated'))
     if is_manual:
         _apply_manual_official_estimation_rule("monetary_policy", indicator_key, payload, entry)
 
@@ -2143,15 +2781,39 @@ def _apply_monetary_entry(
         note_val += f"reason={fallback_reason}"
         entry['note'] = note_val
     if entry.get("current_value") is not None:
-        entry["is_stale"] = False
-        entry["stale_reason"] = None
+        if preserve_stale:
+            entry["is_stale"] = True
+            entry["stale_reason"] = original_stale_reason
+        else:
+            entry["is_stale"] = False
+            entry["stale_reason"] = None
+    if summary is not None:
+        if (
+            force_override
+            and _coerce_float(original_current_value) is not None
+            and not _same_numeric_value(original_current_value, entry.get("current_value"))
+        ):
+            summary.forced_override(
+                "monetary_policy",
+                indicator_key,
+                original_current_value,
+                incoming_current_value,
+            )
+        summary.injected("monetary_policy", indicator_key)
     return True
 
 
-def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, Any]) -> bool:
+def _apply_fund_flow_entry(
+    entry: Dict[str, Any],
+    key: str,
+    payload: Dict[str, Any],
+    *,
+    summary: Optional[InjectionSummary] = None,
+) -> bool:
     existing_recent = _coerce_float(entry.get("recent_5d"))
     existing_total = _coerce_float(entry.get("total_120d"))
     existing_suspicious = _is_suspicious_fund_flow_pair(key, existing_recent, existing_total)
+    payload_requested_estimated = _coerce_bool(payload.get("is_estimated"))
     recent_value = FundFlowData._parse_amount(payload.get('recent_5d'))
     total_value = FundFlowData._parse_amount(payload.get('total_120d'))
     current_value = FundFlowData._parse_amount(
@@ -2189,7 +2851,28 @@ def _apply_fund_flow_entry(entry: Dict[str, Any], key: str, payload: Dict[str, A
         payload,
         ("is_estimated", "estimation_method", "confidence"),
     )
+    claimed_source_tier = _normalize_source_tier(payload.get("source_tier"))
+    if claimed_source_tier:
+        entry["claimed_source_tier"] = claimed_source_tier
+    else:
+        entry.pop("claimed_source_tier", None)
     entry["metric_basis"] = _default_fund_flow_metric_basis(key, payload)
+    entry["source_tier"] = _infer_fund_flow_source_tier(payload)
+    entry["window_evidence"] = _infer_fund_flow_window_evidence(
+        key,
+        payload,
+        entry["metric_basis"],
+    )
+    _normalize_fund_flow_estimation(entry, payload)
+    if summary is not None and not payload_requested_estimated and entry.get("is_estimated") is True:
+        summary.fund_flow_forced_estimated(
+            "fund_flow",
+            key,
+            source_tier=entry.get("source_tier"),
+            window_evidence=entry.get("window_evidence"),
+            metric_basis=entry.get("metric_basis") or "unknown",
+            reason="fund_flow_estimated_gate",
+        )
     if existing_suspicious:
         entry['note'] = (
             f"覆盖Stage2可疑占位值；{entry['note']}" if entry.get('note') else "覆盖Stage2可疑占位值"
@@ -2685,6 +3368,45 @@ def _append_note(entry: Dict[str, Any], message: str) -> None:
     entry["note"] = note
 
 
+def _backfill_cdb_proxy_changes_from_cn10y(market_data: Dict[str, Any]) -> int:
+    bonds = market_data.get("bonds", []) or []
+    cn10y = next((item for item in bonds if isinstance(item, dict) and item.get("symbol") == "CN10Y"), None)
+    cdb = next((item for item in bonds if isinstance(item, dict) and item.get("symbol") == "CN10Y_CDB"), None)
+    if not isinstance(cn10y, dict) or not isinstance(cdb, dict):
+        return 0
+    if not _has_valid_value(cdb.get("current_yield")) or not bool(cdb.get("is_estimated")):
+        return 0
+    basis_text = " ".join(
+        str(cdb.get(field) or "")
+        for field in ("source", "note", "estimation_method", "metric_basis")
+    ).lower()
+    if "cn10y" not in basis_text and "国债" not in basis_text:
+        return 0
+
+    changed = 0
+    for field in ("change_5d_bp", "change_120d_bp"):
+        if not _should_backfill_numeric(cdb.get(field)):
+            continue
+        proxy_value = _coerce_float(cn10y.get(field))
+        if proxy_value is None:
+            continue
+        cdb[field] = proxy_value
+        changed += 1
+
+    if changed:
+        cdb["trend"] = _infer_asset_trend(
+            cdb.get("trend"),
+            cdb.get("change_5d_bp"),
+            cdb.get("change_120d_bp"),
+            "bond",
+        )
+        cdb["note"] = _append_note_once(
+            str(cdb.get("note") or ""),
+            "cn10y_proxy_change_basis",
+        )
+    return changed
+
+
 def _remove_note_markers(entry: Dict[str, Any], markers: Tuple[str, ...]) -> None:
     """从 note 中移除已过期的原因标记（如 no_previous_value）。"""
     note = entry.get("note")
@@ -2815,6 +3537,7 @@ def _backfill_trend_changes(
                 bond.get("change_120d_bp"),
                 "bond",
             )
+    stats["bonds"] += _backfill_cdb_proxy_changes_from_cn10y(market_data)
 
     for fx in market_data.get("forex", []) or []:
         symbol = fx.get("pair")
@@ -3373,12 +4096,27 @@ def _merge_commodity_entry(
     merged = dict(existing)
     merged['symbol'] = payload.get('symbol', existing.get('symbol'))
     merged['name'] = payload.get('name', existing.get('name', merged['symbol']))
-    merged['current_price'] = _coerce_float(payload.get('current_price')) or existing.get('current_price')
+    payload_current_price = _coerce_float(payload.get('current_price'))
+    if payload_current_price is not None:
+        merged['current_price'] = payload_current_price
+    else:
+        merged['current_price'] = existing.get('current_price')
     merged['unit'] = payload.get('unit', existing.get('unit', ''))
 
     # 从 trend_history 计算变化值
     current_price = merged.get('current_price')
     symbol = merged.get('symbol')
+    explicit_daily_change = _coerce_percent(payload.get('daily_change'))
+    daily_change_base_price = _coerce_float(payload.get('previous_price'))
+    daily_change_basis_field = "previous_price"
+    if (
+        daily_change_base_price is None
+        and explicit_daily_change is None
+        and payload.get('previous_value') is not None
+    ):
+        daily_change_base_price = _coerce_float(payload.get('previous_value'))
+        daily_change_basis_field = "previous_value"
+    payload_daily_change = _pct_change(current_price, daily_change_base_price)
     used_hist_120d = False
     payload_120d = _coerce_percent(payload.get('change_120d'))
     if payload_120d is None:
@@ -3393,7 +4131,7 @@ def _merge_commodity_entry(
             current_price,
             base_dir=trend_history_base_dir,
         )
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        merged['daily_change'] = explicit_daily_change
         if merged['daily_change'] is None:
             merged['daily_change'] = existing.get('daily_change')
         merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))
@@ -3416,7 +4154,7 @@ def _merge_commodity_entry(
         if confidence_reason:
             _append_note(merged, confidence_reason)
     else:
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        merged['daily_change'] = explicit_daily_change
         if merged['daily_change'] is None:
             merged['daily_change'] = existing.get('daily_change')
         merged['ytd_change'] = _coerce_percent(payload.get('ytd_change'))
@@ -3426,6 +4164,13 @@ def _merge_commodity_entry(
             merged['ytd_change_basis'] = payload.get('ytd_change_basis') or 'year_to_date'
         if payload_120d is None:
             merged['change_120d'] = existing.get('change_120d')
+    if payload_daily_change is not None:
+        merged['daily_change'] = payload_daily_change
+        merged['daily_change_base_price'] = daily_change_base_price
+        if payload.get('previous_date'):
+            merged['daily_change_base_date'] = payload.get('previous_date')
+        basis_prefix = "manual" if is_manual else "payload"
+        merged['daily_change_basis'] = f"{basis_prefix}_{daily_change_basis_field}"
     _copy_source_url(merged, payload)
     _copy_payload_metadata_fields(
         merged,

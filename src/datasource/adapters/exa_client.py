@@ -19,8 +19,13 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # noqa: W0703
     Exa = None
 
+
 class AsyncExaClient:
     """Async wrapper for Exa SDK search."""
+
+    @classmethod
+    def sdk_available(cls) -> bool:
+        return Exa is not None
 
     def __init__(
         self,
@@ -29,12 +34,16 @@ class AsyncExaClient:
         cache: Optional[Any] = None,
         default_num_results: int = 6,
         use_autoprompt: bool = False,
+        snippet_max_chars: int = 600,
+        content_max_chars: int = 2000,
     ) -> None:
         self.api_key = api_key
         self.semaphore = asyncio.Semaphore(max_concurrency)
         self.cache = cache
         self.default_num_results = default_num_results
         self.use_autoprompt = use_autoprompt
+        self.snippet_max_chars = snippet_max_chars
+        self.content_max_chars = content_max_chars
         self._client: Optional[Any] = None
         self._supports_use_autoprompt: Optional[bool] = None
 
@@ -73,18 +82,50 @@ class AsyncExaClient:
     def _truncate(text: str, max_len: int = 600) -> str:
         if not text:
             return ""
+        if max_len <= 0:
+            return ""
         if len(text) <= max_len:
             return text
+        if max_len <= 3:
+            return text[:max_len]
         return text[: max_len - 3] + "..."
+
+    def _normalize_cached_data(self, cached: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(cached)
+        results = data.get("results") or []
+        if isinstance(results, list):
+            normalized = []
+            for item in results:
+                if isinstance(item, dict):
+                    result = dict(item)
+                    result["snippet"] = self._truncate(
+                        str(result.get("snippet") or ""), self.snippet_max_chars
+                    )
+                    result["content"] = self._truncate(
+                        str(result.get("content") or ""), self.content_max_chars
+                    )
+                    normalized.append(result)
+                else:
+                    normalized.append(item)
+            data["results"] = normalized
+        return data
 
     def _map_result(self, item: Any) -> Dict[str, Any]:
         url = self._extract_attr(item, "url") or ""
         title = self._extract_attr(item, "title") or ""
-        text = self._extract_attr(item, "text") or self._extract_attr(item, "content") or ""
+        text = (
+            self._extract_attr(item, "text")
+            or self._extract_attr(item, "content")
+            or ""
+        )
         summary = self._extract_attr(item, "summary") or ""
         highlights = self._join_highlights(self._extract_attr(item, "highlights"))
-        snippet = highlights or summary or self._truncate(text) or title
-        content = text or summary or highlights or ""
+        snippet = self._truncate(
+            highlights or summary or text or title, self.snippet_max_chars
+        )
+        content = self._truncate(
+            text or summary or highlights or "", self.content_max_chars
+        )
         published = (
             self._extract_attr(item, "published_date")
             or self._extract_attr(item, "publishedDate")
@@ -98,6 +139,43 @@ class AsyncExaClient:
             "content": content,
             "score": score,
             "published_date": published,
+        }
+
+    @staticmethod
+    def error_metadata(exc: Exception) -> Dict[str, Any]:
+        response = getattr(exc, "response", None)
+        status = getattr(response, "status_code", None)
+        headers = getattr(response, "headers", {}) or {}
+        message = str(exc)
+        lowered = message.lower()
+
+        if status == 401:
+            tag = "auth_error"
+        elif status in {402, 403}:
+            tag = "quota_or_payment"
+        elif status == 429:
+            tag = "rate_limited"
+        elif isinstance(status, int) and status >= 500:
+            tag = "server_error"
+        elif any(
+            token in lowered for token in ("quota", "rate limit", "payment", "billing")
+        ):
+            tag = "quota_or_payment"
+        else:
+            tag = "unknown_error"
+
+        request_id = None
+        for key in ("x-request-id", "request-id", "x-exa-request-id"):
+            if key in headers:
+                request_id = headers[key]
+                break
+
+        return {
+            "exa_error_type": type(exc).__name__,
+            "exa_http_status": status,
+            "exa_error_tag": tag,
+            "exa_error_message": message,
+            "exa_request_id": request_id,
         }
 
     async def search(
@@ -126,10 +204,12 @@ class AsyncExaClient:
             "query": query,
             "num_results": num_results or self.default_num_results,
         }
-        if (self._supports_use_autoprompt or self._supports_use_autoprompt is None) and (
-            use_autoprompt is not None or self.use_autoprompt
-        ):
-            payload["use_autoprompt"] = self.use_autoprompt if use_autoprompt is None else use_autoprompt
+        if (
+            self._supports_use_autoprompt or self._supports_use_autoprompt is None
+        ) and (use_autoprompt is not None or self.use_autoprompt):
+            payload["use_autoprompt"] = (
+                self.use_autoprompt if use_autoprompt is None else use_autoprompt
+            )
         if include_domains:
             payload["include_domains"] = include_domains
         if exclude_domains:
@@ -151,6 +231,7 @@ class AsyncExaClient:
         if self.cache:
             cached = self.cache.get(cache_key)
             if cached:
+                cached = self._normalize_cached_data(cached)
                 cached["cache_hit"] = True
                 return cached
 
@@ -159,15 +240,22 @@ class AsyncExaClient:
             resp = await asyncio.to_thread(client.search, **payload)
 
         results: List[Any] = []
+        request_id = None
         if isinstance(resp, dict):
             results = resp.get("results") or []
+            request_id = resp.get("requestId") or resp.get("request_id")
         else:
-            results = getattr(resp, "results", None) or resp  # resp may already be a list
+            results = (
+                getattr(resp, "results", None) or resp
+            )  # resp may already be a list
+            request_id = getattr(resp, "requestId", None) or getattr(resp, "request_id", None)
         if not isinstance(results, list):
             results = []
 
         mapped = [self._map_result(item) for item in results]
         data = {"results": mapped, "query": query, "cache_hit": False}
+        if request_id:
+            data["request_id"] = request_id
         if self.cache:
             self.cache.set(cache_key, data, ttl=cache_ttl)
         return data

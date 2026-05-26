@@ -37,7 +37,7 @@ python scripts/stage1_data_collector.py --date $DATE --output data/${DATE}_marke
 
 ---
 
-### Stage 2: Tavily+DeepSeek增强 (90-150s)
+### Stage 2: structured-provider-first + Tavily/DeepSeek增强 (90-150s)
 
 **命令**:
 ```bash
@@ -62,6 +62,7 @@ PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
 - [ ] 输出文件 `data/${DATE}_market_data_stage2.json` 存在
 - [ ] `reports/websearch_results_${DATE}_auto.json` 生成
 - [ ] 检查 `reports/gap_monitor_${DATE}.json` 是否有缺口
+- [ ] 优先查看 `stage2_effective_hit_rate`；结构化源同一 key 会顺序兜底，排障时可追加 `--disable-structured-providers`
 
 ---
 
@@ -178,6 +179,7 @@ cat reports/gap_monitor_${DATE}.json  # 应为 [] 或 {}
 | 问题 | 解决方案 |
 |------|----------|
 | Stage2超时 | 使用 `--extraction-backend regex --disable-extract` |
+| structured provider 排障 | 添加 `--disable-structured-providers` 只跑原搜索链路 |
 | Tavily 422错误 | 添加 `--disable-extract` |
 | 数据完整度<80% | 检查并补充 macro/monetary 字段 |
 | 报告显示N/A | 检查 gap_monitor，确保数值字段 |

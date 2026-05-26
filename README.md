@@ -57,8 +57,9 @@ cp .env.example .env
 # 可运行 `python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
 ```
 
-## 快速运行 Stage2（Tavily + DeepSeek/Regex）
+## 快速运行 Stage2（structured-provider-first + Tavily + DeepSeek/Regex）
 - 运行前：`bash run_preflight.sh`；可选健康检查 `PYTHONPATH=./src python3 scripts/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
+- Stage2 uses structured-provider-first for known official or structured indicators, with provider-level fallback for the same key, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction. Current structured sources include Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages. 排障可加 `--disable-structured-providers` 回到原搜索链路。
 - 速度优先（regex，无 LLM）：
 ```bash
 PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
@@ -66,13 +67,13 @@ PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
   --output data/runs/${DATE_NH}/market_data_stage2.json \
   --execute-search --phase all --fund-flow-backend tavily \
   --extraction-backend regex --disable-extract \
-  --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 1 \
+  --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 0 \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
   --log-output logs/runs/${DATE_NH}/stage2_unified_log.json \
   --gap-monitor data/runs/${DATE_NH}/gap_monitor.json \
   --websearch-results data/runs/${DATE_NH}/websearch_results_auto.json
 ```
-- 精度模式：改用 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
+- 精度模式：保留 structured-provider-first，改用 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
 - Tavily extract 422/配额：可保留 `--disable-extract` 或调低 `--extract-topk 1`，先 search-only 再 regex 兜底。
 
 ## 测试
@@ -169,7 +170,7 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 # 历史扫描器（已迁入 legacy，如需回溯老流程）
 python scripts/legacy/market_scanner_unified.py
 
-# Stage2 一体化增强（Tavily + DeepSeek 骨架）
+# Stage2 一体化增强（structured-provider-first + Tavily + DeepSeek 骨架）
 python scripts/stage2_unified_enhancer.py --market-data data/runs/${DATE_NH}/market_data.json --phase all --execute-search \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite
 
@@ -499,51 +500,3 @@ datasource/
 - 支持 AKShare 和 TuShare 数据源
 - 实现统一的数据接口
 - 提供故障转移和缓存功能
-# 资金流向后端固定为 tavily；缺口转 Stage2.5 manual/WebSearch 注入
-PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/${DATE_NH}/market_data.json \
-  --execute-search \
-  --fund-flow-backend tavily
-# Datasource Stage2 快速运行（Tavily + DeepSeek）
-
-## 环境准备
-- Python 3.10+
-- 设置环境变量：`TAVILY_API_KEY`、`DEEPSEEK_API_KEY`
-- 推荐在命令前设置 `PYTHONPATH=./src`
-
-## 典型命令
-```bash
-PYTHONPATH=./src \
-TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
-python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/20251203/market_data.json \
-  --output data/runs/20251203/market_data_stage2.json \
-  --execute-search \
-  --fund-flow-backend tavily \
-  --log-output logs/runs/20251203/stage2_unified_log.json \
-  --gap-monitor data/runs/20251203/gap_monitor.json \
-  --websearch-results data/runs/20251203/websearch_results_auto.json \
-  --task-log logs/runs/20251203/stage_task_log.jsonl
-```
-
-可选：开启队列化抽取以削峰限流
-```bash
-  --use-queue --queue-concurrency 3 --queue-retry-limit 1
-```
-
-## 关键默认值
-- fund_flow_backend: `tavily`
-- deepseek_model: `deepseek-v4-pro`
-- deepseek_timeout: 12s；超时/网络错误自动重试 1 次
-- 实时类搜索参数：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
-- 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
-
-## 观测指标（summary/log）
-- score_filtered_drop, domain_filtered_drop, extract_calls, tavily_extract_calls
-- timeout_count, retry_count, queue_requeued, queue_dead_letters
-- cache_hit_rate, avg_elapsed_ms, success_by_category / total_by_category
-- 增量命中率请优先看 task_search_success / task_search_failed / task_skipped_existing / search_success_rate_incremental
-
-## 兼容说明
-- 无 MCP 跳过逻辑，资金流统一 Tavily，零值且无方向直接标人工。
-- LangChain 分支需安装 `langchain-core`，否则使用 deepseek 默认抽取。

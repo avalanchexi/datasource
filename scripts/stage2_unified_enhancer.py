@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
+import inspect
 import json
 import os
 import sys
@@ -26,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 import re
 from urllib.parse import urlparse
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from loguru import logger
 try:  # pragma: no cover - 可选依赖
@@ -57,7 +59,7 @@ from datasource.utils.observability import build_observability_log, write_observ
 from datasource.utils.coercion import is_stage2_number_placeholder
 from datasource.utils.json_io import dump_json, load_json_strict
 from datasource.utils.key_aliases import canonical_monetary_key, normalize_monetary_section
-from datasource.utils.missing_items import remove_missing_item, sync_top_level_missing_view
+from datasource.utils.missing_items import append_missing_item, remove_missing_item, sync_top_level_missing_view
 from datasource.utils.policy_rules import (
     evaluate_policy,
     write_policy_evaluation,
@@ -67,7 +69,28 @@ from datasource.utils.policy_rules import (
 from datasource.utils.run_paths import build_run_paths_from_reference
 from datasource.utils.run_snapshot import write_run_snapshot
 from datasource.utils.source_conflicts import resolve_websearch_results, write_source_conflicts
+from datasource.utils.source_trust import should_mark_official_non_estimated, units_compatible
 from datasource.utils.text_markers import contains_ytd_marker
+try:  # pragma: no cover - structured providers are optional for Stage2 wiring
+    from datasource.providers.stage2_structured import StructuredProviderError, build_default_registry  # noqa: F401
+except Exception:  # noqa: W0703
+    StructuredProviderError = None  # type: ignore
+    build_default_registry = None  # type: ignore
+
+try:
+    from .stage2_5_injector import (
+        _default_fund_flow_metric_basis,
+        _infer_fund_flow_source_tier,
+        _infer_fund_flow_window_evidence,
+        _normalize_fund_flow_estimation,
+    )
+except ImportError:  # pragma: no cover - 直接执行 scripts/stage2_unified_enhancer.py 时使用
+    from stage2_5_injector import (  # type: ignore
+        _default_fund_flow_metric_basis,
+        _infer_fund_flow_source_tier,
+        _infer_fund_flow_window_evidence,
+        _normalize_fund_flow_estimation,
+    )
 
 CRITICAL_EXTRACT_KEYS = {
     "industrial",
@@ -265,12 +288,299 @@ def _prefer_latest_report_snippets(
     return filtered or snippets
 
 
+_TAVILY_LIMIT_STATUSES = {402, 403, 429, 432, 433}
+_TAVILY_ERROR_TEXT_LIMIT = 500
+_TAVILY_REQUEST_ID_HEADERS = (
+    "x-request-id",
+    "x-tavily-request-id",
+    "x-tavily-trace-id",
+    "request-id",
+)
+
+
+def _coerce_http_status(value: Any) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_header_value(headers: Any, names: Tuple[str, ...]) -> Optional[str]:
+    if not headers:
+        return None
+    for name in names:
+        value = None
+        try:
+            value = headers.get(name)
+        except AttributeError:
+            value = None
+        if value is None:
+            try:
+                value = headers.get(name.lower())
+            except AttributeError:
+                value = None
+        if value is None:
+            try:
+                target = name.casefold()
+                for header_name, header_value in headers.items():
+                    if str(header_name).casefold() == target:
+                        value = header_value
+                        break
+            except AttributeError:
+                value = None
+        if value:
+            return str(value)
+    return None
+
+
+def _sanitize_tavily_error_text(text: Any) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    sanitized = re.sub(
+        r"(?i)(api[_-]?key[\"']?\s*[:=]\s*)[\"']?[^\"'\s,}]+",
+        r"\1[redacted]",
+        raw,
+    )
+    if len(sanitized) > _TAVILY_ERROR_TEXT_LIMIT:
+        return sanitized[:_TAVILY_ERROR_TEXT_LIMIT] + "...[truncated]"
+    return sanitized
+
+
+def _tavily_error_metadata(source: Any) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    response = getattr(source, "response", None)
+
+    if isinstance(source, dict):
+        status = _coerce_http_status(source.get("status") or source.get("status_code"))
+        message = " ".join(
+            str(source.get(key) or "")
+            for key in ("error", "message", "detail", "warning")
+            if source.get(key)
+        )
+        request_id = source.get("request_id") or source.get("tavily_request_id")
+        error_type = "tavily_response"
+    else:
+        status = _coerce_http_status(getattr(response, "status_code", None))
+        message = getattr(response, "text", None) or str(source or "")
+        request_id = _safe_header_value(
+            getattr(response, "headers", None),
+            _TAVILY_REQUEST_ID_HEADERS,
+        )
+        error_type = source.__class__.__name__
+
+    if status is not None:
+        metadata["tavily_http_status"] = status
+    metadata["tavily_error_type"] = error_type
+    sanitized_message = _sanitize_tavily_error_text(message)
+    if sanitized_message:
+        metadata["tavily_error_message"] = sanitized_message
+    if request_id:
+        metadata["tavily_request_id"] = str(request_id)
+    return metadata
+
+
 def _is_tavily_quota_error(exc: Exception) -> bool:
-    status = getattr(getattr(exc, "response", None), "status_code", None)
-    if status in {402, 403, 429}:
+    status = _coerce_http_status(getattr(getattr(exc, "response", None), "status_code", None))
+    if status in _TAVILY_LIMIT_STATUSES:
         return True
-    msg = str(exc).lower()
-    return any(token in msg for token in ["quota", "rate limit", "payment", "402", "403", "429"])
+    return _text_indicates_quota_or_rate_limit(str(exc))
+
+
+def _text_indicates_quota_or_rate_limit(text: Any) -> bool:
+    msg = str(text or "").lower()
+    return any(
+        token in msg
+        for token in [
+            "quota",
+            "rate limit",
+            "rate-limit",
+            "rate_limited",
+            "ratelimit",
+            "too many requests",
+            "usage limit",
+            "usage exceeded",
+            "usage quota",
+            "usage cap",
+            "usage capped",
+            "plan limit",
+            "key limit",
+            "paygo",
+            "billing",
+            "payment",
+            "402",
+            "403",
+            "429",
+            "432",
+            "433",
+        ]
+    )
+
+
+def _is_tavily_quota_response(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    status_int = _coerce_http_status(payload.get("status") or payload.get("status_code"))
+    if status_int in _TAVILY_LIMIT_STATUSES:
+        return True
+    return _text_indicates_quota_or_rate_limit(
+        " ".join(
+            str(payload.get(key) or "")
+            for key in ("error", "message", "detail", "warning")
+        )
+    )
+
+
+def _is_environment_proxy_error(exc: Exception) -> bool:
+    msg = f"{exc.__class__.__name__} {exc}".lower()
+    strong_markers = [
+        "using socks proxy",
+        "socksio",
+        "proxyconnect",
+        "failed to connect to proxy",
+        "cannot connect to proxy",
+        "can't connect to proxy",
+        "could not connect to proxy",
+        "all_proxy",
+        "http_proxy",
+        "https_proxy",
+    ]
+    if any(token in msg for token in strong_markers):
+        return True
+    connectivity_markers = [
+        "temporary failure in name resolution",
+        "name resolution",
+        "nameresolutionerror",
+        "name or service not known",
+        "getaddrinfo failed",
+        "failed to resolve",
+        "dns",
+        "connecterror",
+        "connectionerror",
+        "connecttimeout",
+        "readtimeout",
+        "connect timeout",
+        "connection timeout",
+        "read operation timed out",
+        "timed out",
+        "all connection attempts failed",
+        "ssl",
+        "tls",
+        "certificate",
+        "connection reset",
+        "connection refused",
+        "connection aborted",
+        "network is unreachable",
+        "network error",
+    ]
+    if any(token in msg for token in connectivity_markers):
+        return True
+    if "socks" in msg and "proxy" in msg and re.search(r"socks[45]?h?://", msg):
+        return True
+    if "proxy error" not in msg and "proxyerror" not in msg:
+        return False
+    local_context = [
+        "connect",
+        "connection",
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "0.0.0.0",
+        "socks",
+        "environment",
+        "env",
+        "proxy_url",
+        "proxies",
+    ]
+    return any(token in msg for token in local_context)
+
+
+def _build_environment_proxy_error_records(
+    task: Dict[str, Any],
+    exc: Exception,
+    *,
+    attempt_index: int = 0,
+    elapsed_ms: int = 0,
+    extraction_backend: str = "deepseek",
+    query_attempts: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    now_ts = int(datetime.now().timestamp())
+    query = task.get("query_used") or task.get("query") or task.get("indicator_key")
+    note = f"environment_proxy_error:{exc}"
+    source = "Stage2 manual_required"
+    category = task.get("category") or task.get("stage_phase")
+    task_payload = {
+        **task,
+        "category": category,
+        "query": query,
+        "query_used": task.get("query_used") or query,
+        "query_attempts": query_attempts or task.get("query_attempts") or [],
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "source": source,
+        "note": note,
+        "environment_proxy_fast_switch": True,
+    }
+    extraction = {
+        "value": None,
+        "unit": task.get("unit"),
+        "source_url": None,
+        "confidence": 0.0,
+        "note": note,
+        "llm_error": str(exc),
+        "environment_proxy_error": str(exc),
+        "llm_latency_ms": 0,
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "environment_proxy_fast_switch": True,
+    }
+    task_record = {
+        "task_id": task["task_id"],
+        "indicator_key": task["indicator_key"],
+        "category": category,
+        "stage_phase": task["stage_phase"],
+        "query": query,
+        "search_backend": task.get("search_backend", "tavily"),
+        "fund_flow_backend": task.get("fund_flow_backend"),
+        "extraction_backend": extraction_backend,
+        "source": source,
+        "source_url": None,
+        "confidence": 0.0,
+        "error": str(exc),
+        "llm_error": str(exc),
+        "environment_proxy_error": str(exc),
+        "llm_latency_ms": None,
+        "attempt_index": attempt_index,
+        "elapsed_ms": elapsed_ms,
+        "created_at": task.get("created_at", now_ts),
+        "finished_at": now_ts,
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "note": note,
+        "raw_results": [],
+        "environment_proxy_fast_switch": True,
+        "result_type": "manual_required",
+    }
+    task_record.update(_structured_audit_fields_from_task(task))
+    websearch_item = {
+        "task_id": task["task_id"],
+        "indicator_key": task["indicator_key"],
+        "category": category,
+        "stage_phase": task["stage_phase"],
+        "query": query,
+        "task": task_payload,
+        "extraction": extraction,
+        "extraction_backend": extraction_backend,
+        "raw_results": [],
+        "search_backend": task.get("search_backend", "tavily"),
+        "manual_required": True,
+        "manual_reason": "environment_proxy_error",
+        "source": source,
+        "note": note,
+        "environment_proxy_fast_switch": True,
+        "result_type": "manual_required",
+    }
+    return task_record, websearch_item
 
 
 def _exa_search_type(indicator_key: str) -> Optional[str]:
@@ -561,6 +871,40 @@ def _filter_by_domain(
     return snippets if fallback_to_original else []
 
 
+def _official_extract_domains(extract_policy: Dict[str, Any]) -> List[str]:
+    if not extract_policy.get("official_domains_only"):
+        return []
+    domains = extract_policy.get("official_domains") or []
+    return [str(domain).strip().lower() for domain in domains if str(domain).strip()]
+
+
+def _host_matches_official_domain(host: str, domain: str) -> bool:
+    host = host.strip().lower().rstrip(".")
+    domain = domain.strip().lower().rstrip(".")
+    return bool(host and domain and (host == domain or host.endswith(f".{domain}")))
+
+
+def _filter_by_official_extract_domain(
+    snippets: List[Dict[str, Any]],
+    official_domains: Optional[List[str]],
+) -> List[Dict[str, Any]]:
+    if not official_domains:
+        return snippets
+    domains = [str(domain).strip().lower().rstrip(".") for domain in official_domains if str(domain).strip()]
+    if not domains:
+        return snippets
+    filtered: List[Dict[str, Any]] = []
+    for snip in snippets:
+        url = snip.get("url") or ""
+        try:
+            host = (urlparse(url).hostname or "").lower().rstrip(".")
+        except Exception:
+            continue
+        if any(_host_matches_official_domain(host, domain) for domain in domains):
+            filtered.append(snip)
+    return filtered
+
+
 def _snippet_blob(snippet: Dict[str, Any]) -> str:
     return " ".join(
         [
@@ -664,6 +1008,97 @@ def _usage_evidence_score(snippet: Dict[str, Any], keywords: Optional[List[str]]
     return sum(1 for keyword in keywords or [] if str(keyword or "").strip().lower() in blob)
 
 
+def _value_evidence_score(snippet: Dict[str, Any], task: Dict[str, Any]) -> int:
+    blob = _snippet_blob(snippet).lower()
+    if not blob:
+        return 0
+    non_value_hits = sum(
+        1
+        for token in (
+            "methodology",
+            "calculation",
+            "weights",
+            "rebalance",
+            "contract specs",
+            "contract specifications",
+            "rulebook",
+            "target weights",
+            "annual rebalance",
+            "contract unit",
+            "minimum price fluctuation",
+            "fact card",
+        )
+        if token in blob
+    )
+    if non_value_hits >= 2:
+        return 0
+    unit = str(task.get("unit") or "").lower()
+    indicator = str(task.get("indicator_key") or "").lower()
+    numeric_hits = len(re.findall(r"(?<!\d)(?:\d{1,4}(?:,\d{3})*|\d+)(?:\.\d+)?(?!\d)", blob))
+    if numeric_hits == 0:
+        return 0
+    score = min(numeric_hits, 3)
+    if unit and unit.replace("$", "usd") in blob.replace("$", "usd"):
+        score += 2
+    if any(token in blob for token in ("price", "level", "last", "settle", "settlement", "收盘", "结算", "点位", "报价")):
+        score += 2
+    if non_value_hits:
+        score -= max(4, non_value_hits * 3)
+    if indicator and indicator in blob:
+        score += 1
+    return max(0, score)
+
+
+def _final_snippet_diagnostics(task: Dict[str, Any], snippets: List[Dict[str, Any]]) -> Dict[str, Any]:
+    good_url_patterns = task.get("good_url_patterns") or []
+    bad_url_patterns = task.get("bad_url_patterns") or []
+    evidence_keywords = task.get("evidence_keywords") or []
+    usage_evidence_score = 0
+    value_evidence_score = 0
+    good_url_hit_count = 0
+    bad_url_hit_count = 0
+    for snippet in snippets:
+        url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
+        if _pattern_hits(url_blob, good_url_patterns):
+            good_url_hit_count += 1
+        if _pattern_hits(url_blob, bad_url_patterns):
+            bad_url_hit_count += 1
+        usage_evidence_score += _usage_evidence_score(snippet, evidence_keywords)
+        value_evidence_score += _value_evidence_score(snippet, task)
+    return {
+        "score_stats": _score_stats(snippets),
+        "trusted_count": len(snippets),
+        "usable_count": len(snippets),
+        "issuer_hit": _snippets_have_issuer(
+            snippets,
+            issuer_hint=task.get("issuer"),
+            issuer_aliases=task.get("issuer_aliases"),
+        ),
+        "period_hit": _snippets_have_expected_period(snippets, task.get("expected_period_tokens")),
+        "usage_evidence_score": usage_evidence_score,
+        "value_evidence_score": value_evidence_score,
+        "good_url_hit_count": good_url_hit_count,
+        "bad_url_hit_count": bad_url_hit_count,
+    }
+
+
+def _selected_reason_from_diagnostics(
+    diagnostics: Dict[str, Any],
+    unusable_reason: Optional[str] = None,
+) -> str:
+    score_stats = diagnostics.get("score_stats") or {}
+    return (
+        f"trusted={diagnostics.get('trusted_count', 0)} usable={diagnostics.get('usable_count', 0)} "
+        f"issuer_hit={diagnostics.get('issuer_hit', False)} period_hit={diagnostics.get('period_hit', False)} "
+        f"usage_evidence={diagnostics.get('usage_evidence_score', 0)} "
+        f"value_evidence={diagnostics.get('value_evidence_score', 0)} "
+        f"good_url={diagnostics.get('good_url_hit_count', 0)} "
+        f"bad_url={diagnostics.get('bad_url_hit_count', 0)} "
+        f"score_max={score_stats.get('score_max')}"
+        + (f" reason={unusable_reason}" if unusable_reason else "")
+    )
+
+
 def _candidate_query_quality(
     task: Dict[str, Any],
     candidate: Dict[str, Any],
@@ -717,32 +1152,40 @@ def _candidate_query_quality(
     bad_url_patterns = candidate.get("bad_url_patterns") or task.get("bad_url_patterns") or []
     evidence_keywords = candidate.get("evidence_keywords") or task.get("evidence_keywords") or []
 
-    scored_usable: List[Dict[str, Any]] = []
-    bad_url_hit_count = 0
-    good_url_hit_count = 0
-    usage_evidence_score = 0
-    for snippet in usable:
-        url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
-        bad_hits = _pattern_hits(url_blob, bad_url_patterns)
-        good_hits = _pattern_hits(url_blob, good_url_patterns)
-        evidence_score = _usage_evidence_score(snippet, evidence_keywords)
-        bad_url_hit_count += 1 if bad_hits else 0
-        good_url_hit_count += 1 if good_hits else 0
-        usage_evidence_score += evidence_score
-        scored_usable.append(
-            {
-                "snippet": snippet,
-                "bad_hits": bad_hits,
-                "good_hits": good_hits,
-                "evidence_score": evidence_score,
-            }
-        )
+    def _score_usable(current: List[Dict[str, Any]]) -> Dict[str, Any]:
+        scored: List[Dict[str, Any]] = []
+        for snippet in current:
+            url_blob = f"{snippet.get('url') or ''} {_snippet_blob(snippet)}"
+            bad_hits = _pattern_hits(url_blob, bad_url_patterns)
+            good_hits = _pattern_hits(url_blob, good_url_patterns)
+            evidence_score = _usage_evidence_score(snippet, evidence_keywords)
+            value_score = _value_evidence_score(snippet, task)
+            scored.append(
+                {
+                    "snippet": snippet,
+                    "bad_hits": bad_hits,
+                    "good_hits": good_hits,
+                    "evidence_score": evidence_score,
+                    "value_score": value_score,
+                }
+            )
+        return {
+            "scored": scored,
+            "bad_url_hit_count": sum(1 for item in scored if item["bad_hits"]),
+            "good_url_hit_count": sum(1 for item in scored if item["good_hits"]),
+            "usage_evidence_score": sum(int(item["evidence_score"]) for item in scored),
+            "value_evidence_score": sum(int(item["value_score"]) for item in scored),
+        }
+
+    usable_scores = _score_usable(usable)
+    scored_usable: List[Dict[str, Any]] = usable_scores["scored"]
+    original_bad_url_hit_count = int(usable_scores["bad_url_hit_count"])
 
     if any(item["bad_hits"] for item in scored_usable) and any(not item["bad_hits"] for item in scored_usable):
         kept = [item for item in scored_usable if not item["bad_hits"]]
         usable = [item["snippet"] for item in kept]
-        usage_evidence_score = sum(int(item["evidence_score"]) for item in kept)
-        good_url_hit_count = sum(1 for item in kept if item["good_hits"])
+        usable_scores = _score_usable(usable)
+        scored_usable = usable_scores["scored"]
 
     if usable and not unusable_reason:
         issuer_hit = _snippets_have_issuer(
@@ -754,10 +1197,37 @@ def _candidate_query_quality(
         if strict_issuer_match and not issuer_hit:
             unusable_reason = "strict_issuer_miss"
             usable = []
+            usable_scores = _score_usable(usable)
 
+    requires_value_evidence = bool(task.get("required_output_fields") or task.get("evidence_keywords"))
     high_score = [s for s in usable if s.get("score") is None or s.get("score", 0) >= 0.5]
     if high_score:
-        usable = high_score
+        high_score_scores = _score_usable(high_score)
+        high_score_value = int(high_score_scores["value_evidence_score"])
+        current_value = int(usable_scores["value_evidence_score"])
+        if not requires_value_evidence or high_score_value >= current_value or current_value <= 0:
+            usable = high_score
+            usable_scores = high_score_scores
+            issuer_hit = _snippets_have_issuer(
+                usable,
+                issuer_hint=task.get("issuer"),
+                issuer_aliases=task.get("issuer_aliases"),
+            )
+            period_hit = _snippets_have_expected_period(usable, task.get("expected_period_tokens"))
+
+    usage_evidence_score = int(usable_scores["usage_evidence_score"])
+    value_evidence_score = int(usable_scores["value_evidence_score"])
+    good_url_hit_count = int(usable_scores["good_url_hit_count"])
+    bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
+
+    if usable and not unusable_reason and requires_value_evidence and value_evidence_score <= 0:
+        unusable_reason = "value_evidence_miss"
+        usable = []
+        usable_scores = _score_usable(usable)
+        usage_evidence_score = int(usable_scores["usage_evidence_score"])
+        value_evidence_score = int(usable_scores["value_evidence_score"])
+        good_url_hit_count = int(usable_scores["good_url_hit_count"])
+        bad_url_hit_count = max(original_bad_url_hit_count, int(usable_scores["bad_url_hit_count"]))
 
     score_stats = _score_stats(usable)
     usable_count = len(usable)
@@ -768,6 +1238,7 @@ def _candidate_query_quality(
         + (15.0 if issuer_hit else 0.0)
         + ((score_stats.get("score_max") or 0.0) * 10.0)
         + usage_evidence_score * 12.0
+        + value_evidence_score * 18.0
         + good_url_hit_count * 25.0
         - bad_url_hit_count * 140.0
     )
@@ -782,16 +1253,23 @@ def _candidate_query_quality(
         "score_stats": score_stats,
         "quality_score": quality_score,
         "usage_evidence_score": usage_evidence_score,
+        "value_evidence_score": value_evidence_score,
         "good_url_hit_count": good_url_hit_count,
         "bad_url_hit_count": bad_url_hit_count,
         "unusable_reason": unusable_reason,
-        "selected_reason": (
-            f"trusted={trusted_count} usable={usable_count} "
-            f"issuer_hit={issuer_hit} period_hit={period_hit} "
-            f"usage_evidence={usage_evidence_score} "
-            f"good_url={good_url_hit_count} bad_url={bad_url_hit_count} "
-            f"score_max={score_stats.get('score_max')}"
-            + (f" reason={unusable_reason}" if unusable_reason else "")
+        "selected_reason": _selected_reason_from_diagnostics(
+            {
+                "score_stats": score_stats,
+                "trusted_count": trusted_count,
+                "usable_count": usable_count,
+                "issuer_hit": issuer_hit,
+                "period_hit": period_hit,
+                "usage_evidence_score": usage_evidence_score,
+                "value_evidence_score": value_evidence_score,
+                "good_url_hit_count": good_url_hit_count,
+                "bad_url_hit_count": bad_url_hit_count,
+            },
+            unusable_reason,
         ),
     }
 
@@ -1082,12 +1560,248 @@ def _augment_extraction_metadata(
         rrr_type = _infer_rrr_type(text)
         if rrr_type:
             extraction.setdefault("rrr_type", rrr_type)
+    if indicator_key in {"northbound", "southbound", "etf", "margin"}:
+        if not extraction.get("unit") and any(token in text for token in ("亿元", "亿港元", "亿")):
+            extraction["unit"] = "亿元"
+        metric_basis = _default_fund_flow_metric_basis(str(indicator_key), extraction)
+        extraction.setdefault("metric_basis", metric_basis)
+        is_structured_provider_task = (
+            task.get("extraction_backend") == "structured"
+            or task.get("search_backend") == "structured"
+        )
+        explicit_window_evidence = str(extraction.get("window_evidence") or "").strip().lower()
+        recent_value = _safe_number(extraction.get("recent_5d"))
+        total_value = _safe_number(extraction.get("total_120d"))
+        if _safe_number(extraction.get("value")) is None and recent_value is not None:
+            extraction["value"] = recent_value
+        source_snippets = _snippets_for_source_url(snippets, extraction.get("source_url"))
+        direct_evidence = {"direct_window", "direct_daily_series", "direct_balance_delta"}
+        field_retry_evidence = extraction.setdefault("field_retry_evidence", {})
+        if not isinstance(field_retry_evidence, dict):
+            field_retry_evidence = {}
+            extraction["field_retry_evidence"] = field_retry_evidence
+        recent_evidence = None
+        total_evidence = None
+        if recent_value is not None:
+            if is_structured_provider_task and explicit_window_evidence in direct_evidence:
+                recent_evidence = explicit_window_evidence
+            else:
+                recent_evidence = _field_retry_window_evidence(
+                    "recent_5d",
+                    str(indicator_key),
+                    extraction,
+                    source_snippets,
+                    metric_basis,
+                    recent_value,
+                )
+            field_retry_evidence.setdefault(
+                "recent_5d",
+                {
+                    "source_url": extraction.get("source_url"),
+                    "source_tier": _infer_fund_flow_source_tier(extraction),
+                    "window_evidence": recent_evidence,
+                    "metric_basis": metric_basis,
+                },
+            )
+        if total_value is not None:
+            if is_structured_provider_task and explicit_window_evidence in direct_evidence:
+                total_evidence = explicit_window_evidence
+            else:
+                total_evidence = _field_retry_window_evidence(
+                    "total_120d",
+                    str(indicator_key),
+                    extraction,
+                    source_snippets,
+                    metric_basis,
+                    total_value,
+                )
+            field_retry_evidence.setdefault(
+                "total_120d",
+                {
+                    "source_url": extraction.get("source_url"),
+                    "source_tier": _infer_fund_flow_source_tier(extraction),
+                    "window_evidence": total_evidence,
+                    "metric_basis": metric_basis,
+                },
+            )
+        if (
+            is_structured_provider_task
+            and explicit_window_evidence in direct_evidence
+            and recent_value is not None
+            and total_value is not None
+        ):
+            extraction["window_evidence"] = explicit_window_evidence
+        elif recent_value is not None and total_value is not None:
+            if (
+                str(indicator_key) == "margin"
+                and recent_evidence == "direct_balance_delta"
+                and total_evidence == "direct_balance_delta"
+            ):
+                extraction["window_evidence"] = "direct_balance_delta"
+            elif recent_evidence in direct_evidence and total_evidence in direct_evidence:
+                extraction["window_evidence"] = "direct_window"
+            else:
+                extraction["window_evidence"] = "unknown"
     as_of_date = _infer_as_of_date(snippets)
     if as_of_date:
         extraction.setdefault("as_of_date", as_of_date)
 
 
-def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extraction: Dict[str, Any]) -> str:
+def _first_snippet_url(snippets: Optional[List[Dict[str, Any]]]) -> Optional[str]:
+    for snippet in snippets or []:
+        url = snippet.get("url")
+        if isinstance(url, str) and url.strip():
+            return url.strip()
+    return None
+
+
+def _normalize_url_for_evidence(value: Any) -> str:
+    return str(value or "").strip().rstrip("/")
+
+
+def _snippets_for_source_url(
+    snippets: Optional[List[Dict[str, Any]]],
+    source_url: Any,
+) -> List[Dict[str, Any]]:
+    target = _normalize_url_for_evidence(source_url)
+    if not target:
+        return []
+    return [
+        snippet
+        for snippet in (snippets or [])
+        if isinstance(snippet, dict)
+        and _normalize_url_for_evidence(snippet.get("url")) == target
+    ]
+
+
+def _snippet_text(snippet: Dict[str, Any]) -> str:
+    return " ".join(
+        str(snippet.get(field) or "")
+        for field in ("title", "snippet", "content", "raw_content")
+    )
+
+
+def _snippet_contains_number(snippet: Dict[str, Any], value: Optional[float]) -> bool:
+    if value is None:
+        return False
+    text = _snippet_text(snippet)
+    for match in re.finditer(
+        r"([+-]?\d[\d,]*(?:\.\d+)?)\s*(亿港元|亿元|亿|billion|bn)",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        try:
+            candidate = float(match.group(1).replace(",", ""))
+        except ValueError:
+            continue
+        if abs(candidate - value) <= max(1e-6, abs(value) * 1e-9):
+            return True
+    return False
+
+
+def _resolve_field_retry_evidence_source(
+    field_extraction: Dict[str, Any],
+    snippets: Optional[List[Dict[str, Any]]],
+    value: Optional[float],
+) -> Tuple[Optional[str], List[Dict[str, Any]]]:
+    candidates = [snip for snip in (snippets or []) if isinstance(snip, dict)]
+    if not candidates:
+        source_url = field_extraction.get("source_url")
+        return (str(source_url).strip() if source_url else None), []
+
+    source_url_raw = field_extraction.get("source_url")
+    source_url = str(source_url_raw).strip() if isinstance(source_url_raw, str) else ""
+    source_snippets = [
+        snip for snip in candidates if str(snip.get("url") or "").strip() == source_url
+    ]
+    source_value_snippets = [
+        snip for snip in source_snippets if _snippet_contains_number(snip, value)
+    ]
+    if source_value_snippets:
+        return source_url, source_value_snippets
+
+    value_snippets = [snip for snip in candidates if _snippet_contains_number(snip, value)]
+    if value_snippets:
+        value_url = _first_snippet_url(value_snippets)
+        same_url_value_snippets = [
+            snip for snip in value_snippets if str(snip.get("url") or "").strip() == value_url
+        ]
+        return value_url, same_url_value_snippets or value_snippets
+
+    if source_snippets:
+        return source_url, source_snippets
+    first_url = _first_snippet_url(candidates)
+    return first_url, candidates[:1]
+
+
+def _field_retry_window_evidence(
+    field_scope: str,
+    indicator_key: str,
+    field_extraction: Dict[str, Any],
+    snippets: Optional[List[Dict[str, Any]]],
+    metric_basis: str,
+    value: Optional[float],
+) -> str:
+    if not any(_snippet_contains_number(snip, value) for snip in (snippets or [])):
+        return "unknown"
+
+    explicit = str(field_extraction.get("window_evidence") or "").strip().lower()
+    if explicit in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+        return explicit
+
+    text = " ".join(_snippet_text(s) for s in (snippets or [])).lower()
+    if any(token in text for token in ("未披露", "未显示", "没有披露", "无法披露")):
+        return "unknown"
+
+    if str(indicator_key).lower() == "margin" and str(metric_basis).lower() == "balance_delta":
+        if any(token in text for token in ("余额", "balance", "融资融券")):
+            return "direct_balance_delta"
+        return "unknown"
+
+    field_tokens = {
+        "recent_5d": ("近5日", "5日", "5-day", "5 day"),
+        "total_120d": ("近120日", "120日", "120-day", "120 day"),
+    }
+    has_field_token = any(token in text for token in field_tokens.get(field_scope, ()))
+    has_flow_token = any(
+        token in text for token in ("净流入", "净流出", "资金流向", "净申购", "净赎回", "累计", "合计")
+    )
+    if has_field_token and has_flow_token:
+        return "direct_window"
+    return "unknown"
+
+
+def _source_label_for_task(
+    task: Dict[str, Any],
+    source_url: Optional[str],
+    extraction_note: Optional[Any] = None,
+) -> str:
+    backend = str(task.get("search_backend") or "tavily").lower()
+    extraction_backend = str(task.get("extraction_backend") or "").lower()
+    note = str(extraction_note or "").lower()
+    is_regex_note = (
+        note.startswith("regex_only")
+        or note.startswith("regex_fallback")
+        or " regex_fallback" in note
+    )
+    is_regex_extraction = extraction_backend == "regex" or is_regex_note
+    if backend == "structured":
+        return "structured"
+    if backend == "exa":
+        if is_regex_extraction:
+            return "exa_regex"
+        return "exa+deepseek" if source_url else "exa_regex"
+    if is_regex_extraction:
+        return "tavily_regex"
+    return "tavily+deepseek" if source_url else "tavily_regex"
+
+
+def _apply_extraction(
+    market_payload: Dict[str, Any],
+    task: Dict[str, Any],
+    extraction: Dict[str, Any],
+    snippets: Optional[Iterable[Any]] = None,
+) -> str:
     value = extraction.get("value")
     if value is None:
         return "skip_no_value"
@@ -1095,7 +1809,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
     indicator_key = task["indicator_key"]
     note = extraction.get("note")
     source_url = extraction.get("source_url")
-    source_label = "tavily+deepseek" if source_url else "tavily_regex"
+    source_label = _source_label_for_task(task, source_url, note)
     as_of_date = extraction.get("as_of_date")
     report_period = extraction.get("report_period")
 
@@ -1130,12 +1844,62 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         entry["note"] = note
         if source_url:
             entry["source_url"] = source_url
+        for field in ("is_estimated", "estimation_method", "metric_basis", "confidence"):
+            if field in extraction and extraction.get(field) is not None:
+                entry[field] = extraction.get(field)
+
+    def _copy_non_null(
+        entry: Dict[str, Any],
+        field: str,
+        source_field: Optional[str] = None,
+        numeric: bool = False,
+    ) -> None:
+        field_value = extraction.get(source_field or field)
+        if field_value is None:
+            return
+        if numeric:
+            parsed_value = _safe_number(field_value)
+            if parsed_value is None:
+                return
+            entry[field] = parsed_value
+            return
+        entry[field] = field_value
+
+    def _has_explicit_120d_change_basis() -> bool:
+        basis_text = " ".join(
+            str(extraction.get(field) or "")
+            for field in ("change_period", "metric_basis")
+        ).lower()
+        if any(token in basis_text for token in ("120d", "120日", "120-day")):
+            return True
+        note_text = str(extraction.get("note") or "").lower()
+        return (
+            "change_from_120d" in note_text
+            and any(token in note_text for token in ("120d", "120日", "120-day"))
+        )
+
+    def _mark_official_non_estimated(entry: Dict[str, Any], category: str) -> None:
+        evidence_snippets = snippets if snippets is not None else extraction.get("snippets") or task.get("snippets") or []
+        decision = should_mark_official_non_estimated(
+            {**task, "category": category},
+            extraction,
+            evidence_snippets,
+        )
+        if not decision.allowed:
+            return
+        entry["is_estimated"] = False
+        existing_note = str(entry.get("note") or "").strip()
+        if decision.reason not in existing_note.split():
+            entry["note"] = f"{existing_note} {decision.reason}".strip()
 
     macro = market_payload.setdefault("macro_indicators", {})
     if indicator_key in macro:
         entry = macro[indicator_key]
         _write_common_fields(entry, "current_value")
         _write_period_fields(entry)
+        for field in ("previous_value", "change_rate", "yoy_month", "yoy_ytd"):
+            _copy_non_null(entry, field, numeric=True)
+        _copy_non_null(entry, "value_type")
         if str(indicator_key).lower() == "bdi":
             allowed, reasons = is_estimated_allowlisted("macro_indicators", indicator_key, entry)
             if allowed:
@@ -1143,6 +1907,7 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
             elif reasons:
                 marker = "estimated_keep:" + "|".join(reasons)
                 entry["note"] = ((entry.get("note") or "") + " " + marker).strip()
+        _mark_official_non_estimated(entry, "macro_indicators")
         return "macro_indicators"
 
     monetary = market_payload.setdefault("monetary_policy", {})
@@ -1151,6 +1916,11 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         entry = monetary[monetary_key]
         _write_common_fields(entry, "current_value")
         _write_period_fields(entry)
+        _copy_non_null(entry, "change_from_120d", numeric=True)
+        if extraction.get("change_from_120d") is None and _has_explicit_120d_change_basis():
+            _copy_non_null(entry, "change_from_120d", "change_rate", numeric=True)
+        _copy_non_null(entry, "rrr_type")
+        _mark_official_non_estimated(entry, "monetary_policy")
         return "monetary_policy"
 
     # fund_flow 回写（简化：将抽取值写 recent_5d，total_120d 同值）
@@ -1179,6 +1949,13 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         flow["note"] = note
         if source_url:
             flow["source_url"] = source_url
+        if isinstance(extraction.get("field_retry_evidence"), dict):
+            flow["field_retry_evidence"] = extraction["field_retry_evidence"]
+        metric_basis = _default_fund_flow_metric_basis(indicator_key, extraction)
+        flow["metric_basis"] = metric_basis
+        flow["source_tier"] = _infer_fund_flow_source_tier(extraction)
+        flow["window_evidence"] = _infer_fund_flow_window_evidence(indicator_key, extraction, metric_basis)
+        _normalize_fund_flow_estimation(flow, extraction)
         return "fund_flow"
 
     # forex 回写（按 pair/symbol 匹配）
@@ -1207,6 +1984,8 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
             continue
         if item.get("symbol") == indicator_key:
             _write_common_fields(item, "current_yield")
+            for field in ("change_5d_bp", "change_120d_bp"):
+                _copy_non_null(item, field, numeric=True)
             if report_period and not item.get("report_period"):
                 item["report_period"] = report_period
             if as_of_date and not item.get("as_of_date"):
@@ -1253,11 +2032,14 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
             "symbol": indicator_key,
             "name": _BOND_UPSERT_META[indicator_key],
             "current_yield": value,
-            "change_5d_bp": None,
-            "change_120d_bp": None,
+            "change_5d_bp": _safe_number(extraction.get("change_5d_bp")),
+            "change_120d_bp": _safe_number(extraction.get("change_120d_bp")),
             "trend": "待校验",
             "source": source_label,
-            "is_estimated": False,
+            "is_estimated": extraction.get("is_estimated") is True,
+            "estimation_method": extraction.get("estimation_method"),
+            "metric_basis": extraction.get("metric_basis"),
+            "confidence": extraction.get("confidence"),
             "stage_task_id": task["task_id"],
             "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),
         }
@@ -1279,6 +2061,351 @@ def _apply_extraction(market_payload: Dict[str, Any], task: Dict[str, Any], extr
         "note": note,
     }
     return "fallback_macro"
+
+
+def _structured_stats(stats: Dict[str, Any]) -> Dict[str, Any]:
+    structured = stats.setdefault(
+        "structured_provider",
+        {
+            "attempt": 0,
+            "success": 0,
+            "fallback": 0,
+            "by_key": {},
+            "error_breakdown": {},
+            "latency_ms": [],
+            "latency_ms_by_provider": {},
+        },
+    )
+    structured.setdefault("attempt", 0)
+    structured.setdefault("success", 0)
+    structured.setdefault("fallback", 0)
+    structured.setdefault("by_key", {})
+    structured.setdefault("error_breakdown", {})
+    structured.setdefault("latency_ms", [])
+    structured.setdefault("latency_ms_by_provider", {})
+    return structured
+
+
+def _structured_key_stats(stats: Dict[str, Any], indicator_key: str) -> Dict[str, Any]:
+    structured = _structured_stats(stats)
+    by_key = structured.setdefault("by_key", {})
+    return by_key.setdefault(indicator_key, {"attempt": 0, "success": 0, "fallback": 0})
+
+
+def _record_structured_attempt(stats: Dict[str, Any], indicator_key: str) -> None:
+    structured = _structured_stats(stats)
+    structured["attempt"] = structured.get("attempt", 0) + 1
+    key_stats = _structured_key_stats(stats, indicator_key)
+    key_stats["attempt"] = key_stats.get("attempt", 0) + 1
+    stats["structured_attempt"] = stats.get("structured_attempt", 0) + 1
+
+
+def _record_structured_latency_by_provider(
+    structured: Dict[str, Any],
+    provider_name: Optional[str],
+    latency_ms: Optional[int],
+) -> None:
+    if latency_ms is None:
+        return
+    provider_key = str(provider_name or "unknown")
+    by_provider = structured.setdefault("latency_ms_by_provider", {})
+    if isinstance(by_provider, dict):
+        by_provider.setdefault(provider_key, []).append(latency_ms)
+
+
+def _record_structured_success(
+    stats: Dict[str, Any],
+    indicator_key: str,
+    latency_ms: int,
+    provider_name: Optional[str] = None,
+) -> None:
+    structured = _structured_stats(stats)
+    structured["success"] = structured.get("success", 0) + 1
+    structured.setdefault("latency_ms", []).append(latency_ms)
+    _record_structured_latency_by_provider(structured, provider_name, latency_ms)
+    key_stats = _structured_key_stats(stats, indicator_key)
+    key_stats["success"] = key_stats.get("success", 0) + 1
+    stats["structured_success"] = stats.get("structured_success", 0) + 1
+
+
+def _record_structured_fallback(
+    stats: Dict[str, Any],
+    indicator_key: str,
+    reason: str,
+    latency_ms: Optional[int] = None,
+    provider_name: Optional[str] = None,
+) -> None:
+    structured = _structured_stats(stats)
+    structured["fallback"] = structured.get("fallback", 0) + 1
+    if latency_ms is not None:
+        structured.setdefault("latency_ms", []).append(latency_ms)
+    _record_structured_latency_by_provider(structured, provider_name, latency_ms)
+    key_stats = _structured_key_stats(stats, indicator_key)
+    key_stats["fallback"] = key_stats.get("fallback", 0) + 1
+    key_stats["last_fallback_reason"] = reason
+    breakdown = structured.setdefault("error_breakdown", {})
+    breakdown[reason] = breakdown.get(reason, 0) + 1
+    stats["structured_fallback"] = stats.get("structured_fallback", 0) + 1
+
+
+def _structured_audit_fields_from_task(task: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: task[key]
+        for key in (
+            "structured_provider_attempted",
+            "structured_provider_fallback_reason",
+            "structured_provider_latency_ms",
+            "structured_provider_diagnostics",
+            "structured_provider_name",
+        )
+        if key in task
+    }
+
+
+def _mark_structured_fallback_on_task(
+    task: Dict[str, Any],
+    *,
+    reason: str,
+    latency_ms: int,
+    diagnostics: Optional[Dict[str, Any]] = None,
+    provider_name: Optional[Any] = None,
+) -> None:
+    task["structured_provider_attempted"] = True
+    task["structured_provider_fallback_reason"] = reason
+    task["structured_provider_latency_ms"] = latency_ms
+    task["structured_provider_diagnostics"] = diagnostics or {}
+    if provider_name:
+        task["structured_provider_name"] = provider_name
+
+
+async def _try_structured_provider(
+    *,
+    structured_registry: Any,
+    task: Dict[str, Any],
+    market_payload: Dict[str, Any],
+    task_log_path: Path,
+    stats: Dict[str, Any],
+) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    if structured_registry is None:
+        return None
+
+    indicator_key = str(task.get("indicator_key") or "")
+    provider_for = getattr(structured_registry, "provider_for", None)
+    if callable(provider_for) and provider_for(indicator_key) is None:
+        structured = _structured_stats(stats)
+        structured["unsupported"] = structured.get("unsupported", 0) + 1
+        return None
+
+    reference_date = (
+        market_payload.get("metadata", {}).get("date")
+        or task.get("reference_date")
+        or task.get("expected_period")
+        or datetime.now().date().isoformat()
+    )
+    started = time.perf_counter()
+    _record_structured_attempt(stats, indicator_key)
+    try:
+        result = await structured_registry.fetch(task, market_payload, reference_date)
+    except Exception as exc:
+        if StructuredProviderError is not None and isinstance(exc, StructuredProviderError):
+            reason = str(getattr(exc, "reason", None) or "provider_error")
+            diagnostics_fn = getattr(exc, "to_diagnostics", None)
+            diagnostics = diagnostics_fn() if callable(diagnostics_fn) else {}
+        else:
+            reason = "provider_exception"
+            diagnostics = {
+                "structured_provider_error": reason,
+                "structured_provider_message": str(exc),
+            }
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        provider_name = getattr(exc, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            reason,
+            latency_ms,
+            provider_name=provider_name,
+        )
+        _mark_structured_fallback_on_task(
+            task,
+            reason=reason,
+            latency_ms=latency_ms,
+            diagnostics=diagnostics,
+            provider_name=provider_name,
+        )
+        samples = stats.setdefault("structured_error_samples", [])
+        if isinstance(samples, list) and len(samples) < 5:
+            samples.append({**diagnostics, "indicator_key": indicator_key})
+        return None
+
+    latency_ms = int((time.perf_counter() - started) * 1000)
+    if result is None:
+        structured = _structured_stats(stats)
+        structured["none"] = structured.get("none", 0) + 1
+        return None
+
+    extraction = result.to_extraction()
+    snippets = list(result.audit_snippets())
+    task_for_log = {
+        **task,
+        "search_backend": "structured",
+        "extraction_backend": "structured",
+        "query_used": task.get("query_used") or task.get("query") or indicator_key,
+    }
+    _augment_extraction_metadata(extraction, task_for_log, snippets)
+    _refine_extraction_value(extraction, task_for_log, snippets)
+
+    is_fund_flow = indicator_key in {"northbound", "southbound", "etf", "margin"}
+    manual_required = bool(extraction.get("manual_required"))
+    if is_fund_flow:
+        adjusted_value, unit_manual, note_append = _validate_fund_flow_extraction(
+            extraction,
+            indicator_key=indicator_key,
+        )
+        extraction["value"] = adjusted_value
+        if note_append:
+            extraction["note"] = _append_note(extraction.get("note"), note_append)
+        manual_required = manual_required or unit_manual
+        if unit_manual and _safe_number(extraction.get("recent_5d")) is not None and _safe_number(
+            extraction.get("total_120d")
+        ) is not None:
+            metric_basis = _default_fund_flow_metric_basis(indicator_key, extraction)
+            window_evidence = _infer_fund_flow_window_evidence(indicator_key, extraction, metric_basis)
+            if window_evidence not in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+                extraction["manual_reason"] = _append_note(
+                    extraction.get("manual_reason"),
+                    "fund_flow_window_missing",
+                )
+                manual_required = True
+    else:
+        val_adj, manual2, note_append = _validate_general_extraction(extraction, task_for_log, snippets)
+        extraction["value"] = val_adj
+        if note_append:
+            extraction["note"] = _append_note(extraction.get("note"), note_append)
+        manual_required = manual_required or manual2
+
+    if extraction.get("manual_reason"):
+        extraction["note"] = _append_note(extraction.get("note"), str(extraction.get("manual_reason")))
+    if manual_required:
+        reason = str(extraction.get("manual_reason") or "policy_gate_blocked")
+        provider_name = getattr(result, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            reason,
+            latency_ms,
+            provider_name=provider_name,
+        )
+        _mark_structured_fallback_on_task(
+            task,
+            reason=reason,
+            latency_ms=latency_ms,
+            diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
+            provider_name=provider_name,
+        )
+        if reason == "policy_gate_blocked" or "fund_flow_window_missing" in reason:
+            stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
+        return None
+
+    snapshot = copy.deepcopy(market_payload)
+    write_target = _apply_extraction(market_payload, task_for_log, extraction, snippets=snippets)
+    if write_target == "skip_no_value":
+        market_payload.clear()
+        market_payload.update(snapshot)
+        provider_name = getattr(result, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            write_target,
+            latency_ms,
+            provider_name=provider_name,
+        )
+        _mark_structured_fallback_on_task(
+            task,
+            reason=write_target,
+            latency_ms=latency_ms,
+            diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
+            provider_name=provider_name,
+        )
+        return None
+    post_writeback_reason = _post_writeback_manual_reason(market_payload, task_for_log, indicator_key)
+    if post_writeback_reason:
+        market_payload.clear()
+        market_payload.update(snapshot)
+        provider_name = getattr(result, "provider", None)
+        _record_structured_fallback(
+            stats,
+            indicator_key,
+            post_writeback_reason,
+            latency_ms,
+            provider_name=provider_name,
+        )
+        _mark_structured_fallback_on_task(
+            task,
+            reason=post_writeback_reason,
+            latency_ms=latency_ms,
+            diagnostics=dict(getattr(result, "diagnostics", {}) or {}),
+            provider_name=provider_name,
+        )
+        if post_writeback_reason == "estimated_not_allowed":
+            stats["structured_policy_gate_blocked"] = stats.get("structured_policy_gate_blocked", 0) + 1
+        return None
+
+    write_stats = stats.setdefault("write_back_by_category", {})
+    if isinstance(write_stats, dict):
+        write_stats[write_target] = write_stats.get(write_target, 0) + 1
+    if write_target == "fallback_macro":
+        stats["write_back_fallback_count"] = stats.get("write_back_fallback_count", 0) + 1
+    _update_missing_items(market_payload, indicator_key)
+    provider_name = getattr(result, "provider", None)
+    _record_structured_success(stats, indicator_key, latency_ms, provider_name=provider_name)
+
+    now_ts = int(datetime.now().timestamp())
+    task_record = {
+        "task_id": task["task_id"],
+        "indicator_key": indicator_key,
+        "category": task.get("category") or task.get("stage_phase"),
+        "stage_phase": task["stage_phase"],
+        "search_backend": "structured",
+        "fund_flow_backend": task.get("fund_flow_backend") if is_fund_flow else None,
+        "extraction_backend": "structured",
+        "confidence": extraction.get("confidence", 0.0),
+        "source_url": extraction.get("source_url"),
+        "note": extraction.get("note"),
+        "llm_latency_ms": 0,
+        "llm_error": None,
+        "deepseek_error": None,
+        "attempt_index": 0,
+        "elapsed_ms": latency_ms,
+        "created_at": task.get("created_at", now_ts),
+        "finished_at": now_ts,
+        "manual_required": False,
+        "manual_reason": None,
+        "query_used": task_for_log.get("query_used"),
+        "result_type": "structured_success",
+        "write_back_success": True,
+        "write_back_target": write_target,
+        "structured_provider": getattr(result, "provider", None),
+        "structured_provider_latency_ms": latency_ms,
+    }
+    websearch_item = result.to_websearch_record(task_for_log)
+    websearch_item.update(
+        {
+            "task": task_for_log,
+            "extraction": extraction,
+            "extraction_backend": "structured",
+            "raw_results": snippets,
+            "manual_required": False,
+            "manual_reason": None,
+            "result_type": "structured_success",
+            "write_back_success": True,
+            "write_back_target": write_target,
+            "structured_provider": getattr(result, "provider", None),
+            "structured_provider_latency_ms": latency_ms,
+        }
+    )
+    _append_task_log(task_log_path, task_record)
+    return task_record, websearch_item
 
 
 def _update_missing_items(market_payload: Dict[str, Any], indicator_key: str) -> None:
@@ -1347,6 +2474,107 @@ def _append_note(note: Optional[str], extra: Optional[str]) -> Optional[str]:
     if tail in base:
         return base
     return f"{base} {tail}".strip()
+
+
+def _entry_for_task(
+    market_payload: Dict[str, Any],
+    task: Dict[str, Any],
+    indicator_key: str,
+) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    category = task.get("quality_gap_category") or task.get("category") or task.get("stage_phase")
+    if category == "macro_indicators":
+        entry = market_payload.get("macro_indicators", {}).get(indicator_key)
+        return category, entry if isinstance(entry, dict) else None
+    if category == "monetary_policy":
+        monetary_key = canonical_monetary_key(indicator_key)
+        entry = market_payload.get("monetary_policy", {}).get(monetary_key)
+        return category, entry if isinstance(entry, dict) else None
+    if category == "fund_flow":
+        entry = market_payload.get("fund_flow", {}).get(indicator_key)
+        return category, entry if isinstance(entry, dict) else None
+    if category == "bonds":
+        for item in market_payload.get("bonds", []) or []:
+            if isinstance(item, dict) and item.get("symbol") == indicator_key:
+                return category, item
+    return None, None
+
+
+def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:
+    missing: List[str] = []
+    numeric_fields = {
+        "current_value",
+        "previous_value",
+        "change_rate",
+        "change_from_120d",
+        "recent_5d",
+        "total_120d",
+        "current_yield",
+        "change_5d_bp",
+        "change_120d_bp",
+    }
+    for field in fields:
+        value = entry.get(field)
+        if field in numeric_fields:
+            if _safe_number(value) is None:
+                missing.append(field)
+            continue
+        if value in (None, "", "N/A"):
+            missing.append(field)
+    return missing
+
+
+def _post_writeback_manual_reason(
+    market_payload: Dict[str, Any],
+    task_or_indicator: Any,
+    indicator_key: Optional[str] = None,
+) -> Optional[str]:
+    if isinstance(task_or_indicator, dict):
+        task = task_or_indicator
+        indicator = str(indicator_key or task.get("indicator_key") or "")
+    else:
+        task = {"indicator_key": str(task_or_indicator or "")}
+        indicator = str(indicator_key or task_or_indicator or "")
+
+    category, entry = _entry_for_task(market_payload, task, indicator)
+    if (
+        task.get("quality_gap_reason") == "missing_compare_values"
+        and isinstance(entry, dict)
+    ):
+        required_fields = list(task.get("required_output_fields") or [])
+        missing_fields = _missing_required_output_fields(entry, required_fields)
+        if missing_fields:
+            task["post_writeback_missing_fields"] = missing_fields
+            return "missing_compare_values"
+
+    fund_flow = market_payload.get("fund_flow", {})
+    if indicator not in fund_flow:
+        return None
+    entry = fund_flow.get(indicator)
+    if not isinstance(entry, dict) or entry.get("is_estimated") is not True:
+        return None
+    allowed, _reasons = is_estimated_allowlisted("fund_flow", indicator, entry)
+    if allowed:
+        return None
+    return "estimated_not_allowed"
+
+
+def _mark_post_writeback_manual_required(
+    market_payload: Dict[str, Any],
+    task_record: Dict[str, Any],
+    task: Dict[str, Any],
+    extraction: Dict[str, Any],
+    indicator_key: str,
+    reason: str,
+) -> None:
+    task_record["manual_required"] = True
+    task_record["manual_reason"] = reason
+    task_record["result_type"] = "manual_required"
+    extraction["manual_required"] = True
+    extraction["manual_reason"] = reason
+    extraction["note"] = _append_note(extraction.get("note"), reason)
+    task_record["note"] = extraction.get("note")
+    category = task.get("quality_gap_category") or task.get("category") or task_record.get("category") or "fund_flow"
+    append_missing_item(market_payload, category, indicator_key, reason)
 
 
 def _is_force_refresh_task(task: Dict[str, Any]) -> bool:
@@ -1473,23 +2701,230 @@ def _diagnostic_rows_for_summary(
     return rows
 
 
+_STAGE2_BACKEND_SUMMARY_KEYS = (
+    "search_backend_final",
+    "tavily_to_exa_failover",
+    "tavily_to_exa_failover_count",
+    "tavily_limit_error_count",
+    "tavily_error_samples",
+    "exa_failover_success",
+    "exa_failover_empty",
+    "exa_failover_error",
+    "exa_unavailable",
+    "exa_error_breakdown",
+    "exa_error_samples",
+    "structured_provider",
+    "structured_policy_gate_blocked",
+    "structured_error_samples",
+)
+
+
+def _stage2_effective_hit_rate(success_count: int, failure_count: int) -> float:
+    denominator = success_count + failure_count
+    return success_count / denominator if denominator else 0.0
+
+
+def _stage2_summary_metric_fields(
+    *,
+    search_success_count: int,
+    structured_success_count: int,
+    search_failed_count: int,
+) -> Dict[str, Any]:
+    search_denominator = search_success_count + search_failed_count
+    search_success_rate_incremental = (
+        search_success_count / search_denominator if search_denominator else 0.0
+    )
+    stage2_effective_success = search_success_count + structured_success_count
+    stage2_effective_failure = search_failed_count
+    stage2_effective_denominator = stage2_effective_success + stage2_effective_failure
+    return {
+        "task_search_success": search_success_count,
+        "task_structured_success": structured_success_count,
+        "task_search_failed": search_failed_count,
+        "stage2_effective_success": stage2_effective_success,
+        "stage2_effective_failure": stage2_effective_failure,
+        "stage2_effective_denominator": stage2_effective_denominator,
+        "stage2_effective_hit_rate": _stage2_effective_hit_rate(
+            stage2_effective_success,
+            stage2_effective_failure,
+        ),
+        "search_success_rate_incremental": search_success_rate_incremental,
+    }
+
+
+def _build_stage2_result_count_fields(
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    skipped_existing_count = sum(
+        1 for task in completed_tasks if task.get("result_type") == "skipped_existing"
+    )
+    search_success_count = sum(
+        1 for task in completed_tasks if task.get("result_type") == "search_success"
+    )
+    structured_success_count = sum(
+        1 for task in completed_tasks if task.get("result_type") == "structured_success"
+    )
+    search_failed_count = sum(
+        1 for task in failures if task.get("result_type") == "manual_required"
+    )
+    fields = _stage2_summary_metric_fields(
+        search_success_count=search_success_count,
+        structured_success_count=structured_success_count,
+        search_failed_count=search_failed_count,
+    )
+    fields["task_skipped_existing"] = skipped_existing_count
+    return fields
+
+
+def _format_stage2_task_count_line(
+    summary: Dict[str, Any],
+    *,
+    pending_manual_count: int,
+) -> str:
+    return (
+        f"  任务总数: {summary['task_total']}, legacy完成: {summary['task_completed']}, "
+        f"Stage2有效成功: {summary['stage2_effective_success']}, "
+        f"结构化源成功: {summary['task_structured_success']}, "
+        f"搜索链路成功: {summary['task_search_success']}, "
+        f"搜索失败: {summary['task_search_failed']}, "
+        f"跳过已有值: {summary['task_skipped_existing']}, 待人工: {pending_manual_count}"
+    )
+
+
+def _format_stage2_hit_rate_line(summary: Dict[str, Any]) -> str:
+    effective_success = summary["stage2_effective_success"]
+    effective_denominator = summary["stage2_effective_denominator"]
+    search_success = summary["task_search_success"]
+    search_denominator = summary["task_search_success"] + summary["task_search_failed"]
+    return (
+        f"  Stage2有效命中率: {summary['stage2_effective_hit_rate'] * 100:.1f}% "
+        f"({effective_success}/{effective_denominator}); "
+        f"搜索链路命中率: {summary['search_success_rate_incremental'] * 100:.1f}% "
+        f"({search_success}/{search_denominator})"
+    )
+
+
+def _structured_provider_summary_fields(exec_stats: Dict[str, Any]) -> Dict[str, Any]:
+    structured = exec_stats.get("structured_provider")
+    if not isinstance(structured, dict):
+        structured = {}
+    by_key = structured.get("by_key", {})
+    if not isinstance(by_key, dict):
+        by_key = {}
+    success_by_key = {
+        str(indicator_key): key_stats.get("success", 0)
+        for indicator_key, key_stats in by_key.items()
+        if isinstance(key_stats, dict) and key_stats.get("success", 0)
+    }
+    error_breakdown = structured.get("error_breakdown", {})
+    if not isinstance(error_breakdown, dict):
+        error_breakdown = {}
+    latency_by_provider = structured.get("latency_ms_by_provider", {})
+    if not isinstance(latency_by_provider, dict):
+        latency_by_provider = {}
+    return {
+        "structured_provider_attempt_count": structured.get(
+            "attempt",
+            exec_stats.get("structured_attempt", 0),
+        ),
+        "structured_provider_success_count": structured.get(
+            "success",
+            exec_stats.get("structured_success", 0),
+        ),
+        "structured_provider_fallback_to_search_count": structured.get(
+            "fallback",
+            exec_stats.get("structured_fallback", 0),
+        ),
+        "structured_provider_success_by_key": success_by_key,
+        "structured_provider_error_breakdown": dict(error_breakdown),
+        "structured_provider_latency_ms_by_provider": dict(latency_by_provider),
+    }
+
+
 def _build_stage2_summary_diagnostics(
     completed_tasks: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
     websearch_results: List[Dict[str, Any]],
     exec_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
+    exec_stats = exec_stats or {}
     retrieval_diagnostics = _build_retrieval_diagnostics(
         _diagnostic_rows_for_summary(completed_tasks, failures, websearch_results)
     )
     payload = {
         "retrieval_diagnostics": retrieval_diagnostics,
         "manual_reason_breakdown": retrieval_diagnostics.get("manual_reason_breakdown", {}),
+        "deepseek_circuit_breaker_triggered": bool(
+            exec_stats.get("deepseek_circuit_breaker_triggered", False)
+        ),
+        "deepseek_circuit_breaker_reason": exec_stats.get("deepseek_circuit_breaker_reason"),
+        "deepseek_timeout_rate": exec_stats.get("deepseek_timeout_rate", 0.0),
+        "deepseek_breaker_attempts": exec_stats.get("deepseek_breaker_attempts", 0),
+        "deepseek_breaker_timeouts": exec_stats.get("deepseek_breaker_timeouts", 0),
     }
-    unavailable_reason = (exec_stats or {}).get("tavily_unavailable_reason")
+    payload.update(_structured_provider_summary_fields(exec_stats))
+    unavailable_reason = exec_stats.get("tavily_unavailable_reason")
     if unavailable_reason:
         payload["tavily_unavailable_reason"] = unavailable_reason
+    for key in _STAGE2_BACKEND_SUMMARY_KEYS:
+        if key in exec_stats:
+            payload[key] = exec_stats[key]
     return payload
+
+
+class _DeepSeekCircuitBreaker:
+    def __init__(
+        self,
+        *,
+        max_consecutive_timeouts: int = 3,
+        max_timeout_rate: float = 0.5,
+        min_attempts: int = 4,
+    ) -> None:
+        self.max_consecutive_timeouts = max_consecutive_timeouts
+        self.max_timeout_rate = max_timeout_rate
+        self.min_attempts = min_attempts
+        self.attempts = 0
+        self.timeouts = 0
+        self.consecutive_timeouts = 0
+        self.triggered = False
+        self.reason: Optional[str] = None
+
+    @property
+    def timeout_rate(self) -> float:
+        if self.attempts <= 0:
+            return 0.0
+        return round(self.timeouts / self.attempts, 4)
+
+    def record(self, *, timeout: bool) -> None:
+        if self.triggered:
+            return
+        self.attempts += 1
+        if timeout:
+            self.timeouts += 1
+            self.consecutive_timeouts += 1
+        else:
+            self.consecutive_timeouts = 0
+        if (
+            timeout
+            and self.max_consecutive_timeouts > 0
+            and self.consecutive_timeouts >= self.max_consecutive_timeouts
+        ):
+            self.triggered = True
+            self.reason = "consecutive_timeouts"
+            return
+        if (
+            self.min_attempts > 0
+            and self.max_timeout_rate > 0
+            and self.attempts >= self.min_attempts
+            and self.timeout_rate >= self.max_timeout_rate
+        ):
+            self.triggered = True
+            self.reason = "timeout_rate"
+
+
+def _is_deepseek_timeout(exc: Exception) -> bool:
+    return isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timeout" in str(exc).lower()
 
 
 def _mark_stale_refresh_failure(extraction: Dict[str, Any], task: Dict[str, Any]) -> None:
@@ -1624,7 +3059,19 @@ def _expand_query_candidates(
                     "auto_parameters": task.get("auto_parameters"),
                 }
             )
-    return _dedupe_candidate_queries(candidates)
+    deduped = _dedupe_candidate_queries(candidates)
+    if include_primary and not field_scopes:
+        limit_raw = task.get("max_query_candidates")
+        try:
+            limit = int(limit_raw) if limit_raw is not None else 0
+        except (TypeError, ValueError):
+            limit = 0
+        if limit > 0:
+            directed = [item for item in deduped if item.get("family") == "directed_retry"]
+            primary = [item for item in deduped if item.get("family") != "directed_retry"]
+            if len(primary) > limit:
+                return directed + primary[:limit]
+    return deduped
 
 
 def _build_directed_query(
@@ -1746,6 +3193,11 @@ async def _execute_tasks(
     extract_topk: int = 3,
     low_score_threshold: float = 0.2,
     llm_hard_timeout: Optional[float] = None,
+    deepseek_breaker_consecutive_timeouts: int = 6,
+    deepseek_breaker_timeout_rate: float = 0.6,
+    deepseek_breaker_min_attempts: int = 8,
+    allow_exa_non_quota_fallback: bool = False,
+    structured_registry: Any = None,
 ) -> (List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]):
     completed: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
@@ -1768,7 +3220,10 @@ async def _execute_tasks(
     stats.setdefault("extract_cooldown_count", 0)
     stats.setdefault("low_score_drop", 0)
     stats.setdefault("low_score_allow", 0)
+    stats.setdefault("value_evidence_drop_count", 0)
     stats.setdefault("field_retry_count", 0)
+    stats.setdefault("field_retry_merged_count", 0)
+    stats.setdefault("field_retry_missing_fields", {})
     stats.setdefault("post_filter_query_switch_count", 0)
     stats.setdefault("exa_fallback", 0)
     stats.setdefault("exa_empty", 0)
@@ -1784,22 +3239,467 @@ async def _execute_tasks(
     stats.setdefault("write_back_by_category", {})
     stats.setdefault("write_back_fallback_count", 0)
     stats.setdefault("write_back_miss_count", 0)
+    stats.setdefault("deepseek_circuit_breaker_triggered", False)
+    stats.setdefault("deepseek_circuit_breaker_reason", None)
+    stats.setdefault("deepseek_timeout_rate", 0.0)
+    stats.setdefault("deepseek_breaker_attempts", 0)
+    stats.setdefault("deepseek_breaker_timeouts", 0)
+    stats.setdefault("search_backend_final", "tavily")
+    stats.setdefault("tavily_to_exa_failover", False)
+    stats.setdefault("tavily_to_exa_failover_count", 0)
+    stats.setdefault("exa_failover_success", 0)
+    stats.setdefault("exa_failover_empty", 0)
+    stats.setdefault("exa_failover_error", 0)
+    stats.setdefault("exa_unavailable", 0)
+    stats.setdefault("exa_error_breakdown", {})
+    stats.setdefault("exa_error_samples", [])
+    _structured_stats(stats)
+    active_search_backend = "tavily"
+    failover_reason = None
+    active_tavily_limit_metadata: Dict[str, Any] = {}
+    initial_unavailable_reason = stats.get("tavily_unavailable_reason")
     tavily_unavailable_reason: Optional[str] = (
-        "quota_or_rate_limit"
-        if stats.get("tavily_unavailable_reason") == "quota_or_rate_limit"
+        initial_unavailable_reason
+        if initial_unavailable_reason in {"quota_or_rate_limit", "environment_proxy_error"}
         else None
     )
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}
     ds_semaphore = asyncio.Semaphore(max(1, deepseek_max_concurrency))
     serial_keys = set(deepseek_serial_keys or [])
+    deepseek_circuit_breaker = _DeepSeekCircuitBreaker(
+        max_consecutive_timeouts=deepseek_breaker_consecutive_timeouts,
+        max_timeout_rate=deepseek_breaker_timeout_rate,
+        min_attempts=deepseek_breaker_min_attempts,
+    )
     extract_globally_disabled = disable_extract
     extract_disabled_until: Dict[str, float] = {}
     extract_422_tracker: Dict[str, Dict[str, Any]] = {}
+
+    def _sync_deepseek_circuit_breaker_stats() -> None:
+        stats["deepseek_circuit_breaker_triggered"] = bool(deepseek_circuit_breaker.triggered)
+        stats["deepseek_circuit_breaker_reason"] = deepseek_circuit_breaker.reason
+        stats["deepseek_timeout_rate"] = deepseek_circuit_breaker.timeout_rate
+        stats["deepseek_breaker_attempts"] = deepseek_circuit_breaker.attempts
+        stats["deepseek_breaker_timeouts"] = deepseek_circuit_breaker.timeouts
+
+    def _deepseek_circuit_breaker_skip_reason() -> Optional[str]:
+        if not deepseek_circuit_breaker.triggered:
+            return None
+        _sync_deepseek_circuit_breaker_stats()
+        return f"deepseek_circuit_breaker:{deepseek_circuit_breaker.reason or 'triggered'}"
 
     def _mark_tavily_quota_unavailable() -> None:
         nonlocal tavily_unavailable_reason
         tavily_unavailable_reason = "quota_or_rate_limit"
         stats["tavily_unavailable_reason"] = "quota_or_rate_limit"
+
+    def _mark_environment_proxy_unavailable(exc: Exception) -> None:
+        nonlocal tavily_unavailable_reason
+        tavily_unavailable_reason = "environment_proxy_error"
+        stats["tavily_unavailable_reason"] = "environment_proxy_error"
+        stats["environment_proxy_error"] = str(exc)
+
+    def _record_tavily_limit_error(source: Any) -> Dict[str, Any]:
+        nonlocal active_tavily_limit_metadata
+        metadata = _tavily_error_metadata(source)
+        active_tavily_limit_metadata = metadata
+        stats["tavily_limit_error_count"] = stats.get("tavily_limit_error_count", 0) + 1
+        samples = stats.setdefault("tavily_error_samples", [])
+        if isinstance(samples, list) and len(samples) < 5:
+            samples.append(metadata)
+        return metadata
+
+    def _get_or_record_tavily_limit_metadata(source: Any) -> Dict[str, Any]:
+        nonlocal active_tavily_limit_metadata
+        metadata = getattr(source, "tavily_metadata", None)
+        if isinstance(metadata, dict) and metadata:
+            active_tavily_limit_metadata = metadata
+            return metadata
+        return _record_tavily_limit_error(source)
+
+    def _activate_exa_failover(task: Dict[str, Any], reason: str) -> bool:
+        nonlocal active_search_backend, failover_reason
+        if not exa_client:
+            stats["exa_unavailable"] += 1
+            return False
+        if active_search_backend != "exa":
+            active_search_backend = "exa"
+            failover_reason = reason
+            stats["tavily_to_exa_failover"] = True
+            stats["tavily_to_exa_failover_count"] += 1
+            stats["search_backend_final"] = "exa"
+        return True
+
+    def _record_exa_error(metadata: Dict[str, Any]) -> None:
+        stats["exa_failover_error"] += 1
+        tag = (
+            metadata.get("exa_error_tag")
+            or metadata.get("exa_http_status")
+            or metadata.get("exa_error_type")
+            or "unknown_error"
+        )
+        breakdown = stats.setdefault("exa_error_breakdown", {})
+        if isinstance(breakdown, dict):
+            breakdown[str(tag)] = breakdown.get(str(tag), 0) + 1
+        samples = stats.setdefault("exa_error_samples", [])
+        if isinstance(samples, list) and len(samples) < 5:
+            samples.append(metadata)
+
+    def _normalize_exa_snippets(result: Dict[str, Any]) -> Dict[str, Any]:
+        normalized: List[Dict[str, Any]] = []
+        for item in result.get("results") or []:
+            if not isinstance(item, dict):
+                continue
+            snippet = dict(item)
+            highlights = snippet.get("highlights")
+            if isinstance(highlights, list):
+                highlights_text = " ".join(str(v) for v in highlights if str(v).strip())
+            else:
+                highlights_text = str(highlights or "")
+            content = (
+                snippet.get("content")
+                or snippet.get("raw_content")
+                or snippet.get("text")
+                or snippet.get("summary")
+                or highlights_text
+                or snippet.get("snippet")
+                or ""
+            )
+            summary = snippet.get("summary") or highlights_text or content
+            snippet["url"] = snippet.get("url") or snippet.get("source_url") or ""
+            snippet["title"] = snippet.get("title") or ""
+            snippet["snippet"] = snippet.get("snippet") or summary or content
+            snippet["content"] = content
+            snippet["published_date"] = snippet.get("published_date") or snippet.get("date")
+            snippet["search_backend"] = "exa"
+            normalized.append(snippet)
+        result["results"] = normalized
+        result.setdefault("search_backend", "exa")
+        return result
+
+    async def _run_exa_search_for_task(
+        task: Dict[str, Any],
+        reason: str,
+        query_override: Optional[str] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], str, Dict[str, Any]]:
+        if not _activate_exa_failover(task, reason):
+            return None, "exa_unavailable", {"exa_error_tag": "unavailable"}
+        query = query_override or task.get("query_used") or task.get("query") or task.get("indicator_key")
+        include_domains = task.get("preferred_domains") or None
+        exclude_domains = task.get("exclude_domains") or None
+        num_results = task.get("max_results") or None
+        start_published = _start_date_from_max_age(task.get("max_age_days"))
+        search_type = _exa_search_type(task.get("indicator_key") or "")
+        try:
+            result = await exa_client.search(  # type: ignore[union-attr]
+                query=query,
+                num_results=num_results,
+                include_domains=include_domains,
+                exclude_domains=exclude_domains,
+                start_published_date=start_published,
+                search_type=search_type,
+                contents={"text": True, "summary": True, "highlights": True},
+                cache_ttl=cache_ttl,
+            )
+        except Exception as exc:  # pragma: no cover
+            if AsyncExaClient and hasattr(AsyncExaClient, "error_metadata"):
+                metadata = AsyncExaClient.error_metadata(exc)  # type: ignore[union-attr]
+            else:
+                metadata = {
+                    "exa_error_type": type(exc).__name__,
+                    "exa_error_message": str(exc),
+                    "exa_error_tag": "unknown_error",
+                }
+            _record_exa_error(metadata)
+            logger.warning(f"Exa search failover failed: {exc}")
+            return None, "exa_error", metadata
+        result = _normalize_exa_snippets(result or {})
+        snippets = result.get("results") or []
+        if not snippets:
+            stats["exa_failover_empty"] += 1
+            return None, "exa_empty", {
+                "exa_error_tag": "empty_results",
+                "exa_query": query,
+                "exa_result_count": 0,
+            }
+        stats["exa_failover_success"] += 1
+        return result, "exa_failover", {
+            "exa_query": query,
+            "exa_result_count": len(snippets),
+            "exa_request_id": result.get("request_id"),
+            "request_id": result.get("request_id"),
+        }
+
+    def _task_for_candidate(task: Dict[str, Any], candidate: Dict[str, Any], query: str) -> Dict[str, Any]:
+        return {
+            **task,
+            "query": query,
+            "preferred_domains": candidate.get("preferred_domains") or task.get("preferred_domains"),
+            "exclude_domains": candidate.get("exclude_domains") or task.get("exclude_domains"),
+            "required_keywords": candidate.get("required_keywords") or task.get("required_keywords"),
+            "exclude_keywords": candidate.get("exclude_keywords") or task.get("exclude_keywords"),
+            "strict_required_keywords": candidate.get(
+                "strict_required_keywords",
+                task.get("strict_required_keywords"),
+            ),
+            "strict_issuer_match": candidate.get("strict_issuer_match", task.get("strict_issuer_match")),
+            "good_url_patterns": candidate.get("good_url_patterns") or task.get("good_url_patterns"),
+            "bad_url_patterns": candidate.get("bad_url_patterns") or task.get("bad_url_patterns"),
+            "evidence_keywords": candidate.get("evidence_keywords") or task.get("evidence_keywords"),
+            "max_results": candidate.get("max_results") or task.get("max_results"),
+        }
+
+    async def _run_exa_search_candidates(
+        task: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        reason: str,
+    ) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], str, Dict[str, Any]]:
+        best_payload: Optional[Dict[str, Any]] = None
+        attempts: List[Dict[str, Any]] = []
+        last_note = "exa_empty"
+        last_metadata: Dict[str, Any] = {}
+        for idx, candidate in enumerate(candidates):
+            query = str(candidate.get("query") or "").strip()
+            if not query:
+                continue
+            exa_task = _task_for_candidate(task, candidate, query)
+            result, note, metadata = await _run_exa_search_for_task(
+                exa_task,
+                reason,
+                query_override=query,
+            )
+            last_note = note
+            last_metadata = metadata or {}
+            if not result:
+                attempts.append(
+                    {
+                        "query": query,
+                        "family": candidate.get("family"),
+                        "field_scope": candidate.get("field_scope"),
+                        "search_backend": "exa",
+                        "manual_required": True,
+                        "manual_reason": note,
+                        **last_metadata,
+                    }
+                )
+                continue
+            raw_snippets = result.get("results") or []
+            quality = _candidate_query_quality(task, candidate, raw_snippets)
+            score_stats = quality.get("score_stats") or _score_stats(raw_snippets)
+            attempt_meta = {
+                "query": query,
+                "family": candidate.get("family"),
+                "field_scope": candidate.get("field_scope"),
+                "search_backend": "exa",
+                "result_count": len(raw_snippets),
+                "usable_count": quality.get("usable_count"),
+                "trusted_count": quality.get("trusted_count"),
+                "issuer_hit": quality.get("issuer_hit"),
+                "period_hit": quality.get("period_hit"),
+                "score_max": score_stats.get("score_max"),
+                "quality_score": quality.get("quality_score"),
+                "usage_evidence_score": quality.get("usage_evidence_score"),
+                "value_evidence_score": quality.get("value_evidence_score"),
+                "good_url_hit_count": quality.get("good_url_hit_count"),
+                "bad_url_hit_count": quality.get("bad_url_hit_count"),
+                "unusable_reason": quality.get("unusable_reason"),
+                **last_metadata,
+            }
+            attempts.append(attempt_meta)
+            task_for_log = {
+                **task,
+                "search_backend": "exa",
+                "query": query,
+                "query_used": query,
+                "query_family_used": candidate.get("family"),
+                "field_scope": candidate.get("field_scope"),
+                "score_stats": score_stats,
+                "usable_count_before_extract": quality.get("usable_count", 0),
+                "trusted_count": quality.get("trusted_count", 0),
+                "issuer_hit": quality.get("issuer_hit", False),
+                "period_hit": quality.get("period_hit", False),
+                "selected_reason": quality.get("selected_reason"),
+                "usage_evidence_score": quality.get("usage_evidence_score", 0),
+                "value_evidence_score": quality.get("value_evidence_score", 0),
+                "quality_score": quality.get("quality_score", -1.0),
+                "good_url_hit_count": quality.get("good_url_hit_count", 0),
+                "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
+                "unusable_reason": quality.get("unusable_reason"),
+                "search_note": note,
+                "search_backend_state": "exa_active",
+                "failover_reason": reason,
+                **last_metadata,
+            }
+            payload = {
+                "candidate": candidate,
+                "result": result,
+                "raw_snippets": raw_snippets,
+                "snippets": quality.get("snippets", raw_snippets),
+                "score_stats": score_stats,
+                "quality_score": quality.get("quality_score", -1.0),
+                "selected_reason": quality.get("selected_reason"),
+                "usable_count": quality.get("usable_count", 0),
+                "trusted_count": quality.get("trusted_count", 0),
+                "issuer_hit": quality.get("issuer_hit", False),
+                "period_hit": quality.get("period_hit", False),
+                "usage_evidence_score": quality.get("usage_evidence_score", 0),
+                "value_evidence_score": quality.get("value_evidence_score", 0),
+                "good_url_hit_count": quality.get("good_url_hit_count", 0),
+                "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
+                "unusable_reason": quality.get("unusable_reason"),
+                "task_for_log": task_for_log,
+                "note": note,
+                "metadata": last_metadata,
+                "candidate_index": idx,
+            }
+            if best_payload is None or payload["quality_score"] > best_payload["quality_score"]:
+                best_payload = payload
+        if best_payload and best_payload.get("candidate_index", 0) > 0:
+            stats["post_filter_query_switch_count"] += 1
+        return best_payload, attempts, last_note, last_metadata
+
+    def _quality_filter_exa_result(
+        task: Dict[str, Any],
+        result: Dict[str, Any],
+        query_used: Optional[str],
+    ) -> Dict[str, Any]:
+        raw_snippets = result.get("results") or []
+        candidate = {
+            "query": query_used or result.get("query") or task.get("query"),
+            "preferred_domains": task.get("preferred_domains"),
+            "exclude_domains": task.get("exclude_domains"),
+            "required_keywords": task.get("required_keywords"),
+            "exclude_keywords": task.get("exclude_keywords"),
+            "strict_required_keywords": task.get("strict_required_keywords"),
+            "strict_issuer_match": task.get("strict_issuer_match"),
+            "good_url_patterns": task.get("good_url_patterns"),
+            "bad_url_patterns": task.get("bad_url_patterns"),
+            "evidence_keywords": task.get("evidence_keywords"),
+        }
+        return _candidate_query_quality(task, candidate, raw_snippets)
+
+    def _apply_exa_quality_to_task(
+        task: Dict[str, Any],
+        result: Dict[str, Any],
+        query_used: Optional[str],
+        search_note: Optional[str],
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], Dict[str, Any]]:
+        quality = _quality_filter_exa_result(task, result, query_used)
+        snippets = quality.get("snippets") or []
+        score_stats = quality.get("score_stats") or _score_stats(snippets)
+        task_for_log = {
+            **task,
+            "search_backend": "exa",
+            "query_used": query_used,
+            "score_stats": score_stats,
+            "usable_count_before_extract": quality.get("usable_count", 0),
+            "trusted_count": quality.get("trusted_count", 0),
+            "issuer_hit": quality.get("issuer_hit", False),
+            "period_hit": quality.get("period_hit", False),
+            "selected_reason": quality.get("selected_reason"),
+            "usage_evidence_score": quality.get("usage_evidence_score", 0),
+            "value_evidence_score": quality.get("value_evidence_score", 0),
+            "quality_score": quality.get("quality_score", -1.0),
+            "good_url_hit_count": quality.get("good_url_hit_count", 0),
+            "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
+            "unusable_reason": quality.get("unusable_reason"),
+        }
+        if search_note:
+            task_for_log["search_note"] = search_note
+        return snippets, score_stats, task_for_log
+
+    def _build_exa_failover_manual_records(
+        task: Dict[str, Any],
+        *,
+        reason: str,
+        attempt_index: int,
+        elapsed_ms: int,
+        error: Optional[Exception] = None,
+        query_attempts: Optional[List[Dict[str, Any]]] = None,
+        exa_metadata: Optional[Dict[str, Any]] = None,
+        tavily_metadata: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        now_ts = int(datetime.now().timestamp())
+        query = task.get("query_used") or task.get("query") or task.get("indicator_key")
+        note = f"exa_failover:{reason}"
+        source = "Stage2 manual_required"
+        category = task.get("category") or task.get("stage_phase")
+        diagnostics = {**(tavily_metadata or {}), **(exa_metadata or {})}
+        task_payload = {
+            **task,
+            **diagnostics,
+            "category": category,
+            "query": query,
+            "query_used": task.get("query_used") or query,
+            "query_attempts": query_attempts or task.get("query_attempts") or [],
+            "search_backend": "exa",
+            "search_backend_state": "exa_active",
+            "failover_reason": failover_reason,
+            "manual_required": True,
+            "manual_reason": reason,
+            "source": source,
+            "note": note,
+        }
+        extraction = {
+            **diagnostics,
+            "value": None,
+            "unit": task.get("unit"),
+            "source_url": None,
+            "confidence": 0.0,
+            "note": note,
+            "llm_error": None,
+            "llm_latency_ms": 0,
+            "manual_required": True,
+            "manual_reason": reason,
+        }
+        task_record = {
+            **diagnostics,
+            **_structured_audit_fields_from_task(task),
+            "task_id": task["task_id"],
+            "indicator_key": task["indicator_key"],
+            "category": category,
+            "stage_phase": task["stage_phase"],
+            "query": query,
+            "search_backend": "exa",
+            "search_backend_state": "exa_active",
+            "failover_reason": failover_reason,
+            "fund_flow_backend": task.get("fund_flow_backend"),
+            "extraction_backend": extraction_backend,
+            "source": source,
+            "source_url": None,
+            "confidence": 0.0,
+            "error": str(error) if error else None,
+            "llm_error": str(error) if error else None,
+            "llm_latency_ms": None,
+            "attempt_index": attempt_index,
+            "elapsed_ms": elapsed_ms,
+            "created_at": task.get("created_at", now_ts),
+            "finished_at": now_ts,
+            "manual_required": True,
+            "manual_reason": reason,
+            "note": note,
+            "raw_results": [],
+            "result_type": "manual_required",
+        }
+        websearch_item = {
+            **diagnostics,
+            "task_id": task["task_id"],
+            "indicator_key": task["indicator_key"],
+            "category": category,
+            "stage_phase": task["stage_phase"],
+            "query": query,
+            "task": task_payload,
+            "extraction": extraction,
+            "extraction_backend": extraction_backend,
+            "raw_results": [],
+            "search_backend": "exa",
+            "manual_required": True,
+            "manual_reason": reason,
+            "source": source,
+            "note": note,
+            "result_type": "manual_required",
+        }
+        return task_record, websearch_item
 
     def _build_tavily_fast_switch_records(
         task: Dict[str, Any],
@@ -1808,14 +3708,17 @@ async def _execute_tasks(
         elapsed_ms: int,
         error: Optional[Exception] = None,
         query_attempts: Optional[List[Dict[str, Any]]] = None,
+        tavily_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         now_ts = int(datetime.now().timestamp())
         query = task.get("query_used") or task.get("query") or task.get("indicator_key")
         note = "tavily_fast_switch:quota_or_rate_limit"
         source = "Stage2 manual_required"
         category = task.get("category") or task.get("stage_phase")
+        diagnostics = tavily_metadata or {}
         task_payload = {
             **task,
+            **diagnostics,
             "category": category,
             "query": query,
             "query_used": task.get("query_used") or query,
@@ -1827,6 +3730,7 @@ async def _execute_tasks(
             "tavily_fast_switch": True,
         }
         extraction = {
+            **diagnostics,
             "value": None,
             "unit": task.get("unit"),
             "source_url": None,
@@ -1839,6 +3743,8 @@ async def _execute_tasks(
             "tavily_fast_switch": True,
         }
         task_record = {
+            **diagnostics,
+            **_structured_audit_fields_from_task(task),
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -1865,6 +3771,7 @@ async def _execute_tasks(
             "result_type": "manual_required",
         }
         websearch_item = {
+            **diagnostics,
             "task_id": task["task_id"],
             "indicator_key": task["indicator_key"],
             "category": category,
@@ -1885,9 +3792,16 @@ async def _execute_tasks(
         return task_record, websearch_item
 
     def _is_tavily_fast_switch_record(record: Dict[str, Any]) -> bool:
-        return bool(record.get("tavily_fast_switch")) or (
-            record.get("manual_reason") == "quota_or_rate_limit"
-            and "tavily_fast_switch" in str(record.get("note") or "")
+        return (
+            bool(record.get("tavily_fast_switch") or record.get("environment_proxy_fast_switch"))
+            or (
+                record.get("manual_reason") == "quota_or_rate_limit"
+                and "tavily_fast_switch" in str(record.get("note") or "")
+            )
+            or (
+                record.get("manual_reason") == "environment_proxy_error"
+                and "environment_proxy_error" in str(record.get("note") or "")
+            )
         )
 
     def _is_tavily_fast_switch_websearch(item: Dict[str, Any]) -> bool:
@@ -1898,6 +3812,65 @@ async def _execute_tasks(
             or _is_tavily_fast_switch_record(extraction)
             or _is_tavily_fast_switch_record(task)
         )
+
+    def _attach_field_attempts(
+        task_record: Dict[str, Any],
+        websearch_item: Dict[str, Any],
+        field_attempts: List[Dict[str, Any]],
+    ) -> None:
+        if not field_attempts:
+            return
+        task_record["field_attempts"] = field_attempts
+        websearch_item["field_attempts"] = field_attempts
+        if isinstance(websearch_item.get("task"), dict):
+            websearch_item["task"]["field_attempts"] = field_attempts
+
+    def _exa_metadata_from_attempt(attempt: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: value
+            for key, value in attempt.items()
+            if str(key).startswith("exa_") or key == "request_id"
+        }
+
+    def _tavily_diagnostics_from_task(
+        task: Dict[str, Any],
+        field_attempts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        diagnostics = {
+            key: task[key]
+            for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+            if key in task
+        }
+        if not diagnostics and field_attempts:
+            for attempt in reversed(field_attempts):
+                diagnostics = {
+                    key: attempt[key]
+                    for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+                    if key in attempt
+                }
+                if diagnostics:
+                    break
+        if not diagnostics and task.get("search_backend") == "exa" and active_tavily_limit_metadata:
+            diagnostics = dict(active_tavily_limit_metadata)
+        return diagnostics
+
+    def _field_retry_used_exa(field_attempts: List[Dict[str, Any]]) -> bool:
+        return any(attempt.get("search_backend") == "exa" for attempt in field_attempts or [])
+
+    def _promote_task_to_exa_after_field_retry(
+        task: Dict[str, Any],
+        field_attempts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if not _field_retry_used_exa(field_attempts):
+            return task
+        promoted = {
+            **task,
+            "search_backend": "exa",
+            "search_backend_state": "exa_active",
+            "failover_reason": failover_reason or "quota_or_rate_limit",
+        }
+        promoted.update(active_tavily_limit_metadata)
+        return promoted
 
     def _infer_flow_direction(snips: List[Dict[str, Any]]) -> Optional[str]:
         """从 snippet/content 中粗略推断资金流向，返回 inflow/outflow/None"""
@@ -1961,20 +3934,43 @@ async def _execute_tasks(
                 "llm_latency_ms": 0,
                 "llm_error": None,
             }
+        breaker_skip_reason = _deepseek_circuit_breaker_skip_reason()
+        if breaker_skip_reason:
+            skipped_note = f"skipped_deepseek:{breaker_skip_reason}"
+            return {
+                "value": None,
+                "unit": task.get("unit"),
+                "source_url": None,
+                "confidence": 0.0,
+                "note": skipped_note,
+                "llm_error": skipped_note,
+                "llm_timeout": False,
+                "llm_latency_ms": 0,
+                "manual_required": True,
+                "manual_reason": skipped_note,
+                "extraction_skipped_reason": breaker_skip_reason,
+            }
         start_llm = time.perf_counter()
         attempts = 0
-        last_exc: Optional[Exception] = None
         while attempts < 2:
             attempts += 1
             try:
+                extract_kwargs = {
+                    "unit_hint": task.get("unit"),
+                    "issuer_hint": task.get("issuer"),
+                    "request_timeout": deepseek_timeout,
+                }
+                if (
+                    task.get("required_output_fields")
+                    and _callable_supports_kwarg(extractor.extract, "required_output_fields")
+                ):
+                    extract_kwargs["required_output_fields"] = task.get("required_output_fields")
                 if task["indicator_key"] in serial_keys:
                     result = await _run_with_timeout(
                         extractor.extract(
                             snips,
                             task["indicator_key"],
-                            unit_hint=task.get("unit"),
-                            issuer_hint=task.get("issuer"),
-                            request_timeout=deepseek_timeout,
+                            **extract_kwargs,
                         )
                     )
                 else:
@@ -1983,23 +3979,25 @@ async def _execute_tasks(
                             extractor.extract(
                                 snips,
                                 task["indicator_key"],
-                                unit_hint=task.get("unit"),
-                                issuer_hint=task.get("issuer"),
-                                request_timeout=deepseek_timeout,
+                                **extract_kwargs,
                             )
                         )
                 result = result or {}
+                deepseek_circuit_breaker.record(timeout=False)
+                _sync_deepseek_circuit_breaker_stats()
                 result["llm_latency_ms"] = int((time.perf_counter() - start_llm) * 1000)
                 stats.setdefault("deepseek_latencies", []).append(result["llm_latency_ms"])
                 if attempts > 1:
                     stats["retry_count"] += 1
                 return result
             except Exception as exc:  # pragma: no cover
-                last_exc = exc
-                stats["timeout_count"] += 1
-                stats["deepseek_timeouts"] += 1
-                is_timeout = isinstance(exc, asyncio.TimeoutError) or "Timeout" in str(exc)
-                if attempts >= 2:
+                is_timeout = _is_deepseek_timeout(exc)
+                deepseek_circuit_breaker.record(timeout=is_timeout)
+                _sync_deepseek_circuit_breaker_stats()
+                if is_timeout:
+                    stats["timeout_count"] += 1
+                    stats["deepseek_timeouts"] += 1
+                if attempts >= 2 or deepseek_circuit_breaker.triggered:
                     logger.warning(f"DeepSeek 请求失败，将使用 regex 兜底: {exc}")
                     val, url = _call_fallback_extract(snips, task)
                     return {
@@ -2007,7 +4005,7 @@ async def _execute_tasks(
                         "unit": task.get("unit"),
                         "source_url": url or (snips[0].get("url") if snips else None),
                         "confidence": 0.2 if val is not None else 0.0,
-                        "note": f"deepseek_error:{exc}",
+                        "note": f"deepseek_error:{exc} regex_fallback",
                         "llm_error": str(exc),
                         "llm_timeout": is_timeout,
                         "llm_latency_ms": int((time.perf_counter() - start_llm) * 1000),
@@ -2018,6 +4016,8 @@ async def _execute_tasks(
         reason: str,
         query_override: Optional[str] = None,
     ) -> (Optional[Dict[str, Any]], Optional[str]):
+        if not allow_exa_non_quota_fallback:
+            return None, None
         if not exa_client:
             if reason in {"extract_422", "extract_cooldown"}:
                 stats["exa_skipped_no_key_after_extract"] += 1
@@ -2099,6 +4099,7 @@ async def _execute_tasks(
                     "score_max": quality.get("score_stats", {}).get("score_max"),
                     "quality_score": quality.get("quality_score"),
                     "usage_evidence_score": quality.get("usage_evidence_score"),
+                    "value_evidence_score": quality.get("value_evidence_score"),
                     "good_url_hit_count": quality.get("good_url_hit_count"),
                     "bad_url_hit_count": quality.get("bad_url_hit_count"),
                     "unusable_reason": quality.get("unusable_reason"),
@@ -2117,6 +4118,7 @@ async def _execute_tasks(
                     "issuer_hit": quality.get("issuer_hit", False),
                     "period_hit": quality.get("period_hit", False),
                     "usage_evidence_score": quality.get("usage_evidence_score", 0),
+                    "value_evidence_score": quality.get("value_evidence_score", 0),
                     "good_url_hit_count": quality.get("good_url_hit_count", 0),
                     "bad_url_hit_count": quality.get("bad_url_hit_count", 0),
                     "unusable_reason": quality.get("unusable_reason"),
@@ -2126,7 +4128,14 @@ async def _execute_tasks(
                     best_payload = payload
             except Exception as exc:
                 last_exc = exc
-                is_quota_error = _is_tavily_quota_error(exc)
+                is_proxy_error = _is_environment_proxy_error(exc)
+                is_quota_error = False if is_proxy_error else _is_tavily_quota_error(exc)
+                manual_reason = None
+                if is_proxy_error:
+                    _mark_environment_proxy_unavailable(exc)
+                    manual_reason = "environment_proxy_error"
+                elif is_quota_error:
+                    manual_reason = "quota_or_rate_limit"
                 if is_quota_error:
                     _mark_tavily_quota_unavailable()
                 attempts.append(
@@ -2135,11 +4144,11 @@ async def _execute_tasks(
                         "family": candidate.get("family"),
                         "field_scope": candidate.get("field_scope"),
                         "error": str(exc),
-                        "manual_required": True if is_quota_error else None,
-                        "manual_reason": "quota_or_rate_limit" if is_quota_error else None,
+                        "manual_required": True if (is_proxy_error or is_quota_error) else None,
+                        "manual_reason": manual_reason,
                     }
                 )
-                if is_quota_error:
+                if is_proxy_error or is_quota_error:
                     raise exc
         if best_payload and best_payload.get("candidate_index", 0) > 0:
             stats["post_filter_query_switch_count"] += 1
@@ -2148,6 +4157,7 @@ async def _execute_tasks(
     async def _retry_fund_flow_fields(
         task: Dict[str, Any],
         extraction: Dict[str, Any],
+        active_backend: str,
     ) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         field_queries = task.get("field_queries") or {}
         if not field_queries:
@@ -2160,15 +4170,168 @@ async def _execute_tasks(
         if not missing_fields:
             return extraction, []
 
+        stats["field_retry_missing_fields"][task["indicator_key"]] = list(missing_fields)
         field_attempts: List[Dict[str, Any]] = []
         for field_scope in missing_fields:
             candidates = _expand_query_candidates(task, field_scopes=[field_scope], include_primary=False)
             if not candidates:
                 continue
             stats["field_retry_count"] += 1
-            best_payload, attempts, _ = await _run_search_candidates(task, candidates)
+            field_failover_reason: Optional[str] = None
+            field_failover_tavily_metadata: Dict[str, Any] = {}
+            field_failover_exa_metadata: Dict[str, Any] = {}
+            if str(active_backend or "").lower() == "exa":
+                best_payload = None
+                attempts: List[Dict[str, Any]] = []
+                field_search_backend = "exa"
+                field_failover_tavily_metadata = dict(active_tavily_limit_metadata)
+                for idx, candidate in enumerate(candidates):
+                    query = str(candidate.get("query") or "").strip()
+                    if not query:
+                        continue
+                    field_task_candidate = {
+                        **task,
+                        "field_scope": field_scope,
+                        "query": query,
+                        "preferred_domains": candidate.get("preferred_domains") or task.get("preferred_domains"),
+                        "exclude_domains": candidate.get("exclude_domains") or task.get("exclude_domains"),
+                        "required_keywords": candidate.get("required_keywords") or task.get("required_keywords"),
+                        "exclude_keywords": candidate.get("exclude_keywords") or task.get("exclude_keywords"),
+                        "max_results": candidate.get("max_results") or task.get("max_results"),
+                    }
+                    result, note, metadata = await _run_exa_search_for_task(
+                        field_task_candidate,
+                        failover_reason or "field_retry",
+                        query_override=query,
+                    )
+                    if not result:
+                        field_failover_reason = note
+                        field_failover_exa_metadata = metadata or {}
+                        attempts.append(
+                            {
+                                "query": query,
+                                "family": candidate.get("family"),
+                                "field_scope": field_scope,
+                                "search_backend": "exa",
+                                "manual_required": True,
+                                "manual_reason": note,
+                                **(metadata or {}),
+                            }
+                        )
+                        continue
+                    field_snippets, field_score_stats, field_task_for_log = _apply_exa_quality_to_task(
+                        field_task_candidate,
+                        result,
+                        result.get("query") or query,
+                        note,
+                    )
+                    attempt_meta = {
+                        "query": query,
+                        "family": candidate.get("family"),
+                        "field_scope": field_scope,
+                        "search_backend": "exa",
+                        "result_count": len(result.get("results") or []),
+                        "usable_count": field_task_for_log.get("usable_count_before_extract"),
+                        "trusted_count": field_task_for_log.get("trusted_count"),
+                        "issuer_hit": field_task_for_log.get("issuer_hit"),
+                        "period_hit": field_task_for_log.get("period_hit"),
+                        "score_max": field_score_stats.get("score_max"),
+                        "quality_score": field_task_for_log.get("quality_score"),
+                        "usage_evidence_score": field_task_for_log.get("usage_evidence_score"),
+                        "value_evidence_score": field_task_for_log.get("value_evidence_score"),
+                        "good_url_hit_count": field_task_for_log.get("good_url_hit_count"),
+                        "bad_url_hit_count": field_task_for_log.get("bad_url_hit_count"),
+                        "unusable_reason": field_task_for_log.get("unusable_reason"),
+                    }
+                    attempts.append(attempt_meta)
+                    payload = {
+                        "candidate": candidate,
+                        "result": result,
+                        "snippets": field_snippets,
+                        "score_stats": field_score_stats,
+                        "quality_score": field_task_for_log.get("quality_score", -1.0),
+                        "task_for_log": field_task_for_log,
+                        "candidate_index": idx,
+                    }
+                    if best_payload is None or payload["quality_score"] > best_payload["quality_score"]:
+                        best_payload = payload
+            else:
+                field_search_backend = str(active_backend or task.get("search_backend") or "tavily").lower()
+                try:
+                    best_payload, attempts, _ = await _run_search_candidates(task, candidates)
+                except Exception as exc:
+                    if _is_environment_proxy_error(exc):
+                        raise
+                    if not _is_tavily_quota_error(exc):
+                        raise
+                    tavily_metadata = _record_tavily_limit_error(exc)
+                    _mark_tavily_quota_unavailable()
+                    failed_candidate = next(
+                        (candidate for candidate in candidates if str(candidate.get("query") or "").strip()),
+                        {},
+                    )
+                    tavily_attempt = {
+                        "query": failed_candidate.get("query"),
+                        "family": failed_candidate.get("family"),
+                        "field_scope": failed_candidate.get("field_scope") or field_scope,
+                        "search_backend": "tavily",
+                        "manual_required": True,
+                        "manual_reason": "quota_or_rate_limit",
+                        "error": str(exc),
+                        **tavily_metadata,
+                    }
+                    field_failover_tavily_metadata = tavily_metadata
+                    if not _activate_exa_failover(task, "quota_or_rate_limit"):
+                        attempts = [tavily_attempt]
+                        setattr(exc, "tavily_metadata", tavily_metadata)
+                        setattr(exc, "query_attempts", attempts)
+                        setattr(exc, "field_attempts", attempts)
+                        raise
+                    active_backend = "exa"
+                    field_search_backend = "exa"
+                    exa_best_payload, exa_attempts, _exa_note, _exa_metadata = await _run_exa_search_candidates(
+                        task,
+                        candidates,
+                        "quota_or_rate_limit",
+                    )
+                    attempts = [tavily_attempt] + exa_attempts
+                    field_failover_reason = _exa_note
+                    field_failover_exa_metadata = _exa_metadata or {}
+                    best_payload = exa_best_payload
             field_attempts.extend(attempts)
+            field_failover_manual = extraction.get("_field_retry_failover_manual")
+            if isinstance(field_failover_manual, dict):
+                field_failover_manual["query_attempts"] = list(field_attempts)
+                field_failover_manual["field_attempts"] = list(field_attempts)
             if not best_payload:
+                if field_search_backend == "exa" and attempts:
+                    exa_attempt = next(
+                        (
+                            attempt
+                            for attempt in reversed(attempts)
+                            if attempt.get("search_backend") == "exa"
+                        ),
+                        {},
+                    )
+                    reason = (
+                        field_failover_reason
+                        or exa_attempt.get("manual_reason")
+                        or "exa_empty"
+                    )
+                    if reason in {"exa_empty", "exa_error", "exa_unavailable"} and not extraction.get(
+                        "_field_retry_failover_manual"
+                    ):
+                        extraction["_field_retry_failover_manual"] = {
+                            "reason": reason,
+                            "tavily_metadata": field_failover_tavily_metadata
+                            or dict(active_tavily_limit_metadata),
+                            "exa_metadata": field_failover_exa_metadata
+                            or _exa_metadata_from_attempt(exa_attempt),
+                            "query_attempts": list(field_attempts),
+                            "field_attempts": list(field_attempts),
+                        }
+                        extraction["manual_required"] = True
+                        extraction["manual_reason"] = reason
                 continue
             field_task = {
                 **task,
@@ -2176,6 +4339,7 @@ async def _execute_tasks(
                 "query": best_payload["candidate"].get("query"),
                 "query_used": best_payload["candidate"].get("query"),
                 "query_family_used": best_payload["candidate"].get("family"),
+                "search_backend": field_search_backend,
             }
             field_snippets = best_payload.get("snippets") or []
             if not field_snippets:
@@ -2193,12 +4357,38 @@ async def _execute_tasks(
             if value is None:
                 continue
             extraction[field_scope] = value
+            field_source_url, evidence_snippets = _resolve_field_retry_evidence_source(
+                field_extraction,
+                field_snippets,
+                value,
+            )
+            field_payload_for_tier = dict(field_extraction)
+            if field_source_url:
+                field_payload_for_tier["source_url"] = field_source_url
+            field_metric_basis = _default_fund_flow_metric_basis(task["indicator_key"], field_extraction)
+            field_window_evidence = _field_retry_window_evidence(
+                field_scope,
+                task["indicator_key"],
+                field_extraction,
+                evidence_snippets,
+                field_metric_basis,
+                value,
+            )
+            field_retry_evidence = extraction.setdefault("field_retry_evidence", {})
+            if isinstance(field_retry_evidence, dict):
+                field_retry_evidence[field_scope] = {
+                    "source_url": field_source_url,
+                    "source_tier": _infer_fund_flow_source_tier(field_payload_for_tier),
+                    "window_evidence": field_window_evidence,
+                    "metric_basis": field_metric_basis,
+                }
+            stats["field_retry_merged_count"] += 1
             extraction["note"] = _append_note(
                 extraction.get("note"),
                 f"{field_scope}_field_retry:{field_task.get('query')}",
             )
             if not extraction.get("source_url"):
-                extraction["source_url"] = field_extraction.get("source_url")
+                extraction["source_url"] = field_source_url
             trend = field_extraction.get("trend")
             if trend and extraction.get("trend") in {None, "unknown"}:
                 extraction["trend"] = trend
@@ -2226,8 +4416,14 @@ async def _execute_tasks(
                 break
             task, snippets, attempt_idx = item
             try:
-                stats["extract_calls"] += 1
+                pre_extract_skip_reason = _deepseek_circuit_breaker_skip_reason()
+                if not pre_extract_skip_reason:
+                    stats["extract_calls"] += 1
                 extraction = await _do_extract(snippets, task)
+                extraction_skipped_reason = (
+                    extraction.get("extraction_skipped_reason")
+                    or task.get("extraction_skipped_reason")
+                )
                 # regex 兜底：关键指标无值时尝试直接提取数字
                 if extraction.get("value") is None:
                     regex_val = _regex_fallback(snippets, task["indicator_key"])
@@ -2240,7 +4436,33 @@ async def _execute_tasks(
                 is_fund_flow = task["indicator_key"] in {"northbound", "southbound", "etf", "margin"}
                 field_attempts: List[Dict[str, Any]] = []
                 if is_fund_flow:
-                    extraction, field_attempts = await _retry_fund_flow_fields(task, extraction)
+                    extraction, field_attempts = await _retry_fund_flow_fields(
+                        task,
+                        extraction,
+                        str(task.get("search_backend") or active_search_backend),
+                    )
+                    field_failover_manual = extraction.pop("_field_retry_failover_manual", None)
+                    if isinstance(field_failover_manual, dict):
+                        task_record, websearch_item = _build_exa_failover_manual_records(
+                            task,
+                            reason=str(field_failover_manual.get("reason") or "exa_empty"),
+                            attempt_index=attempt_idx,
+                            elapsed_ms=0,
+                            query_attempts=field_attempts or field_failover_manual.get("query_attempts"),
+                            exa_metadata=field_failover_manual.get("exa_metadata") or {},
+                            tavily_metadata=field_failover_manual.get("tavily_metadata") or {},
+                        )
+                        _attach_field_attempts(
+                            task_record,
+                            websearch_item,
+                            field_attempts or field_failover_manual.get("field_attempts") or [],
+                        )
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        _append_task_log(task_log_path, task_record)
+                        websearch_results.append(websearch_item)
+                        continue
+                    task = _promote_task_to_exa_after_field_retry(task, field_attempts)
                 manual_required = bool(extraction.get("manual_required"))
                 manual_reason = extraction.get("manual_reason")
                 if manual_reason:
@@ -2256,6 +4478,18 @@ async def _execute_tasks(
                         s for s in [extraction.get("note", ""), note_append] if s
                     ).strip()
                     extraction["note"] = combined_note or None
+                    if unit_manual and _safe_number(extraction.get("recent_5d")) is not None and _safe_number(
+                        extraction.get("total_120d")
+                    ) is not None:
+                        metric_basis = _default_fund_flow_metric_basis(task["indicator_key"], extraction)
+                        window_evidence = _infer_fund_flow_window_evidence(
+                            task["indicator_key"], extraction, metric_basis
+                        )
+                        if window_evidence not in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+                            extraction["manual_reason"] = _append_note(
+                                extraction.get("manual_reason"),
+                                "fund_flow_window_missing",
+                            )
                     manual_required = manual_required or unit_manual
                 else:
                     val_adj, manual2, note_append2 = _validate_general_extraction(extraction, task, snippets)
@@ -2264,7 +4498,9 @@ async def _execute_tasks(
                         extraction["note"] = ((extraction.get("note") or "") + " " + note_append2).strip()
                     manual_required = manual_required or manual2
 
+                tavily_diagnostics = _tavily_diagnostics_from_task(task, field_attempts)
                 task_record = {
+                    **tavily_diagnostics,
                     "task_id": task["task_id"],
                     "indicator_key": task["indicator_key"],
                     "stage_phase": task["stage_phase"],
@@ -2281,7 +4517,7 @@ async def _execute_tasks(
                     and extraction["note"]
                     and extraction["note"].startswith("deepseek_error")
                     else None,
-                    "request_id": None,
+                    "request_id": task.get("request_id") or task.get("exa_request_id"),
                     "http_status": None,
                     "cache_hit": None,
                     "attempt_index": attempt_idx,
@@ -2290,7 +4526,7 @@ async def _execute_tasks(
                     "finished_at": int(datetime.now().timestamp()),
                     "manual_required": manual_required,
                     "manual_reason": extraction.get("manual_reason"),
-                    "extraction_skipped_reason": task.get("extraction_skipped_reason"),
+                    "extraction_skipped_reason": extraction_skipped_reason,
                     "extract_skipped_reason": task.get("extract_skipped_reason"),
                     "query_used": task.get("query_used"),
                     "query_family_used": task.get("query_family_used"),
@@ -2300,6 +4536,10 @@ async def _execute_tasks(
                     "issuer_hit": task.get("issuer_hit"),
                     "period_hit": task.get("period_hit"),
                     "selected_reason": task.get("selected_reason"),
+                    "usage_evidence_score": task.get("usage_evidence_score"),
+                    "value_evidence_score": task.get("value_evidence_score"),
+                    "good_url_hit_count": task.get("good_url_hit_count"),
+                    "bad_url_hit_count": task.get("bad_url_hit_count"),
                     "score_min": (task.get("score_stats") or {}).get("score_min"),
                     "score_p50": (task.get("score_stats") or {}).get("score_p50"),
                     "score_p95": (task.get("score_stats") or {}).get("score_p95"),
@@ -2310,12 +4550,13 @@ async def _execute_tasks(
                     "score_filtered_drop": task.get("score_filtered_drop"),
                     "domain_filtered_drop": task.get("domain_filtered_drop"),
                 }
+                task_record.update(_structured_audit_fields_from_task(task))
                 if manual_required:
                     failures.append(task_record)
                     if extraction.get("value") is None:
                         manual_required_keys.append(task_record["indicator_key"])
                 else:
-                    write_target = _apply_extraction(market_payload, task, extraction)
+                    write_target = _apply_extraction(market_payload, task, extraction, snippets=snippets)
                     write_stats = stats.setdefault("write_back_by_category", {})
                     if isinstance(write_stats, dict):
                         write_stats[write_target] = write_stats.get(write_target, 0) + 1
@@ -2323,24 +4564,66 @@ async def _execute_tasks(
                         stats["write_back_fallback_count"] += 1
                     elif write_target == "skip_no_value":
                         stats["write_back_miss_count"] += 1
-                    _update_missing_items(market_payload, task["indicator_key"])
-                    completed.append(task_record)
+                    post_writeback_reason = _post_writeback_manual_reason(market_payload, task, task["indicator_key"])
+                    if post_writeback_reason:
+                        _mark_post_writeback_manual_required(
+                            market_payload,
+                            task_record,
+                            task,
+                            extraction,
+                            task["indicator_key"],
+                            post_writeback_reason,
+                        )
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        manual_required = True
+                    else:
+                        _update_missing_items(market_payload, task["indicator_key"])
+                        completed.append(task_record)
                 _append_task_log(task_log_path, task_record)
                 websearch_results.append(
                     {
-                        "task": task,
+                        "task": (
+                            {**task, "extraction_skipped_reason": extraction_skipped_reason}
+                            if extraction_skipped_reason
+                            else task
+                        ),
                         "extraction": extraction,
                         "extraction_backend": extraction_backend,
                         "raw_results": snippets[:3],
                         "field_attempts": field_attempts,
                         "search_backend": task.get("search_backend"),
                         "note": task.get("search_note"),
-                        "manual_required": manual_required,
-                        "manual_reason": extraction.get("manual_reason"),
+                        "manual_required": task_record.get("manual_required"),
+                        "manual_reason": task_record.get("manual_reason") or extraction.get("manual_reason"),
                     }
                 )
             except Exception as exc:
-                if attempt_idx <= queue_retry_limit:
+                if _is_tavily_quota_error(exc):
+                    tavily_metadata = _get_or_record_tavily_limit_metadata(exc)
+                    _mark_tavily_quota_unavailable()
+                    query_attempts = getattr(exc, "query_attempts", None) or task.get("query_attempts") or []
+                    field_attempts = getattr(exc, "field_attempts", None) or []
+                    if field_attempts:
+                        query_attempts = list(query_attempts)
+                        for field_attempt in field_attempts:
+                            if field_attempt not in query_attempts:
+                                query_attempts.append(field_attempt)
+                    task_record, websearch_item = _build_tavily_fast_switch_records(
+                        task,
+                        attempt_index=attempt_idx,
+                        elapsed_ms=0,
+                        error=exc,
+                        query_attempts=query_attempts,
+                        tavily_metadata=tavily_metadata,
+                    )
+                    if field_attempts:
+                        _attach_field_attempts(task_record, websearch_item, field_attempts)
+                    failures.append(task_record)
+                    manual_required_keys.append(task_record["indicator_key"])
+                    _append_task_log(task_log_path, task_record)
+                    websearch_results.append(websearch_item)
+                elif attempt_idx <= queue_retry_limit:
                     stats["queue_requeued"] += 1
                     await queue.put((task, snippets, attempt_idx + 1))  # type: ignore
                 else:
@@ -2421,11 +4704,39 @@ async def _execute_tasks(
                     }
                 )
                 continue
-            if tavily_unavailable_reason == "quota_or_rate_limit":
-                task_record, websearch_item = _build_tavily_fast_switch_records(
+            structured_records = await _try_structured_provider(
+                structured_registry=structured_registry,
+                task=task,
+                market_payload=market_payload,
+                task_log_path=task_log_path,
+                stats=stats,
+            )
+            if structured_records is not None:
+                task_record, websearch_item = structured_records
+                completed.append(task_record)
+                websearch_results.append(websearch_item)
+                continue
+            if tavily_unavailable_reason == "quota_or_rate_limit" and active_search_backend != "exa":
+                if _activate_exa_failover(task, "quota_or_rate_limit"):
+                    pass
+                else:
+                    task_record, websearch_item = _build_tavily_fast_switch_records(
+                        task,
+                        attempt_index=0,
+                        elapsed_ms=0,
+                        tavily_metadata=active_tavily_limit_metadata,
+                    )
+                    failures.append(task_record)
+                    manual_required_keys.append(task_record["indicator_key"])
+                    _append_task_log(task_log_path, task_record)
+                    websearch_results.append(websearch_item)
+                    continue
+            if tavily_unavailable_reason == "environment_proxy_error":
+                exc = RuntimeError(stats.get("environment_proxy_error") or "environment_proxy_error")
+                task_record, websearch_item = _build_environment_proxy_error_records(
                     task,
-                    attempt_index=0,
-                    elapsed_ms=0,
+                    exc,
+                    extraction_backend=extraction_backend,
                 )
                 failures.append(task_record)
                 manual_required_keys.append(task_record["indicator_key"])
@@ -2440,47 +4751,113 @@ async def _execute_tasks(
                 extract_skipped_reason: Optional[str] = None
                 query_used: Optional[str] = None
                 query_attempts: List[Dict[str, Any]] = []
-                search_backend = "tavily"
+                search_backend = active_search_backend
                 search_note: Optional[str] = None
                 task_for_log = task
                 result: Dict[str, Any] = {}
+                exa_best_payload: Optional[Dict[str, Any]] = None
                 try:
                     try:
-                        search_candidates = _expand_query_candidates(
-                            task,
-                            directed_query_override=directed_query_override,
-                        )
-                        best_payload, query_attempts, last_exc = await _run_search_candidates(task, search_candidates)
-                        if best_payload:
-                            result = best_payload["result"]
-                            snippets = best_payload["snippets"]
-                            score_stats = best_payload["score_stats"]
-                            query_used = best_payload["candidate"].get("query")
-                            task_for_log = {
-                                **task,
-                                "query_used": query_used,
-                                "query_family_used": best_payload["candidate"].get("family"),
-                                "field_scope": best_payload["candidate"].get("field_scope"),
-                                "query_attempts": query_attempts,
-                                "score_stats": score_stats,
-                                "usable_count_before_extract": best_payload.get("usable_count", 0),
-                                "trusted_count": best_payload.get("trusted_count", 0),
-                                "issuer_hit": best_payload.get("issuer_hit", False),
-                                "period_hit": best_payload.get("period_hit", False),
-                                "selected_reason": best_payload.get("selected_reason"),
-                                "usage_evidence_score": best_payload.get("usage_evidence_score", 0),
-                                "good_url_hit_count": best_payload.get("good_url_hit_count", 0),
-                                "bad_url_hit_count": best_payload.get("bad_url_hit_count", 0),
-                                "unusable_reason": best_payload.get("unusable_reason"),
-                            }
+                        if active_search_backend == "exa":
+                            search_candidates = _expand_query_candidates(
+                                task,
+                                directed_query_override=directed_query_override,
+                            )
+                            best_payload, query_attempts, exa_note, exa_metadata = await _run_exa_search_candidates(
+                                task,
+                                search_candidates,
+                                failover_reason or "quota_or_rate_limit",
+                            )
+                            if best_payload:
+                                result = best_payload["result"]
+                                query_used = best_payload["candidate"].get("query")
+                                snippets = best_payload.get("snippets") or []
+                                score_stats = best_payload.get("score_stats") or _score_stats(snippets)
+                                task_for_log = dict(
+                                    best_payload.get("task_for_log") or task
+                                )
+                                task_for_log["query_attempts"] = query_attempts
+                                search_backend = "exa"
+                                search_note = best_payload.get("note") or exa_note
+                                task_for_log.update(
+                                    {
+                                        "search_backend": "exa",
+                                        "search_backend_state": "exa_active",
+                                        "failover_reason": failover_reason,
+                                    }
+                                )
+                                task_for_log.update(active_tavily_limit_metadata)
+                            else:
+                                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                task_record, websearch_item = _build_exa_failover_manual_records(
+                                    task,
+                                    reason=exa_note,
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    query_attempts=query_attempts,
+                                    exa_metadata=exa_metadata,
+                                    tavily_metadata=active_tavily_limit_metadata,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
                         else:
-                            snippets = []
-                            score_stats = _score_stats(snippets)
-                            if last_exc:
-                                raise last_exc
+                            search_candidates = _expand_query_candidates(
+                                task,
+                                directed_query_override=directed_query_override,
+                            )
+                            best_payload, query_attempts, last_exc = await _run_search_candidates(task, search_candidates)
+                            if best_payload:
+                                result = best_payload["result"]
+                                snippets = best_payload["snippets"]
+                                score_stats = best_payload["score_stats"]
+                                query_used = best_payload["candidate"].get("query")
+                                task_for_log = {
+                                    **task,
+                                    "query_used": query_used,
+                                    "query_family_used": best_payload["candidate"].get("family"),
+                                    "field_scope": best_payload["candidate"].get("field_scope"),
+                                    "query_attempts": query_attempts,
+                                    "score_stats": score_stats,
+                                    "usable_count_before_extract": best_payload.get("usable_count", 0),
+                                    "trusted_count": best_payload.get("trusted_count", 0),
+                                    "issuer_hit": best_payload.get("issuer_hit", False),
+                                    "period_hit": best_payload.get("period_hit", False),
+                                    "selected_reason": best_payload.get("selected_reason"),
+                                    "usage_evidence_score": best_payload.get("usage_evidence_score", 0),
+                                    "value_evidence_score": best_payload.get("value_evidence_score", 0),
+                                    "good_url_hit_count": best_payload.get("good_url_hit_count", 0),
+                                    "bad_url_hit_count": best_payload.get("bad_url_hit_count", 0),
+                                    "unusable_reason": best_payload.get("unusable_reason"),
+                                }
+                            else:
+                                snippets = []
+                                score_stats = _score_stats(snippets)
+                                if last_exc:
+                                    raise last_exc
                     except Exception as exc:
-                        is_quota_error = _is_tavily_quota_error(exc)
-                        if is_quota_error:
+                        is_proxy_error = _is_environment_proxy_error(exc)
+                        is_quota_error = False if is_proxy_error else _is_tavily_quota_error(exc)
+                        tavily_metadata = _record_tavily_limit_error(exc) if is_quota_error else {}
+                        exa_metadata: Dict[str, Any] = {}
+                        if is_proxy_error:
+                            _mark_environment_proxy_unavailable(exc)
+                            exa_result, exa_note = None, None
+                        elif is_quota_error and _activate_exa_failover(task, "quota_or_rate_limit"):
+                            _mark_tavily_quota_unavailable()
+                            search_candidates = _expand_query_candidates(
+                                task,
+                            )
+                            exa_best_payload, exa_attempts, exa_note, exa_metadata = await _run_exa_search_candidates(
+                                task,
+                                search_candidates,
+                                "quota_or_rate_limit",
+                            )
+                            query_attempts.extend(exa_attempts)
+                            exa_result = exa_best_payload["result"] if exa_best_payload else None
+                        elif is_quota_error:
                             _mark_tavily_quota_unavailable()
                             exa_result, exa_note = None, None
                         else:
@@ -2489,23 +4866,70 @@ async def _execute_tasks(
                             )
                         if exa_result:
                             result = exa_result
-                            snippets = result.get("results") or []
+                            if exa_best_payload:
+                                query_used = exa_best_payload["candidate"].get("query")
+                                snippets = exa_best_payload.get("snippets") or []
+                                score_stats = exa_best_payload.get("score_stats") or _score_stats(snippets)
+                                task_for_log = dict(exa_best_payload.get("task_for_log") or task)
+                            else:
+                                query_used = result.get("query") or task.get("query")
+                                snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                    task,
+                                    result,
+                                    query_used,
+                                    exa_note,
+                                )
                             search_backend = "exa"
-                            search_note = exa_note
-                            task_for_log = {**task, "search_backend": "exa"}
+                            search_note = exa_best_payload.get("note") if exa_best_payload else exa_note
+                            task_for_log["query_attempts"] = query_attempts
+                            task_for_log.update(
+                                {
+                                    "search_backend": "exa",
+                                    "search_backend_state": "exa_active",
+                                    "failover_reason": failover_reason,
+                                }
+                            )
+                            task_for_log.update(active_tavily_limit_metadata)
                         else:
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
                             logger.warning(
                                 f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}"
                             )
-                            if is_quota_error:
-                                task_record, websearch_item = _build_tavily_fast_switch_records(
+                            if is_proxy_error:
+                                task_record, websearch_item = _build_environment_proxy_error_records(
                                     task,
+                                    exc,
                                     attempt_index=attempt,
                                     elapsed_ms=elapsed_ms,
-                                    error=exc,
+                                    extraction_backend=extraction_backend,
                                     query_attempts=query_attempts,
                                 )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
+                            if is_quota_error:
+                                if exa_note in {"exa_error", "exa_empty", "exa_unavailable"}:
+                                    task_record, websearch_item = _build_exa_failover_manual_records(
+                                        task,
+                                        reason=exa_note,
+                                        attempt_index=attempt,
+                                        elapsed_ms=elapsed_ms,
+                                        error=exc,
+                                        query_attempts=query_attempts,
+                                        exa_metadata=exa_metadata,
+                                        tavily_metadata=tavily_metadata,
+                                    )
+                                else:
+                                    task_record, websearch_item = _build_tavily_fast_switch_records(
+                                        task,
+                                        attempt_index=attempt,
+                                        elapsed_ms=elapsed_ms,
+                                        error=exc,
+                                        query_attempts=query_attempts,
+                                        tavily_metadata=tavily_metadata,
+                                    )
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
                                 manual_required_keys.append(task_record["indicator_key"])
@@ -2531,6 +4955,7 @@ async def _execute_tasks(
                                     "created_at": task["created_at"],
                                     "finished_at": int(datetime.now().timestamp()),
                                 }
+                                task_record.update(_structured_audit_fields_from_task(task))
                                 _append_task_log(task_log_path, task_record)
                                 failures.append(task_record)
                                 break
@@ -2542,16 +4967,23 @@ async def _execute_tasks(
                             exa_result, exa_note = await _try_exa_fallback(task, "no_snippets")
                             if exa_result:
                                 result = exa_result
-                                snippets = result.get("results") or []
+                                query_used = result.get("query") or query_used or task.get("query")
+                                snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                    task,
+                                    result,
+                                    query_used,
+                                    exa_note,
+                                )
                                 search_backend = "exa"
                                 search_note = exa_note
-                                task_for_log = {**task, "search_backend": "exa"}
                         if not snippets:
                             skip_deepseek_reason = (
-                                search_note
-                                or task_for_log.get("unusable_reason")
+                                task_for_log.get("unusable_reason")
+                                or search_note
                                 or "no_snippets"
                             )
+                            if skip_deepseek_reason == "value_evidence_miss":
+                                stats["value_evidence_drop_count"] += 1
                         score_stats = _score_stats(snippets)
                     score_low_all = False
                     effective_low_score = task.get("low_score_threshold")
@@ -2596,7 +5028,22 @@ async def _execute_tasks(
                                 if cooldown_until and time.time() < cooldown_until:
                                     extract_skipped_reason = "extract_cooldown"
                             if extract_skipped_reason is None:
-                                top_for_extract = snippets[: max(1, local_extract_topk)]
+                                extract_candidates = snippets
+                                official_domains = _official_extract_domains(extract_policy)
+                                if official_domains:
+                                    extract_candidates = _filter_by_official_extract_domain(
+                                        snippets,
+                                        official_domains,
+                                    )
+                                    if not extract_candidates:
+                                        extract_skipped_reason = "official_domain_filter_empty"
+                                        if snippets:
+                                            skip_deepseek_reason = "official_domain_filter_empty"
+                                top_for_extract = (
+                                    extract_candidates[: max(1, local_extract_topk)]
+                                    if extract_skipped_reason is None
+                                    else []
+                                )
                                 if top_for_extract:
                                     stats["tavily_extract_calls"] += 1
                                     extract_resp = await client.extract(
@@ -2605,7 +5052,69 @@ async def _execute_tasks(
                                         include_raw_content=is_fund_flow,
                                         cache_ttl=cache_ttl,
                                     )
-                                    if extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
+                                    extract_resp = extract_resp or {}
+                                    if _is_tavily_quota_response(extract_resp):
+                                        elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                        tavily_metadata = _record_tavily_limit_error(extract_resp)
+                                        if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
+                                            _mark_tavily_quota_unavailable()
+                                            search_candidates = _expand_query_candidates(task_for_log)
+                                            exa_best_payload, exa_attempts, exa_note, exa_metadata = (
+                                                await _run_exa_search_candidates(
+                                                    task_for_log,
+                                                    search_candidates,
+                                                    "quota_or_rate_limit",
+                                                )
+                                            )
+                                            query_attempts.extend(exa_attempts)
+                                            if exa_best_payload:
+                                                result = exa_best_payload["result"]
+                                                query_used = exa_best_payload["candidate"].get("query")
+                                                snippets = exa_best_payload.get("snippets") or []
+                                                score_stats = exa_best_payload.get("score_stats") or _score_stats(
+                                                    snippets
+                                                )
+                                                task_for_log = dict(exa_best_payload.get("task_for_log") or task_for_log)
+                                                task_for_log.update(tavily_metadata)
+                                                task_for_log["query_attempts"] = query_attempts
+                                                search_backend = "exa"
+                                                search_note = exa_best_payload.get("note") or exa_note
+                                                if not snippets:
+                                                    skip_deepseek_reason = (
+                                                        task_for_log.get("unusable_reason")
+                                                        or exa_note
+                                                        or "no_snippets"
+                                                    )
+                                            else:
+                                                task_record, websearch_item = _build_exa_failover_manual_records(
+                                                    task_for_log,
+                                                    reason=exa_note,
+                                                    attempt_index=attempt,
+                                                    elapsed_ms=elapsed_ms,
+                                                    query_attempts=query_attempts,
+                                                    exa_metadata=exa_metadata,
+                                                    tavily_metadata=tavily_metadata,
+                                                )
+                                                _append_task_log(task_log_path, task_record)
+                                                failures.append(task_record)
+                                                manual_required_keys.append(task_record["indicator_key"])
+                                                websearch_results.append(websearch_item)
+                                                break
+                                        else:
+                                            _mark_tavily_quota_unavailable()
+                                            task_record, websearch_item = _build_tavily_fast_switch_records(
+                                                task_for_log,
+                                                attempt_index=attempt,
+                                                elapsed_ms=elapsed_ms,
+                                                query_attempts=query_attempts,
+                                                tavily_metadata=tavily_metadata,
+                                            )
+                                            _append_task_log(task_log_path, task_record)
+                                            failures.append(task_record)
+                                            manual_required_keys.append(task_record["indicator_key"])
+                                            websearch_results.append(websearch_item)
+                                            break
+                                    elif extract_resp.get("status") == 422 or "422" in str(extract_resp.get("error", "")):
                                         stats["tavily_extract_422_count"] += 1
                                         logger.debug("Tavily extract 422, 降级到 DeepSeek 直接从 snippets 抽取")
                                         stats.setdefault("extract_fallback_to_deepseek", 0)
@@ -2617,11 +5126,22 @@ async def _execute_tasks(
                                         )
                                         if exa_result:
                                             result = exa_result
-                                            snippets = exa_result.get("results") or []
+                                            query_used = result.get("query") or query_used or task.get("query")
+                                            snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                                task_for_log,
+                                                result,
+                                                query_used,
+                                                exa_note,
+                                            )
                                             search_backend = "exa"
                                             search_note = exa_note
-                                            task_for_log = {**task_for_log, "search_backend": "exa"}
-                                        # 不设置 skip_deepseek_reason，让 DeepSeek 从原始 snippets 抽取
+                                            if not snippets:
+                                                skip_deepseek_reason = (
+                                                    task_for_log.get("unusable_reason")
+                                                    or exa_note
+                                                    or "no_snippets"
+                                                )
+                                        # Exa 命中过滤后才替换 snippets；被质量门禁拒绝则跳过 DeepSeek。
                                         await asyncio.sleep(0.5)
                                         if auto_disable_extract_on_422:
                                             now_ts = time.time()
@@ -2662,14 +5182,15 @@ async def _execute_tasks(
                                                     }
                                                 )
                     except Exception as exc:  # pragma: no cover
-                        if _is_tavily_quota_error(exc):
-                            _mark_tavily_quota_unavailable()
+                        if _is_environment_proxy_error(exc):
+                            _mark_environment_proxy_unavailable(exc)
                             elapsed_ms = int((time.perf_counter() - started) * 1000)
-                            task_record, websearch_item = _build_tavily_fast_switch_records(
+                            task_record, websearch_item = _build_environment_proxy_error_records(
                                 task_for_log,
+                                exc,
                                 attempt_index=attempt,
                                 elapsed_ms=elapsed_ms,
-                                error=exc,
+                                extraction_backend=extraction_backend,
                                 query_attempts=query_attempts,
                             )
                             _append_task_log(task_log_path, task_record)
@@ -2677,6 +5198,75 @@ async def _execute_tasks(
                             manual_required_keys.append(task_record["indicator_key"])
                             websearch_results.append(websearch_item)
                             break
+                        if _is_tavily_quota_error(exc):
+                            tavily_metadata = _record_tavily_limit_error(exc)
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            if _activate_exa_failover(task_for_log, "quota_or_rate_limit"):
+                                _mark_tavily_quota_unavailable()
+                                search_candidates = _expand_query_candidates(task_for_log)
+                                exa_best_payload, exa_attempts, exa_note, exa_metadata = (
+                                    await _run_exa_search_candidates(
+                                        task_for_log,
+                                        search_candidates,
+                                        "quota_or_rate_limit",
+                                    )
+                                )
+                                query_attempts.extend(exa_attempts)
+                                exa_result = exa_best_payload["result"] if exa_best_payload else None
+                                if exa_result:
+                                    result = exa_result
+                                    query_used = exa_best_payload["candidate"].get("query")
+                                    snippets = exa_best_payload.get("snippets") or []
+                                    score_stats = exa_best_payload.get("score_stats") or _score_stats(snippets)
+                                    task_for_log = dict(exa_best_payload.get("task_for_log") or task_for_log)
+                                    search_backend = "exa"
+                                    search_note = exa_best_payload.get("note") or exa_note
+                                    task_for_log["query_attempts"] = query_attempts
+                                    task_for_log.update(
+                                        {
+                                            "search_backend": "exa",
+                                            "search_backend_state": "exa_active",
+                                            "failover_reason": failover_reason,
+                                        }
+                                    )
+                                    task_for_log.update(active_tavily_limit_metadata)
+                                    if not snippets:
+                                        skip_deepseek_reason = (
+                                            task_for_log.get("unusable_reason")
+                                            or exa_note
+                                            or "no_snippets"
+                                        )
+                                else:
+                                    task_record, websearch_item = _build_exa_failover_manual_records(
+                                        task_for_log,
+                                        reason=exa_note,
+                                        attempt_index=attempt,
+                                        elapsed_ms=elapsed_ms,
+                                        error=exc,
+                                        query_attempts=query_attempts,
+                                        exa_metadata=exa_metadata,
+                                        tavily_metadata=tavily_metadata,
+                                    )
+                                    _append_task_log(task_log_path, task_record)
+                                    failures.append(task_record)
+                                    manual_required_keys.append(task_record["indicator_key"])
+                                    websearch_results.append(websearch_item)
+                                    break
+                            else:
+                                _mark_tavily_quota_unavailable()
+                                task_record, websearch_item = _build_tavily_fast_switch_records(
+                                    task_for_log,
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    error=exc,
+                                    query_attempts=query_attempts,
+                                    tavily_metadata=tavily_metadata,
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
                         logger.debug(f"Tavily extract skipped/failed: {exc}")
                     if (
                         search_backend == "tavily"
@@ -2689,19 +5279,38 @@ async def _execute_tasks(
                         )
                         if exa_result:
                             result = exa_result
-                            snippets = exa_result.get("results") or []
+                            query_used = result.get("query") or query_used or task.get("query")
+                            snippets, score_stats, task_for_log = _apply_exa_quality_to_task(
+                                task_for_log,
+                                result,
+                                query_used,
+                                exa_note,
+                            )
                             search_backend = "exa"
                             search_note = exa_note
-                            task_for_log = {**task_for_log, "search_backend": "exa"}
                             extract_skipped_reason = "extract_cooldown_exa_fallback"
+                            if not snippets:
+                                skip_deepseek_reason = (
+                                    task_for_log.get("unusable_reason")
+                                    or exa_note
+                                    or "no_snippets"
+                                )
                     if search_backend == "tavily" and extract_globally_disabled and extract_skipped_reason is None:
                         extract_skipped_reason = "extract_globally_disabled"
                     # score 过滤
                     before_score = len(snippets)
                     high_score = [s for s in snippets if s.get("score") is None or s.get("score", 0) >= 0.5]
                     if high_score:
-                        snippets = high_score
-                        stats["score_filtered_drop"] += max(0, before_score - len(snippets))
+                        requires_value_evidence = bool(
+                            task_for_log.get("required_output_fields") or task_for_log.get("evidence_keywords")
+                        )
+                        high_score_diagnostics = _final_snippet_diagnostics(task_for_log, high_score)
+                        current_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
+                        high_score_value = int(high_score_diagnostics["value_evidence_score"])
+                        current_value = int(current_diagnostics["value_evidence_score"])
+                        if not requires_value_evidence or high_score_value >= current_value or current_value <= 0:
+                            snippets = high_score
+                            stats["score_filtered_drop"] += max(0, before_score - len(snippets))
                     score_filtered_drop_local = max(0, before_score - len(snippets)) if high_score else 0
                     before = len(snippets)
                     snippets = _filter_by_domain(
@@ -2715,10 +5324,32 @@ async def _execute_tasks(
                     domain_filtered_drop_local = max(0, before - after) if before and before != after else 0
                     snippets = _prefer_fresh_snippets(snippets, task.get("max_age_days"))
                     snippets = _prefer_latest_report_snippets(snippets, task.get("indicator_key"))
+                    final_diagnostics = _final_snippet_diagnostics(task_for_log, snippets)
+                    score_stats = final_diagnostics["score_stats"]
+                    selected_reason = _selected_reason_from_diagnostics(
+                        final_diagnostics,
+                        task_for_log.get("unusable_reason"),
+                    )
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
+                    request_id_for_log = (
+                        result.get("response_id")
+                        or result.get("request_id")
+                        or task_for_log.get("request_id")
+                        or task_for_log.get("exa_request_id")
+                    )
+                    tavily_diagnostics = {
+                        key: task_for_log[key]
+                        for key in ("tavily_http_status", "tavily_request_id", "tavily_error_message")
+                        if key in task_for_log
+                    }
                     task_for_log = {
                         **task,
+                        **tavily_diagnostics,
                         "search_backend": search_backend,
+                        "search_backend_state": task_for_log.get("search_backend_state"),
+                        "failover_reason": task_for_log.get("failover_reason"),
+                        "request_id": request_id_for_log,
+                        "exa_request_id": request_id_for_log if search_backend == "exa" else task_for_log.get("exa_request_id"),
                         "query_used": query_used,
                         "query_family_used": task_for_log.get("query_family_used"),
                         "field_scope": task_for_log.get("field_scope"),
@@ -2727,13 +5358,14 @@ async def _execute_tasks(
                         "score_low_all": score_low_all,
                         "score_low_threshold": effective_low_score,
                         "usable_count_before_extract": task_for_log.get("usable_count_before_extract", len(snippets)),
-                        "trusted_count": task_for_log.get("trusted_count", 0),
-                        "issuer_hit": task_for_log.get("issuer_hit", False),
-                        "period_hit": task_for_log.get("period_hit", False),
-                        "selected_reason": task_for_log.get("selected_reason"),
-                        "usage_evidence_score": task_for_log.get("usage_evidence_score", 0),
-                        "good_url_hit_count": task_for_log.get("good_url_hit_count", 0),
-                        "bad_url_hit_count": task_for_log.get("bad_url_hit_count", 0),
+                        "trusted_count": final_diagnostics["trusted_count"],
+                        "issuer_hit": final_diagnostics["issuer_hit"],
+                        "period_hit": final_diagnostics["period_hit"],
+                        "selected_reason": selected_reason,
+                        "usage_evidence_score": final_diagnostics["usage_evidence_score"],
+                        "value_evidence_score": final_diagnostics["value_evidence_score"],
+                        "good_url_hit_count": final_diagnostics["good_url_hit_count"],
+                        "bad_url_hit_count": final_diagnostics["bad_url_hit_count"],
                         "score_filtered_drop": score_filtered_drop_local,
                         "domain_filtered_drop": domain_filtered_drop_local,
                         "extraction_skipped_reason": skip_deepseek_reason,
@@ -2741,6 +5373,10 @@ async def _execute_tasks(
                     }
                     if search_note:
                         task_for_log["search_note"] = search_note
+                    if skip_deepseek_reason is None:
+                        skip_deepseek_reason = _deepseek_circuit_breaker_skip_reason()
+                        if skip_deepseek_reason:
+                            task_for_log["extraction_skipped_reason"] = skip_deepseek_reason
                     if use_queue:
                         if skip_deepseek_reason:
                             extraction = {
@@ -2772,9 +5408,12 @@ async def _execute_tasks(
                                 and extraction["note"]
                                 and extraction["note"].startswith("deepseek_error")
                                 else None,
-                                "request_id": result.get("response_id") or result.get("request_id")
-                                if search_backend == "tavily"
-                                else None,
+                                "request_id": (
+                                    result.get("response_id")
+                                    or result.get("request_id")
+                                    or task_for_log.get("request_id")
+                                    or task_for_log.get("exa_request_id")
+                                ),
                                 "http_status": result.get("status") if search_backend == "tavily" else None,
                                 "cache_hit": result.get("cache_hit", False),
                                 "attempt_index": attempt,
@@ -2794,6 +5433,7 @@ async def _execute_tasks(
                                 "period_hit": task_for_log.get("period_hit"),
                                 "selected_reason": task_for_log.get("selected_reason"),
                                 "usage_evidence_score": task_for_log.get("usage_evidence_score"),
+                                "value_evidence_score": task_for_log.get("value_evidence_score"),
                                 "good_url_hit_count": task_for_log.get("good_url_hit_count"),
                                 "bad_url_hit_count": task_for_log.get("bad_url_hit_count"),
                                 "score_min": score_stats.get("score_min"),
@@ -2806,6 +5446,7 @@ async def _execute_tasks(
                                 "score_filtered_drop": task_for_log.get("score_filtered_drop"),
                                 "domain_filtered_drop": task_for_log.get("domain_filtered_drop"),
                             }
+                            task_record.update(_structured_audit_fields_from_task(task_for_log))
                             failures.append(task_record)
                             manual_required_keys.append(task_record["indicator_key"])
                             _append_task_log(task_log_path, task_record)
@@ -2842,8 +5483,14 @@ async def _execute_tasks(
                         else:
                             stats["extract_calls"] += 1
                             extraction = await _do_extract(snippets, task)
+                            if skip_deepseek_reason is None and extraction.get("extraction_skipped_reason"):
+                                skip_deepseek_reason = str(extraction.get("extraction_skipped_reason"))
+                                task_for_log["extraction_skipped_reason"] = skip_deepseek_reason
                         # regex 兜底：关键指标无值时尝试直接提取数字（低相关时跳过）
-                        if extraction.get("value") is None and skip_deepseek_reason != "low_score_all":
+                        if extraction.get("value") is None and skip_deepseek_reason not in {
+                            "low_score_all",
+                            "official_domain_filter_empty",
+                        }:
                             regex_val = _regex_fallback(snippets, task["indicator_key"])
                             if regex_val is not None:
                                 extraction["value"] = regex_val
@@ -2853,7 +5500,38 @@ async def _execute_tasks(
                         _refine_extraction_value(extraction, task, snippets)
                         field_attempts: List[Dict[str, Any]] = []
                         if is_fund_flow:
-                            extraction, field_attempts = await _retry_fund_flow_fields(task, extraction)
+                            extraction, field_attempts = await _retry_fund_flow_fields(
+                                task_for_log,
+                                extraction,
+                                search_backend,
+                            )
+                            field_failover_manual = extraction.pop("_field_retry_failover_manual", None)
+                            if isinstance(field_failover_manual, dict):
+                                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                                task_record, websearch_item = _build_exa_failover_manual_records(
+                                    task_for_log,
+                                    reason=str(field_failover_manual.get("reason") or "exa_empty"),
+                                    attempt_index=attempt,
+                                    elapsed_ms=elapsed_ms,
+                                    query_attempts=field_attempts or field_failover_manual.get("query_attempts"),
+                                    exa_metadata=field_failover_manual.get("exa_metadata") or {},
+                                    tavily_metadata=field_failover_manual.get("tavily_metadata") or {},
+                                )
+                                _attach_field_attempts(
+                                    task_record,
+                                    websearch_item,
+                                    field_attempts or field_failover_manual.get("field_attempts") or [],
+                                )
+                                _append_task_log(task_log_path, task_record)
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                websearch_results.append(websearch_item)
+                                break
+                            task_for_log = _promote_task_to_exa_after_field_retry(
+                                task_for_log,
+                                field_attempts,
+                            )
+                            search_backend = task_for_log.get("search_backend") or search_backend
                         # 对资金流再尝试基于片段推断方向，补充 note，减少 manual_required
                         if is_fund_flow and extraction.get("value") is not None:
                             inferred_dir = _infer_flow_direction(snippets)
@@ -2887,6 +5565,18 @@ async def _execute_tasks(
                                 s for s in [extraction.get("note", ""), note_append] if s
                             ).strip()
                             extraction["note"] = combined_note or None
+                            if unit_manual and _safe_number(extraction.get("recent_5d")) is not None and _safe_number(
+                                extraction.get("total_120d")
+                            ) is not None:
+                                metric_basis = _default_fund_flow_metric_basis(task["indicator_key"], extraction)
+                                window_evidence = _infer_fund_flow_window_evidence(
+                                    task["indicator_key"], extraction, metric_basis
+                                )
+                                if window_evidence not in {"direct_window", "direct_daily_series", "direct_balance_delta"}:
+                                    extraction["manual_reason"] = _append_note(
+                                        extraction.get("manual_reason"),
+                                        "fund_flow_window_missing",
+                                    )
                             manual_required = manual_required or unit_manual
                             validate_note_append = note_append or ""
                         else:
@@ -2921,7 +5611,9 @@ async def _execute_tasks(
                                 directed_retry_done = True
                                 continue
 
+                        tavily_diagnostics = _tavily_diagnostics_from_task(task_for_log, field_attempts)
                         task_record = {
+                            **tavily_diagnostics,
                             "task_id": task["task_id"],
                             "indicator_key": task["indicator_key"],
                             "stage_phase": task["stage_phase"],
@@ -2938,9 +5630,12 @@ async def _execute_tasks(
                             if isinstance(extraction.get("note"), str)
                             and extraction["note"].startswith("deepseek_error")
                             else None,
-                            "request_id": result.get("response_id") or result.get("request_id")
-                            if search_backend == "tavily"
-                            else None,
+                            "request_id": (
+                                result.get("response_id")
+                                or result.get("request_id")
+                                or task_for_log.get("request_id")
+                                or task_for_log.get("exa_request_id")
+                            ),
                             "http_status": result.get("status") if search_backend == "tavily" else None,
                             "cache_hit": result.get("cache_hit", False),
                             "attempt_index": attempt,
@@ -2960,6 +5655,7 @@ async def _execute_tasks(
                             "period_hit": task_for_log.get("period_hit"),
                             "selected_reason": task_for_log.get("selected_reason"),
                             "usage_evidence_score": task_for_log.get("usage_evidence_score"),
+                            "value_evidence_score": task_for_log.get("value_evidence_score"),
                             "good_url_hit_count": task_for_log.get("good_url_hit_count"),
                             "bad_url_hit_count": task_for_log.get("bad_url_hit_count"),
                             "score_min": score_stats.get("score_min"),
@@ -2972,12 +5668,13 @@ async def _execute_tasks(
                             "score_filtered_drop": task_for_log.get("score_filtered_drop"),
                             "domain_filtered_drop": task_for_log.get("domain_filtered_drop"),
                         }
+                        task_record.update(_structured_audit_fields_from_task(task_for_log))
                         if manual_required:
                             failures.append(task_record)
                             if extraction.get("value") is None:
                                 manual_required_keys.append(task_record["indicator_key"])
                         else:
-                            write_target = _apply_extraction(market_payload, task, extraction)
+                            write_target = _apply_extraction(market_payload, task_for_log, extraction, snippets=snippets)
                             write_stats = stats.setdefault("write_back_by_category", {})
                             if isinstance(write_stats, dict):
                                 write_stats[write_target] = write_stats.get(write_target, 0) + 1
@@ -2985,8 +5682,26 @@ async def _execute_tasks(
                                 stats["write_back_fallback_count"] += 1
                             elif write_target == "skip_no_value":
                                 stats["write_back_miss_count"] += 1
-                            _update_missing_items(market_payload, task["indicator_key"])
-                            completed.append(task_record)
+                            post_writeback_reason = _post_writeback_manual_reason(
+                                market_payload,
+                                task_for_log,
+                                task["indicator_key"],
+                            )
+                            if post_writeback_reason:
+                                _mark_post_writeback_manual_required(
+                                    market_payload,
+                                    task_record,
+                                    task_for_log,
+                                    extraction,
+                                    task["indicator_key"],
+                                    post_writeback_reason,
+                                )
+                                failures.append(task_record)
+                                manual_required_keys.append(task_record["indicator_key"])
+                                manual_required = True
+                            else:
+                                _update_missing_items(market_payload, task["indicator_key"])
+                                completed.append(task_record)
                         _append_task_log(task_log_path, task_record)
                         websearch_results.append(
                             {
@@ -2997,21 +5712,37 @@ async def _execute_tasks(
                                 "field_attempts": field_attempts,
                                 "search_backend": search_backend,
                                 "note": search_note,
-                                "manual_required": manual_required,
-                                "manual_reason": extraction.get("manual_reason"),
+                                "manual_required": task_record.get("manual_required"),
+                                "manual_reason": task_record.get("manual_reason") or extraction.get("manual_reason"),
                             }
                         )
                         break
                 except Exception as exc:  # pragma: no cover - 网络错误兜底
                     elapsed_ms = int((time.perf_counter() - started) * 1000)
                     logger.warning(f"Tavily/DeepSeek 执行失败 {task['indicator_key']} attempt={attempt}: {exc}")
+                    if _is_environment_proxy_error(exc):
+                        _mark_environment_proxy_unavailable(exc)
+                        task_record, websearch_item = _build_environment_proxy_error_records(
+                            task,
+                            exc,
+                            attempt_index=attempt,
+                            elapsed_ms=elapsed_ms,
+                            extraction_backend=extraction_backend,
+                        )
+                        _append_task_log(task_log_path, task_record)
+                        failures.append(task_record)
+                        manual_required_keys.append(task_record["indicator_key"])
+                        websearch_results.append(websearch_item)
+                        break
                     if _is_tavily_quota_error(exc):
+                        tavily_metadata = _get_or_record_tavily_limit_metadata(exc)
                         _mark_tavily_quota_unavailable()
                         task_record, websearch_item = _build_tavily_fast_switch_records(
                             task,
                             attempt_index=attempt,
                             elapsed_ms=elapsed_ms,
                             error=exc,
+                            tavily_metadata=tavily_metadata,
                         )
                         _append_task_log(task_log_path, task_record)
                         failures.append(task_record)
@@ -3034,6 +5765,7 @@ async def _execute_tasks(
                             "created_at": task["created_at"],
                             "finished_at": int(datetime.now().timestamp()),
                         }
+                        task_record.update(_structured_audit_fields_from_task(task))
                         _append_task_log(task_log_path, task_record)
                         failures.append(task_record)
                         break
@@ -3119,7 +5851,7 @@ _FUND_FLOW_BOUNDS: Dict[str, Dict[str, Tuple[float, float]]] = {
         "total_120d": (-8000.0, 8000.0),
     },
     "etf": {
-        "recent_5d": (-3000.0, 3000.0),
+        "recent_5d": (-8000.0, 8000.0),
         "total_120d": (-30000.0, 30000.0),
     },
     "margin": {
@@ -3205,7 +5937,7 @@ def _validate_fund_flow_extraction(
         manual = True
         note_append = (note_append + " 单位缺失(需含亿)").strip()
     # 方向校验：根据 note / raw snippet 关键词推断
-    text_blob = str(extraction.get("note") or "").lower()
+    text_blob = f"{extraction.get('note') or ''} {extraction.get('trend') or ''}".lower()
     direction_unknown = True
     if "流出" in text_blob or "net outflow" in text_blob:
         if val > 0:
@@ -3271,13 +6003,10 @@ def _validate_general_extraction(
         manual = True
         note_append = (note_append + " no_value").strip()
 
-    # unit 校验（允许点/points 互通）
+    # unit 校验使用与官方来源信任一致的 canonical unit 规则。
     if unit_hint:
         unit_val = extraction.get("unit") or ""
-        # 点的宽松匹配
-        if unit_hint in {"点", "points"} and any(tok in unit_val for tok in ["点", "points"]):
-            pass
-        elif unit_hint not in unit_val:
+        if not units_compatible(unit_hint, unit_val):
             manual = True
             note_append = (note_append + f" 单位不匹配(需含{unit_hint})").strip()
 
@@ -3429,6 +6158,26 @@ def _validate_general_extraction(
     return val, manual, note_append
 
 
+def _env_int_default(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw in {None, ""}:
+        return default
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_float_default(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw in {None, ""}:
+        return default
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage 2 Unified Enhancer (Tavily + DeepSeek)")
     parser.add_argument("--market-data", required=True, help="Stage1 生成的 market_data.json 路径")
@@ -3449,7 +6198,25 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--read-timeout", type=float, default=30.0)
     parser.add_argument("--max-retries", type=int, default=2)
     parser.add_argument("--deepseek-timeout", type=float, default=30.0, help="DeepSeek抽取超时时间(秒)")
-    parser.add_argument("--deepseek-max-concurrency", type=int, default=1, help="DeepSeek并发上限")
+    parser.add_argument("--deepseek-max-concurrency", type=int, default=3, help="DeepSeek并发上限")
+    parser.add_argument(
+        "--deepseek-breaker-consecutive-timeouts",
+        type=int,
+        default=_env_int_default("DEEPSEEK_BREAKER_CONSECUTIVE_TIMEOUTS", 6),
+        help="DeepSeek circuit breaker 连续超时阈值；<=0 禁用连续超时触发",
+    )
+    parser.add_argument(
+        "--deepseek-breaker-timeout-rate",
+        type=float,
+        default=_env_float_default("DEEPSEEK_BREAKER_TIMEOUT_RATE", 0.6),
+        help="DeepSeek circuit breaker 超时率阈值；<=0 禁用超时率触发",
+    )
+    parser.add_argument(
+        "--deepseek-breaker-min-attempts",
+        type=int,
+        default=_env_int_default("DEEPSEEK_BREAKER_MIN_ATTEMPTS", 8),
+        help="DeepSeek circuit breaker 超时率触发的最小尝试数；<=0 禁用超时率触发",
+    )
     parser.add_argument("--deepseek-model", default="deepseek-v4-pro", help="DeepSeek模型名")
     parser.add_argument(
         "--deepseek-base-url",
@@ -3483,13 +6250,30 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="仅生成任务文件，不执行搜索")
     parser.add_argument("--execute-search", action="store_true", help="立即执行 Tavily+DeepSeek 任务")
     parser.add_argument(
+        "--disable-structured-providers",
+        action="store_true",
+        help="禁用 Stage2 structured provider-first，直接走 Tavily/Exa/DeepSeek 链路",
+    )
+    parser.add_argument(
         "--enable-exa-fallback",
         action="store_true",
         help="显式启用 Exa 作为 Tavily 后备；默认关闭以保持 Tavily-first 执行边界",
     )
     parser.add_argument("--log-output", default=None, help="Stage2 运行日志路径（默认: logs/runs/YYYYMMDD/stage2_unified_log.json）")
     parser.add_argument("--gap-monitor", default=None, help="gap_monitor 输出路径（默认: data/runs/YYYYMMDD/gap_monitor.json）")
-    parser.add_argument("--use-queue", action="store_true", help="开启 extraction 阶段 asyncio.Queue 消费模式")
+    parser.add_argument(
+        "--use-queue",
+        dest="use_queue",
+        action="store_true",
+        default=True,
+        help="开启 extraction 阶段 asyncio.Queue 消费模式（默认开启）",
+    )
+    parser.add_argument(
+        "--no-use-queue",
+        dest="use_queue",
+        action="store_false",
+        help="关闭 extraction 阶段 asyncio.Queue 消费模式，按任务串行抽取",
+    )
     parser.add_argument("--queue-concurrency", type=int, default=3, help="Queue 消费者并发数")
     parser.add_argument("--queue-maxsize", type=int, default=100, help="Queue 最大容量")
     parser.add_argument("--queue-retry-limit", type=int, default=2, help="Queue 抽取重试次数（超时/网络错误）")
@@ -3538,6 +6322,30 @@ def _should_enable_exa_fallback(args: argparse.Namespace) -> bool:
     return bool(getattr(args, "enable_exa_fallback", False)) or env_value in {"1", "true", "yes", "on"}
 
 
+def _should_initialize_exa_client(args: argparse.Namespace) -> bool:
+    return bool(os.getenv("EXA_API_KEY")) or _should_enable_exa_fallback(args)
+
+
+def _build_structured_registry_for_args(args: argparse.Namespace) -> Any:
+    if getattr(args, "disable_structured_providers", False):
+        return None
+    if build_default_registry is None:
+        return None
+    try:
+        return build_default_registry()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"[Stage2] structured provider registry init failed, fallback to search: {exc}")
+        return None
+
+
+def _is_exa_sdk_available() -> bool:
+    return bool(
+        AsyncExaClient
+        and callable(getattr(AsyncExaClient, "sdk_available", None))
+        and AsyncExaClient.sdk_available()  # type: ignore[union-attr]
+    )
+
+
 def _load_tasks_from_file(path: Path) -> List[Dict[str, Any]]:
     tasks = []
     with path.open("r", encoding="utf-8") as f:
@@ -3564,6 +6372,31 @@ def _ensure_keys(require_tavily: bool = True, require_deepseek: bool = True) -> 
     return missing
 
 
+def _callable_supports_kwarg(callable_obj: Any, kwarg: str) -> bool:
+    try:
+        params = inspect.signature(callable_obj).parameters
+    except (TypeError, ValueError):
+        return False
+    if kwarg in params:
+        return True
+    return any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+def _select_proxy_for_url(proxies: Dict[str, str], url: str) -> Optional[str]:
+    scheme = urlparse(url).scheme.lower()
+    for key in (f"{scheme}://", scheme):
+        proxy_url = proxies.get(key)
+        if proxy_url:
+            return proxy_url
+
+    proxy_values = [proxy_url for proxy_url in proxies.values() if proxy_url]
+    if len(proxy_values) == 1:
+        return proxy_values[0]
+    if proxy_values:
+        return proxy_values[0]
+    return None
+
+
 def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
     """快速探测代理可用性；不可用则返回 None 并给出提示。"""
     if not proxies:
@@ -3572,8 +6405,20 @@ def _validate_proxies(proxies: Dict[str, str]) -> Optional[Dict[str, str]]:
         logger.warning("[Stage2] httpx 未安装，无法验证代理可用性，继续按配置使用。")
         return proxies
     test_url = "https://api.tavily.com"
+    get_kwargs: Dict[str, Any] = {"timeout": 3}
+    if _callable_supports_kwarg(httpx.get, "proxies"):
+        get_kwargs["proxies"] = proxies
+    elif _callable_supports_kwarg(httpx.get, "proxy"):
+        proxy_url = _select_proxy_for_url(proxies, test_url)
+        if not proxy_url:
+            logger.warning("[Stage2] 代理配置为空，已自动禁用。")
+            return None
+        get_kwargs["proxy"] = proxy_url
+    else:
+        logger.warning("[Stage2] 当前 httpx.get 不支持显式代理验证，跳过代理探测并按配置使用。")
+        return proxies
     try:
-        resp = httpx.get(test_url, timeout=3, proxies=proxies)
+        resp = httpx.get(test_url, **get_kwargs)
         if resp.status_code < 500:
             logger.info(f"[Stage2] 代理可用，继续使用: {proxies}")
             return proxies
@@ -3714,29 +6559,48 @@ async def main() -> int:
         connect_timeout=args.connect_timeout,
         max_concurrency=4,
         proxies=proxies or None,
+        trust_env=(
+            os.getenv("DATASOURCE_NETWORK_MODE", "direct").lower() == "proxy"
+        ),
     )
     exa_client = None
-    exa_enabled = _should_enable_exa_fallback(args)
-    if exa_enabled and AsyncExaClient and os.getenv("EXA_API_KEY"):
+    exa_api_key = os.getenv("EXA_API_KEY")
+    exa_sdk_available = _is_exa_sdk_available()
+    if _should_initialize_exa_client(args) and exa_api_key and exa_sdk_available:
         exa_client = AsyncExaClient(
-            api_key=os.getenv("EXA_API_KEY"),
+            api_key=exa_api_key,
             cache=cache,
             max_concurrency=2,
         )
-    elif exa_enabled and os.getenv("EXA_API_KEY"):
+        if _should_enable_exa_fallback(args):
+            logger.info("[Stage2] Exa fallback enabled.")
+        else:
+            logger.info(
+                "[Stage2] EXA_API_KEY 已设置；将仅用于 Tavily quota/rate-limit failover，"
+                "非 quota Exa fallback 仍需 --enable-exa-fallback。"
+            )
+    elif _should_enable_exa_fallback(args) and exa_api_key and not exa_sdk_available:
         logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Exa 兜底将被跳过。")
-    elif os.getenv("EXA_API_KEY"):
-        logger.info("[Stage2] EXA_API_KEY 已设置，但 Exa fallback 默认关闭；如需启用请传 --enable-exa-fallback。")
+    elif _should_enable_exa_fallback(args) and not exa_api_key:
+        logger.warning("[Stage2] Exa fallback requested but EXA_API_KEY is not set")
+    elif exa_api_key and not exa_sdk_available:
+        logger.warning("[Stage2] EXA_API_KEY 已设置但 exa-py 未安装，Tavily quota Exa failover 将被跳过。")
     extractor = DeepSeekExtractionAgent(
         model=args.deepseek_model,
         base_url=args.deepseek_base_url,
         api_key=os.getenv("DEEPSEEK_API_KEY"),
+        trust_env=(
+            os.getenv("DATASOURCE_NETWORK_MODE", "direct").lower() == "proxy"
+        ),
     )
 
     completed_tasks: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
     websearch_results: List[Dict[str, Any]] = []
     exec_stats: Dict[str, int] = {"domain_filtered_drop": 0, "regex_hits": 0}
+    structured_registry = None
+    if args.execute_search and args.extraction_backend != "langchain":
+        structured_registry = _build_structured_registry_for_args(args)
     if args.dry_run:
         logger.info("[Stage2] Dry-run 模式：仅生成任务文件，不执行搜索")
     elif args.execute_search and tasks:
@@ -3785,6 +6649,11 @@ async def main() -> int:
                 extract_topk=args.extract_topk,
                 low_score_threshold=args.low_score_threshold,
                 llm_hard_timeout=args.llm_hard_timeout,
+                deepseek_breaker_consecutive_timeouts=args.deepseek_breaker_consecutive_timeouts,
+                deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
+                deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
+                allow_exa_non_quota_fallback=_should_enable_exa_fallback(args),
+                structured_registry=structured_registry,
             )
 
     flagged_fund_flow = _flag_fund_flow_anomalies(market_payload)
@@ -3819,6 +6688,11 @@ async def main() -> int:
                 extract_topk=args.extract_topk,
                 low_score_threshold=args.low_score_threshold,
                 llm_hard_timeout=args.llm_hard_timeout,
+                deepseek_breaker_consecutive_timeouts=args.deepseek_breaker_consecutive_timeouts,
+                deepseek_breaker_timeout_rate=args.deepseek_breaker_timeout_rate,
+                deepseek_breaker_min_attempts=args.deepseek_breaker_min_attempts,
+                allow_exa_non_quota_fallback=_should_enable_exa_fallback(args),
+                structured_registry=structured_registry,
             )
             completed_tasks.extend(retry_completed)
             failures.extend(retry_failures)
@@ -3916,16 +6790,10 @@ async def main() -> int:
         success_by_cat[cat] = success_by_cat.get(cat, 0) + 1
         if t.get("result_type") == "search_success":
             incremental_success_by_cat[cat] = incremental_success_by_cat.get(cat, 0) + 1
-    skipped_existing_count = sum(1 for t in completed_tasks if t.get("result_type") == "skipped_existing")
-    search_success_count = sum(1 for t in completed_tasks if t.get("result_type") == "search_success")
-    search_failed_count = sum(1 for t in failures if t.get("result_type") == "manual_required")
+    result_count_fields = _build_stage2_result_count_fields(completed_tasks, failures)
     stale_refresh_forced = sum(1 for t in tasks if _is_force_refresh_task(t))
     stale_refresh_success = sum(1 for t in completed_tasks if t.get("force_refresh") and t.get("result_type") == "search_success")
     stale_refresh_failed = sum(1 for t in failures if t.get("force_refresh"))
-    incremental_denominator = search_success_count + search_failed_count
-    search_success_rate_incremental = (
-        search_success_count / incremental_denominator if incremental_denominator else 0.0
-    )
     summary_diagnostics = _build_stage2_summary_diagnostics(
         completed_tasks,
         failures,
@@ -3937,13 +6805,10 @@ async def main() -> int:
         "task_total": len(tasks),
         "task_completed": len(completed_tasks),
         "task_failed": len(failures),
-        "task_skipped_existing": skipped_existing_count,
-        "task_search_success": search_success_count,
-        "task_search_failed": search_failed_count,
+        **result_count_fields,
         "task_stale_refresh_forced": stale_refresh_forced,
         "task_stale_refresh_success": stale_refresh_success,
         "task_stale_refresh_failed": stale_refresh_failed,
-        "search_success_rate_incremental": search_success_rate_incremental,
         "retrieval_diagnostics": summary_diagnostics["retrieval_diagnostics"],
         "manual_reason_breakdown": summary_diagnostics["manual_reason_breakdown"],
         "manual_required": pending_manual,
@@ -3963,8 +6828,14 @@ async def main() -> int:
         "regex_hits": exec_stats.get("regex_hits", 0),
         "score_filtered_drop": exec_stats.get("score_filtered_drop", 0),
         "low_score_drop": exec_stats.get("low_score_drop", 0),
+        "value_evidence_drop_count": exec_stats.get("value_evidence_drop_count", 0),
         "timeout_count": exec_stats.get("timeout_count", 0),
         "deepseek_timeouts": exec_stats.get("deepseek_timeouts", 0),
+        "deepseek_circuit_breaker_triggered": exec_stats.get("deepseek_circuit_breaker_triggered", False),
+        "deepseek_circuit_breaker_reason": exec_stats.get("deepseek_circuit_breaker_reason"),
+        "deepseek_timeout_rate": exec_stats.get("deepseek_timeout_rate", 0.0),
+        "deepseek_breaker_attempts": exec_stats.get("deepseek_breaker_attempts", 0),
+        "deepseek_breaker_timeouts": exec_stats.get("deepseek_breaker_timeouts", 0),
         "retry_count": exec_stats.get("retry_count", 0),
         "extract_calls": exec_stats.get("extract_calls", 0),
         "tavily_extract_calls": exec_stats.get("tavily_extract_calls", 0),
@@ -3975,6 +6846,8 @@ async def main() -> int:
         "extract_globally_disabled": exec_stats.get("extract_globally_disabled", args.disable_extract),
         "extract_global_disable_reason": exec_stats.get("extract_global_disable_reason"),
         "field_retry_count": exec_stats.get("field_retry_count", 0),
+        "field_retry_merged_count": exec_stats.get("field_retry_merged_count", 0),
+        "field_retry_missing_fields": exec_stats.get("field_retry_missing_fields", {}),
         "post_filter_query_switch_count": exec_stats.get("post_filter_query_switch_count", 0),
         "exa_fallback": exec_stats.get("exa_fallback", 0),
         "exa_empty": exec_stats.get("exa_empty", 0),
@@ -3989,12 +6862,20 @@ async def main() -> int:
         "write_back_by_category": exec_stats.get("write_back_by_category", {}),
         "write_back_fallback_count": exec_stats.get("write_back_fallback_count", 0),
         "write_back_miss_count": exec_stats.get("write_back_miss_count", 0),
+        "structured_provider": exec_stats.get("structured_provider", {}),
+        "structured_policy_gate_blocked": exec_stats.get("structured_policy_gate_blocked", 0),
+        "structured_error_samples": exec_stats.get("structured_error_samples", []),
         "success_by_category": success_by_cat,
         "search_success_by_category": incremental_success_by_cat,
         "total_by_category": total_by_cat,
     }
     if "tavily_unavailable_reason" in summary_diagnostics:
         summary["tavily_unavailable_reason"] = summary_diagnostics["tavily_unavailable_reason"]
+    for key in _STAGE2_BACKEND_SUMMARY_KEYS:
+        if key in summary_diagnostics:
+            summary[key] = summary_diagnostics[key]
+    for key in _structured_provider_summary_fields({}).keys():
+        summary[key] = summary_diagnostics.get(key, summary.get(key))
     _dump_json(summary, log_output)
 
     try:
@@ -4012,11 +6893,8 @@ async def main() -> int:
 
 
     print("\n[Stage2 Summary]")
-    print(
-        f"  任务总数: {summary['task_total']}, legacy完成: {summary['task_completed']}, "
-        f"真实搜索成功: {summary['task_search_success']}, 搜索失败: {summary['task_search_failed']}, "
-        f"跳过已有值: {summary['task_skipped_existing']}, 待人工: {len(pending_manual)}"
-    )
+    print(_format_stage2_hit_rate_line(summary))
+    print(_format_stage2_task_count_line(summary, pending_manual_count=len(pending_manual)))
     if summary["proxy"]["http"] or summary["proxy"]["https"]:
         print(f"  Proxy: http={summary['proxy']['http']} https={summary['proxy']['https']}")
     print(f"  输出: {output_path}")
@@ -4046,10 +6924,9 @@ async def main() -> int:
     )
     if summary.get("success_by_category"):
         print(f"  分类型成功: {summary['success_by_category']} / {summary['total_by_category']}")
-        print(f"  分类型真实搜索成功: {summary.get('search_success_by_category', {})} / {summary['total_by_category']}")
+        print(f"  分类型搜索链路成功: {summary.get('search_success_by_category', {})} / {summary['total_by_category']}")
     print(
-        f"  增量命中率: {summary['search_success_rate_incremental']*100:.1f}% ; "
-        f"stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
+        f"  stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
         f"(成功 {summary['task_stale_refresh_success']}, 失败 {summary['task_stale_refresh_failed']})"
     )
     if pending_manual or summary["task_failed"] > 0:

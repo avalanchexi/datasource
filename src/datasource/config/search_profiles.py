@@ -90,6 +90,7 @@ def _profile(
     bad_url_patterns: List[str] | None = None,
     report_usage: str | None = None,
     extract_policy: Dict[str, Any] | None = None,
+    max_query_candidates: int | None = None,
 ) -> SearchProfile:
     combined_queries = _dedupe_preserve(([query] if query else []) + list(queries or []))
     normalized_families: List[Dict[str, Any]] = []
@@ -150,6 +151,7 @@ def _profile(
         "bad_url_patterns": _dedupe_preserve(bad_url_patterns or []),
         "report_usage": report_usage,
         "extract_policy": extract_policy or {},
+        "max_query_candidates": max_query_candidates,
     }
 
 
@@ -383,7 +385,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
     ),
     "GSG": _profile(
         query="GSG ETF 价格 iShares S&P GSCI Commodity-Indexed Trust quote",
-        domains=["ishares.com", "blackrock.com", "finance.yahoo.com", "investing.com"],
+        domains=["ishares.com", "blackrock.com", "stooq.com", "finance.yahoo.com", "investing.com"],
         exclude_domains=["reuters.com", "marketwatch.com", "news.yahoo.com"],
         unit="USD",
         issuer="iShares/BlackRock",
@@ -402,7 +404,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
                     "iShares GSG ETF quote latest",
                     "NYSEARCA:GSG last price",
                 ],
-                "preferred_domains": ["ishares.com", "blackrock.com", "investing.com"],
+                "preferred_domains": ["ishares.com", "blackrock.com", "stooq.com", "investing.com"],
                 "required_keywords": ["gsg", "ishares", "quote"],
             },
         ],
@@ -715,7 +717,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
     ),
     "etf": _profile(
         query="A股ETF资金流向 今日净申购 近5日净申购 东方财富",
-        domains=["eastmoney.com", "data.eastmoney.com", "fund.eastmoney.com", "10jqka.com.cn"],
+        domains=["data.eastmoney.com"],
         unit="亿元",
         issuer="沪深交易所",
         issuer_aliases=["ETF", "交易所"],
@@ -726,7 +728,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
                     "A股ETF资金流向 近5日 净流入 东方财富",
                     "A股ETF 申购赎回 资金净流入 最新 东方财富",
                 ],
-                "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com", "eastmoney.com"],
+                "preferred_domains": ["data.eastmoney.com"],
                 "required_keywords": ["etf", "净流入", "申购"],
             },
         ],
@@ -803,6 +805,32 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         unit="点",
         issuer="国家统计局",
         issuer_aliases=["统计局", "NBS"],
+        max_age_days=35,
+        **_MACRO_DEFAULTS,
+    ),
+    "pmi_production": _profile(
+        query="中国PMI生产指数 最新公布 国家统计局",
+        domains=["stats.gov.cn", "eastmoney.com", "caixin.com"],
+        unit="点",
+        issuer="国家统计局",
+        issuer_aliases=["统计局", "NBS"],
+        query_families=[
+            {
+                "name": "official_nbs_pmi_production_site",
+                "queries": [
+                    "site:stats.gov.cn {expected_period_label} 制造业 PMI 生产指数",
+                    "国家统计局 {expected_period_label} 采购经理指数 生产指数",
+                    "中国制造业PMI 生产指数 {expected_period_label} 国家统计局",
+                ],
+                "preferred_domains": ["stats.gov.cn", "data.stats.gov.cn"],
+                "required_keywords": ["PMI", "生产指数", "采购经理指数"],
+            }
+        ],
+        required_keywords=["PMI", "生产指数", "采购经理指数"],
+        evidence_keywords=["PMI", "生产指数", "采购经理指数", "国家统计局"],
+        good_url_patterns=["stats.gov.cn", "data.stats.gov.cn"],
+        bad_url_patterns=["财新", "行业PMI", "地方"],
+        report_usage="Stage4 macro table requires national NBS PMI production sub-index for the expected period",
         max_age_days=35,
         **_MACRO_DEFAULTS,
     ),
@@ -1138,6 +1166,17 @@ def _prepend_profile_family(profile_key: str, family: Dict[str, Any]) -> None:
     ]
 
 
+def _move_profile_family_first(profile_key: str, family_name: str) -> None:
+    existing = list(SEARCH_PROFILES[profile_key].get("query_families") or [])
+    matched = [item for item in existing if item.get("name") == family_name]
+    if not matched:
+        return
+    SEARCH_PROFILES[profile_key]["query_families"] = [
+        *matched,
+        *[item for item in existing if item.get("name") != family_name],
+    ]
+
+
 def _apply_report_usage_profiles() -> None:
     """Attach downstream report-usage metadata used by Stage2 post-filtering."""
     current_value_keys = [
@@ -1205,7 +1244,7 @@ def _apply_report_usage_profiles() -> None:
                         "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
                         "A股ETF 全市场 近5日 近120日 资金流向 合计",
                     ],
-                    "preferred_domains": ["data.eastmoney.com", "fund.eastmoney.com"],
+                    "preferred_domains": ["data.eastmoney.com"],
                     "required_keywords": ["etf", "全市场", "合计"],
                 }
             ],
@@ -1231,7 +1270,7 @@ def _apply_report_usage_profiles() -> None:
                 "合计",
                 "资金流向",
             ],
-            "good_url_patterns": ["data.eastmoney.com", "fund.eastmoney.com"],
+            "good_url_patterns": ["data.eastmoney.com"],
             "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率", "规模创新高"],
             "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
         }
@@ -1290,6 +1329,237 @@ def _apply_report_usage_profiles() -> None:
             "good_url_patterns": ["tradingeconomics.com", "investing.com/indices", "data.eastmoney.com/cjsj"],
             "bad_url_patterns": ["/Circulars/", "/faqs", "market-announcements", "2018"],
             "report_usage": "Stage4 macro table and Pring macro score require current_value plus comparable previous/change",
+        }
+    )
+
+    daily_quote_families = {
+        "GC=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "COMEX gold futures GC=F price {closing_date} closing",
+                "COMEX gold futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com gold futures {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "CL=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "WTI crude oil futures CL=F price {closing_date} closing",
+                "NYMEX WTI crude futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com crude oil {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "BZ=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "Brent crude futures BZ=F price {closing_date} closing",
+                "ICE Brent crude futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com brent crude oil {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "HG=F": {
+            "name": "dated_market_quote",
+            "queries": [
+                "COMEX copper futures HG=F price {closing_date} closing",
+                "COMEX copper futures settlement price {closing_date_label}",
+                "site:tradingeconomics.com copper futures {closing_date} price",
+            ],
+            "bad": ["contract specifications", "fact card", "settlement procedures", "contract specs"],
+        },
+        "BCOM": {
+            "name": "dated_index_quote",
+            "queries": [
+                "Bloomberg Commodity Index BCOM level {closing_date}",
+                "BCOM:IND Bloomberg Commodity Index quote {closing_date}",
+                "Bloomberg Commodity Index current level {closing_date_label}",
+            ],
+            "bad": ["target weights", "annual rebalance", "2026 weights", "index methodology"],
+        },
+        "GSG": {
+            "name": "dated_etf_quote",
+            "queries": [
+                "GSG ETF price {closing_date} iShares",
+                "iShares GSG ETF market price {closing_date_label}",
+                "NYSEARCA GSG last price {closing_date}",
+            ],
+            "bad": ["fund flows", "net inflow", "net outflow", "AUM change", "holding", "portfolio"],
+        },
+        "DXY": {
+            "name": "dated_index_quote",
+            "queries": [
+                "DXY US Dollar Index {closing_date} closing level",
+                "US Dollar Index DXY current quote {closing_date}",
+                "ICE US Dollar Index DXY latest level {closing_date_label}",
+            ],
+            "bad": ["forecast", "analysis", "outlook", "opinion", "technical analysis"],
+        },
+        "bdi": {
+            "name": "dated_bdi_quote",
+            "queries": [
+                "Baltic Dry Index BDI {closing_date} latest value",
+                "BDI Baltic Dry Index {closing_date_label} points",
+                "Trading Economics Baltic Dry Index {closing_date} value",
+            ],
+            "bad": ["/Circulars/", "/faqs", "market-announcements", "methodology"],
+        },
+    }
+    for key, spec in daily_quote_families.items():
+        _prepend_profile_family(
+            key,
+            {
+                "name": spec["name"],
+                "queries": spec["queries"],
+                "preferred_domains": SEARCH_PROFILES[key]["preferred_domains"],
+                "required_keywords": SEARCH_PROFILES[key]["required_keywords"],
+                "exclude_keywords": spec["bad"],
+            },
+        )
+        SEARCH_PROFILES[key]["bad_url_patterns"] = _dedupe_preserve(
+            list(SEARCH_PROFILES[key].get("bad_url_patterns") or []) + list(spec["bad"])
+        )
+
+    _prepend_profile_family(
+        "BCOM",
+        {
+            "name": "bloomberg_index_quote",
+            "queries": [
+                "BCOM:IND Bloomberg Commodity Index quote latest level",
+                "Bloomberg Commodity Index BCOM latest level",
+                "BCOM Bloomberg Commodity Index current quote",
+            ],
+            "preferred_domains": ["bloomberg.com", "tradingeconomics.com", "stockcharts.com"],
+            "required_keywords": ["BCOM", "Bloomberg Commodity Index"],
+            "exclude_keywords": ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"],
+        },
+    )
+    SEARCH_PROFILES["BCOM"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["BCOM:IND", "Bloomberg Commodity Index", "BCOM", "level", "last price"],
+            "good_url_patterns": ["bloomberg.com/quote/BCOM:IND", "tradingeconomics.com", "stockcharts.com"],
+            "bad_url_patterns": _dedupe_preserve(
+                list(SEARCH_PROFILES["BCOM"].get("bad_url_patterns") or [])
+                + ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"]
+            ),
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    _prepend_profile_family(
+        "GSG",
+        {
+            "name": "ishares_current_quote",
+            "queries": [
+                "iShares S&P GSCI Commodity-Indexed Trust GSG current quote",
+                "NYSEARCA GSG iShares S&P GSCI Commodity-Indexed Trust price",
+                "GSG ETF latest price iShares BlackRock",
+            ],
+            "preferred_domains": ["ishares.com", "blackrock.com", "investing.com"],
+            "required_keywords": ["GSG", "iShares"],
+            "exclude_keywords": ["fund flows", "net inflow", "net outflow", "AUM change"],
+        },
+    )
+    SEARCH_PROFILES["GSG"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["GSG", "iShares S&P GSCI Commodity-Indexed Trust", "market price", "NAV"],
+            "good_url_patterns": ["ishares.com/us/products", "blackrock.com", "investing.com/etfs"],
+            "bad_url_patterns": ["fund flows", "net inflow", "net outflow", "AUM change", "holding", "portfolio"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    _prepend_profile_family(
+        "USDCNY",
+        {
+            "name": "onshore_current_quote",
+            "queries": [
+                "USD/CNY onshore spot rate latest China Foreign Exchange Trade System",
+                "USD/CNY current rate ChinaMoney latest",
+                "USDCNY onshore spot quote latest",
+            ],
+            "preferred_domains": ["chinamoney.com.cn", "cfets.com.cn", "investing.com", "tradingeconomics.com"],
+            "required_keywords": ["USD/CNY", "USDCNY"],
+            "exclude_keywords": ["bankofchina", "Bank of China", "cash selling", "bank note", "currency converter"],
+        },
+    )
+    SEARCH_PROFILES["USDCNY"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["USD/CNY", "USDCNY", "onshore", "spot", "central parity"],
+            "good_url_patterns": ["chinamoney.com.cn", "cfets.com.cn", "investing.com/currencies/usd-cny"],
+            "bad_url_patterns": ["bankofchina", "boc.cn", "cash selling", "bank note", "currency converter"],
+            "extract_policy": {
+                "use_tavily_extract": True,
+                "extract_topk": 1,
+                "official_domains_only": True,
+                "official_domains": ["chinamoney.com.cn", "cfets.com.cn"],
+            },
+        }
+    )
+
+    _prepend_profile_family(
+        "DXY",
+        {
+            "name": "index_current_quote",
+            "queries": [
+                "US Dollar Index DXY current quote latest",
+                "DXY US Dollar Index latest value Investing.com",
+                "ICE US Dollar Index DXY latest level",
+            ],
+            "preferred_domains": ["investing.com", "tradingeconomics.com", "theice.com", "marketwatch.com"],
+            "required_keywords": ["DXY", "US Dollar Index"],
+            "exclude_keywords": ["DXY news", "forecast", "analysis", "outlook"],
+        },
+    )
+    SEARCH_PROFILES["DXY"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["DXY", "US Dollar Index", "latest", "last", "level"],
+            "good_url_patterns": [
+                "investing.com/indices/us-dollar-index",
+                "tradingeconomics.com",
+                "marketwatch.com/investing/index/dxy",
+            ],
+            "bad_url_patterns": _dedupe_preserve(
+                list(SEARCH_PROFILES["DXY"].get("bad_url_patterns") or [])
+                + ["DXY news", "forecast", "analysis", "outlook", "opinion"]
+            ),
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
+        }
+    )
+
+    for profile_key, family_name in {
+        "BCOM": "dated_index_quote",
+        "GSG": "dated_etf_quote",
+        "DXY": "dated_index_quote",
+    }.items():
+        _move_profile_family_first(profile_key, family_name)
+
+    _prepend_profile_family(
+        "CN10Y_CDB",
+        {
+            "name": "policy_bank_yield_quote",
+            "queries": [
+                "CDB 10Y bond yield ChinaBond latest",
+                "China Development Bank 10 year bond yield latest",
+                "policy bank bond 10Y yield China latest",
+            ],
+            "preferred_domains": ["chinabond.com.cn", "chinamoney.com.cn", "cfets.com.cn", "eastmoney.com"],
+            "required_keywords": ["CDB", "10Y", "yield"],
+            "exclude_keywords": ["China 10Y Treasury", "government bond", "sovereign bond"],
+        },
+    )
+    SEARCH_PROFILES["CN10Y_CDB"].update(
+        {
+            "max_query_candidates": 3,
+            "evidence_keywords": ["CDB", "China Development Bank", "policy bank", "10Y", "yield"],
+            "good_url_patterns": ["chinabond.com.cn", "chinamoney.com.cn", "cfets.com.cn", "eastmoney.com"],
+            "bad_url_patterns": ["China 10Y Treasury", "government bond", "sovereign bond", "CN10Y"],
+            "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
     )
 

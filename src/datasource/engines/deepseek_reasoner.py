@@ -20,30 +20,70 @@ from loguru import logger
 from datasource.utils.coercion import to_float
 
 try:
-    from openai import AsyncOpenAI
+    from openai import AsyncOpenAI, DefaultAsyncHttpxClient
 except Exception:  # pragma: no cover - 环境缺省时延迟导入
     AsyncOpenAI = None  # type: ignore
+    DefaultAsyncHttpxClient = None  # type: ignore
 
 
 class DeepSeekExtractionAgent:
     """从 Tavily 搜索结果里提取结构化指标的轻量代理"""
+
+    _EXTRA_NUMERIC_FIELDS = {
+        "previous_value",
+        "change_rate",
+        "change_from_120d",
+        "yoy_month",
+        "yoy_ytd",
+    }
+    _EXTRA_STRING_FIELDS = {
+        "value_type",
+        "rrr_type",
+    }
+    _EXTRA_FIELD_SCHEMA = {
+        "previous_value": '"previous_value": float|null',
+        "change_rate": '"change_rate": float|null',
+        "change_from_120d": '"change_from_120d": float|null',
+        "value_type": '"value_type": str|null',
+        "yoy_month": '"yoy_month": float|null',
+        "yoy_ytd": '"yoy_ytd": float|null',
+        "rrr_type": '"rrr_type": str|null',
+    }
 
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: str = "deepseek-v4-pro",
         base_url: Optional[str] = None,
+        extract_max_tokens: Optional[int] = None,
+        trust_env: bool = False,
     ):
         self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         self.model = model
         self.base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+        self.trust_env = trust_env
+        raw_tokens = (
+            extract_max_tokens
+            if extract_max_tokens is not None
+            else os.getenv("DEEPSEEK_EXTRACT_MAX_TOKENS") or 900
+        )
+        try:
+            self.extract_max_tokens = max(300, int(raw_tokens))
+        except (TypeError, ValueError):
+            self.extract_max_tokens = 900
         self._client: Optional[Any] = None
 
     async def _ensure_client(self) -> Optional[Any]:
         if not self.api_key or AsyncOpenAI is None:
             return None
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=self.api_key, base_url=self.base_url)
+            client_kwargs: Dict[str, Any] = {
+                "api_key": self.api_key,
+                "base_url": self.base_url,
+            }
+            if DefaultAsyncHttpxClient is not None:
+                client_kwargs["http_client"] = DefaultAsyncHttpxClient(trust_env=self.trust_env)
+            self._client = AsyncOpenAI(**client_kwargs)
         return self._client
 
     @staticmethod
@@ -333,6 +373,84 @@ class DeepSeekExtractionAgent:
             pass
         return fallback_url, False
 
+    @classmethod
+    def _requested_extra_fields(cls, required_output_fields: Optional[List[str]]) -> List[str]:
+        fields: List[str] = []
+        for field in required_output_fields or []:
+            if field in cls._EXTRA_FIELD_SCHEMA and field not in fields:
+                fields.append(field)
+        return fields
+
+    @classmethod
+    def _empty_extra_fields(cls, required_output_fields: Optional[List[str]]) -> Dict[str, Any]:
+        return {field: None for field in cls._requested_extra_fields(required_output_fields)}
+
+    @classmethod
+    def _extract_extra_fields(
+        cls,
+        data: Dict[str, Any],
+        required_output_fields: Optional[List[str]],
+    ) -> Dict[str, Any]:
+        extras: Dict[str, Any] = {}
+        for field in cls._requested_extra_fields(required_output_fields):
+            if field in cls._EXTRA_NUMERIC_FIELDS:
+                extras[field] = cls._to_float(data.get(field))
+            else:
+                value = data.get(field)
+                extras[field] = None if value is None else str(value)
+        return extras
+
+    @classmethod
+    def _schema_hint(
+        cls,
+        is_fund_flow: bool,
+        required_output_fields: Optional[List[str]] = None,
+    ) -> str:
+        fields = [
+            '"value": float|null',
+            '"unit": str|null',
+            '"source_url": str|null',
+            '"as_of_date": "YYYY-MM-DD"|null',
+            '"report_period": "YYYY-MM"|null',
+            '"manual_required": bool',
+            '"manual_reason": str|null',
+        ]
+        if is_fund_flow:
+            fields.extend(
+                [
+                    '"recent_5d": float|null',
+                    '"total_120d": float|null',
+                    '"trend": "inflow"|"outflow"|"unknown"',
+                ]
+            )
+        for field in cls._requested_extra_fields(required_output_fields):
+            fields.append(cls._EXTRA_FIELD_SCHEMA[field])
+        return "{" + ", ".join(fields) + "}"
+
+    @staticmethod
+    def _json_error_reason(exc: json.JSONDecodeError) -> str:
+        text = str(exc).lower()
+        if "unterminated string" in text:
+            return "deepseek_json_truncated"
+        stripped_doc = (exc.doc or "").rstrip()
+        near_eof = bool(stripped_doc) and exc.pos >= len(stripped_doc)
+        open_container = (
+            stripped_doc.count("{") > stripped_doc.count("}")
+            or stripped_doc.count("[") > stripped_doc.count("]")
+        )
+        if "expecting value" in text and near_eof and open_container:
+            return "deepseek_json_truncated"
+        if near_eof and open_container and any(
+            marker in text
+            for marker in (
+                "expecting ',' delimiter",
+                "expecting ':' delimiter",
+                "expecting property name enclosed in double quotes",
+            )
+        ):
+            return "deepseek_json_truncated"
+        return "deepseek_json_parse_error"
+
     async def extract(
         self,
         snippets: List[Dict[str, Any]],
@@ -340,6 +458,7 @@ class DeepSeekExtractionAgent:
         unit_hint: Optional[str] = None,
         issuer_hint: Optional[str] = None,
         request_timeout: Optional[float] = None,
+        required_output_fields: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
         从 Tavily 结果中提取结构化字段。
@@ -353,6 +472,7 @@ class DeepSeekExtractionAgent:
         combined_text = self._combine_text(snippets).lower()
         first_url = snippets[0].get("url") if snippets else None
         is_fund_flow = self._is_fund_flow_indicator(indicator)
+        empty_extra_fields = self._empty_extra_fields(required_output_fields)
 
         # 兜底：无密钥或无法导入时直接返回简单提取
         if client is None:
@@ -379,24 +499,10 @@ class DeepSeekExtractionAgent:
                 "recent_5d": None,
                 "total_120d": None,
                 "trend": trend,
+                **empty_extra_fields,
             }
 
-        schema_hint = (
-            "{"
-            "\"value\": float|null, "
-            "\"unit\": str|null, "
-            "\"source_url\": str|null, "
-            "\"as_of_date\": \"YYYY-MM-DD\"|null, "
-            "\"report_period\": \"YYYY-MM\"|null, "
-            "\"confidence\": 0~1 float, "
-            "\"manual_required\": bool, "
-            "\"manual_reason\": str|null, "
-            "\"recent_5d\": float|null, "
-            "\"total_120d\": float|null, "
-            "\"trend\": \"inflow\"|\"outflow\"|\"unknown\", "
-            "\"issuer\": str|null"
-            "}"
-        )
+        schema_hint = self._schema_hint(is_fund_flow, required_output_fields=required_output_fields)
         prompt = (
             "你是财经数据抽取助手。"
             "必须仅基于提供的 snippets 抽取，不得猜测或补造。"
@@ -406,6 +512,12 @@ class DeepSeekExtractionAgent:
             "将 value 置 null，并设置 manual_required=true 与 manual_reason。"
             "若无法确认日期，as_of_date/report_period 可为 null。"
         )
+        requested_extra_fields = self._requested_extra_fields(required_output_fields)
+        if requested_extra_fields:
+            prompt += (
+                " Extract requested compare/window fields when evidence exists: "
+                f"{', '.join(requested_extra_fields)}."
+            )
         if unit_hint:
             prompt += f" 单位约束：优先提取单位为 {unit_hint} 的值。"
         if issuer_hint:
@@ -434,11 +546,30 @@ class DeepSeekExtractionAgent:
                 model=self.model,
                 messages=messages,
                 temperature=0.0,
-                max_tokens=650,
+                max_tokens=self.extract_max_tokens,
                 response_format={"type": "json_object"},
             )
             content = completion.choices[0].message.content or "{}"
-            data = json.loads(content)
+            try:
+                data = json.loads(content)
+            except json.JSONDecodeError as exc:
+                reason = self._json_error_reason(exc)
+                return {
+                    "value": None,
+                    "unit": unit_hint,
+                    "source_url": first_url,
+                    "issuer_match": False,
+                    "confidence": 0.0,
+                    "note": reason,
+                    "as_of_date": None,
+                    "report_period": None,
+                    "manual_required": True,
+                    "manual_reason": reason,
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "unknown",
+                    **empty_extra_fields,
+                }
             value = self._to_float(data.get("value"))
             unit_val = data.get("unit") or unit_hint
             source_url_raw = data.get("source_url") or first_url
@@ -466,6 +597,7 @@ class DeepSeekExtractionAgent:
             recent_5d = self._to_float(data.get("recent_5d"))
             total_120d = self._to_float(data.get("total_120d"))
             trend = self._normalize_trend(data.get("trend"))
+            extra_fields = self._extract_extra_fields(data, required_output_fields)
             if is_fund_flow:
                 if trend == "unknown" and value is not None:
                     trend = "inflow" if value > 0 else ("outflow" if value < 0 else "unknown")
@@ -493,6 +625,7 @@ class DeepSeekExtractionAgent:
                 "recent_5d": recent_5d,
                 "total_120d": total_120d,
                 "trend": trend,
+                **extra_fields,
             }
         except Exception as exc:  # pragma: no cover - 网络异常兜底
             logger.warning(f"DeepSeek 请求失败，使用 regex 兜底: {exc}")
@@ -518,6 +651,7 @@ class DeepSeekExtractionAgent:
                 "recent_5d": None,
                 "total_120d": None,
                 "trend": trend,
+                **empty_extra_fields,
             }
 
 

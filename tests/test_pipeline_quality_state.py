@@ -61,6 +61,48 @@ def test_pipeline_quality_state_blocks_missing_compare_values():
     assert "industrial" in state["gap_monitor_view"]["manual_required"]
 
 
+def test_pipeline_quality_state_blocks_missing_bond_compare_values():
+    payload = _base_payload()
+    payload["bonds"] = [
+        {
+            "symbol": "US10Y",
+            "name": "US 10Y Treasury",
+            "current_yield": 4.25,
+            "source_url": "https://example.com/us10y",
+        }
+    ]
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    expected = {
+        "category": "bonds",
+        "key": "US10Y",
+        "reason": "missing_compare_values",
+        "details": {"field": "change_120d_bp"},
+    }
+    assert expected in state["quality_blockers"]
+    assert expected in state["manual_required"]
+    assert expected in state["gap_monitor_view"]["quality_blockers"]
+    assert {"key": "US10Y", "reason": "missing_compare_values"} in state["missing_items"]["bonds"]
+    assert "US10Y" in state["gap_monitor_view"]["manual_required"]
+
+
+def test_pipeline_quality_state_skips_macro_compat_keys_for_compare_rules():
+    payload = _base_payload()
+    payload["macro_indicators"]["DXY"] = {
+        "current_value": 99.5,
+        "source_url": "https://example.com/dxy",
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=False)
+
+    assert {
+        "category": "macro_indicators",
+        "key": "DXY",
+        "reason": "missing_compare_values",
+    } not in state["quality_blockers"]
+
+
 def test_pipeline_quality_state_requires_source_url_for_manual_values():
     payload = _base_payload()
     payload["commodities"] = [
@@ -178,6 +220,75 @@ def test_pipeline_quality_state_flags_fund_flow_window_missing_for_missing_or_ze
     assert {"key": "southbound", "field": "total_120d"} in [
         {"key": row["key"], "field": row["details"]["field"]} for row in fund_flow_blockers
     ]
+
+
+def test_pipeline_quality_state_blocks_estimated_fund_flow_with_diagnostics_when_allow_estimated():
+    payload = _base_payload()
+    payload["fund_flow"] = {
+        "etf": {
+            "recent_5d": -50.0,
+            "total_120d": -9000.0,
+            "trend": "流出",
+            "source": "websearch_manual",
+            "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+            "metric_basis": "news_net_flow",
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "is_estimated": True,
+        }
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    blocker = next(
+        row
+        for row in state["quality_blockers"]
+        if row["category"] == "fund_flow"
+        and row["key"] == "etf"
+        and row["reason"] == "estimated_not_allowed"
+    )
+    assert blocker["details"] == {
+        "source_tier": "tier3",
+        "window_evidence": "news_summary",
+        "metric_basis": "news_net_flow",
+    }
+    assert state["policy_evaluation"]["block_stage3"] is True
+    assert "etf" in state["gap_monitor_view"]["manual_required"]
+
+
+def test_pipeline_quality_state_passes_report_date_to_bdi_allowlist():
+    payload = _base_payload()
+    payload["metadata"]["date"] = "2026-05-25"
+    payload["metadata"]["missing_items"] = {}
+    payload["macro_indicators"] = {
+        "bdi": {
+            "current_value": 1450.0,
+            "previous_value": 1430.0,
+            "change_rate": 1.4,
+            "unit": "points",
+            "as_of_date": "2026-05-22",
+            "date": "2026-05-22",
+            "source_url": "https://www.tradingeconomics.com/commodity/baltic",
+            "is_estimated": True,
+        }
+    }
+    payload["monetary_policy"] = {}
+    rules = {
+        "block_on_stale": True,
+        "critical_stale_keys": [],
+        "estimated_allowlist_keys": ["bdi"],
+        "bdi_estimated_allow_conditions": {
+            "trusted_domains": ["tradingeconomics.com"],
+            "max_age_days": 2,
+            "weekend_grace": True,
+            "value_range": [200.0, 10000.0],
+            "unit_keywords": ["points"],
+        },
+    }
+
+    state = build_pipeline_quality_state(payload, policy_rules=rules, allow_estimated=True)
+
+    assert state["quality_blockers"] == []
 
 
 def test_pipeline_quality_state_blocks_missing_zero_and_placeholder_primary_values():

@@ -6,6 +6,9 @@ from typing import Any, Iterable
 TEMPLATE = (
     Path(__file__).resolve().parents[1] / "data/runs/templates/manual_template.json"
 )
+FUND_FLOW_GUIDE = Path(__file__).resolve().parents[1] / "docs/手动更新资金流向数据指南.md"
+CLAUDE_GUIDE = Path(__file__).resolve().parents[1] / "CLAUDE.md"
+LC_PIPELINE = Path(__file__).resolve().parents[1] / "src/datasource/engines/stage2_lc_pipeline.py"
 
 
 def _walk_values(value: Any) -> Iterable[dict]:
@@ -72,7 +75,53 @@ def test_manual_template_official_examples_are_not_estimated() -> None:
         payload["commodities"][0],
         payload["fund_flow"]["northbound"],
         payload["fund_flow"]["southbound"],
-        payload["fund_flow"]["etf"],
     ]
     for item in official_paths:
         assert item["is_estimated"] is False
+
+
+def test_manual_template_etf_fund_flow_is_estimate_only() -> None:
+    payload = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    etf = payload["fund_flow"]["etf"]
+    note = etf["_note"].lower()
+
+    assert etf["is_estimated"] is True
+    assert etf["metric_basis"] == "estimated_net_flow"
+    assert etf["window_evidence"] == "news_summary"
+    assert "estimate-only" in note
+    assert "will not clear the gate" in note
+
+
+def test_fund_flow_manual_guide_uses_standard_run_path_contract() -> None:
+    text = FUND_FLOW_GUIDE.read_text(encoding="utf-8")
+
+    assert "DATE_NH=${DATE//-/}" in text
+    assert "bash run_clean.sh python scripts/stage2_5_injector.py" in text
+    assert "bash run_clean.sh python scripts/stage3_pring_analyzer.py" in text
+    assert "bash run_clean.sh python scripts/stage4_report_generator.py" in text
+    assert "data/runs/${DATE_NH}/market_data_stage2.json" in text
+    assert "data/runs/${DATE_NH}/websearch_results_manual.json" in text
+    assert "data/runs/${DATE_NH}/market_data_complete.json" in text
+    assert "data/${DATE}_market_data_stage2.json" not in text
+    assert "data/runs/${DATE}/" not in text
+    assert "PYTHONPATH=. python scripts/stage3_pring_analyzer.py" not in text
+    assert "PYTHONPATH=. python scripts/stage4_report_generator.py" not in text
+    assert '"collection_date": "${DATE}"' in text
+    assert "2025-12-09" not in text
+
+
+def test_claude_daily_pipeline_uses_run_clean_contract() -> None:
+    text = CLAUDE_GUIDE.read_text(encoding="utf-8")
+
+    assert "bash run_preflight.sh" in text
+    assert "bash run_clean.sh python scripts/stage1_data_collector.py" in text
+    assert "bash run_clean.sh python scripts/stage2_unified_enhancer.py" in text
+    assert "source .venv/bin/activate && source .env" not in text
+    assert "PYTHONPATH=./src python scripts/stage2_unified_enhancer.py" not in text
+
+
+def test_lc_pipeline_passes_indicator_key_to_fund_flow_validation() -> None:
+    text = LC_PIPELINE.read_text(encoding="utf-8")
+
+    assert "_validate_fund_flow_extraction(" in text
+    assert 'indicator_key=task["indicator_key"]' in text

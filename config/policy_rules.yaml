@@ -17,5 +17,5 @@ critical_stale_keys:
   - tsf
 min_trading_days: 100
 estimated_allowlist_keys: ["CN10Y_CDB", "bdi"]
-bdi_estimated_allow_conditions: {"trusted_domains": ["balticexchange.com", "tradingeconomics.com", "investing.com", "eastmoney.com"], "max_age_days": 2, "value_range": [200.0, 10000.0], "unit_keywords": ["点", "point", "points"]}
+bdi_estimated_allow_conditions: {"trusted_domains": ["balticexchange.com", "tradingeconomics.com", "investing.com", "eastmoney.com"], "max_age_days": 2, "weekend_grace": true, "value_range": [200.0, 10000.0], "unit_keywords": ["点", "point", "points"]}
 non_blocking_warning: {"gc_f_risk_domains": ["guba.eastmoney.com"], "gc_f_anomaly_threshold_pct": 8.0}

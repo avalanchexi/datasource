@@ -15,6 +15,32 @@ from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_
 
 _URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 _SOURCE_MARKERS = ("websearch", "manual", "tavily", "deepseek", "stage2_auto", "stage2_auto_extract")
+_NON_MACRO_COMPAT_KEYS = {
+    "GC=F",
+    "CL=F",
+    "BZ=F",
+    "HG=F",
+    "GSG",
+    "BCOM",
+    "DXY",
+    "USDCNH",
+    "USDCNY",
+    "US10Y",
+    "CN10Y",
+    "CN10Y_CDB",
+}
+_STOCK_INDEX_COMPAT_KEYS = {"000001", "399001", "399006", "000300", "000016"}
+
+
+def _estimated_issue_details(category: str, entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if category != "fund_flow":
+        return None
+    details: Dict[str, Any] = {}
+    for field in ("source_tier", "window_evidence", "metric_basis"):
+        value = entry.get(field)
+        if value not in (None, ""):
+            details[field] = value
+    return details or None
 
 
 def build_pipeline_quality_state(
@@ -27,6 +53,7 @@ def build_pipeline_quality_state(
     """Build a derived quality state without mutating market payload values."""
     rules = policy_rules or load_policy_rules()
     payload = market_payload if isinstance(market_payload, dict) else {}
+    report_date = _payload_report_date(payload)
 
     missing_items: Dict[str, List[Dict[str, Any]]] = {}
     quality_blockers: List[Dict[str, Any]] = []
@@ -54,6 +81,9 @@ def build_pipeline_quality_state(
         return issue
 
     for category, key, entry in _iter_entries(payload):
+        if category == "macro_indicators" and _is_macro_compat_key(key):
+            continue
+
         value = _entry_value(category, entry)
         has_real_value = _has_real_value(value)
         has_any_real_value = _entry_has_any_real_value(category, entry)
@@ -62,7 +92,12 @@ def build_pipeline_quality_state(
             add_issue(category, key, "primary_value_missing")
 
         if has_real_value and _is_compare_missing(category, entry):
-            add_issue(category, key, "missing_compare_values")
+            add_issue(
+                category,
+                key,
+                "missing_compare_values",
+                details=_compare_issue_details(category),
+            )
 
         if block_on_stale and entry.get("is_stale") is True and key.lower() in critical_stale_keys:
             add_issue(category, key, "critical_stale")
@@ -76,9 +111,20 @@ def build_pipeline_quality_state(
                 source_url_issues.append(issue)
 
         if entry.get("is_estimated") is True:
-            allowed, reasons = is_estimated_allowlisted(category, key, entry, rules=rules)
+            allowed, reasons = is_estimated_allowlisted(
+                category,
+                key,
+                entry,
+                rules=rules,
+                report_date=report_date,
+            )
             if not allowed:
-                issue = add_issue(category, key, "estimated_not_allowed")
+                issue = add_issue(
+                    category,
+                    key,
+                    "estimated_not_allowed",
+                    details=_estimated_issue_details(category, entry),
+                )
                 blocker_key = f"{category}.{key}"
                 if blocker_key not in estimated_blockers:
                     estimated_blockers.append(blocker_key)
@@ -147,6 +193,18 @@ def _iter_entries(payload: Dict[str, Any]) -> Iterable[Tuple[str, str, Dict[str,
                 yield category, key, entry
 
 
+def _payload_report_date(payload: Dict[str, Any]) -> Any:
+    metadata = payload.get("metadata")
+    for source in (metadata, payload):
+        if not isinstance(source, dict):
+            continue
+        for field in ("date", "end_date", "start_date"):
+            value = source.get(field)
+            if value not in (None, ""):
+                return value
+    return None
+
+
 def _iter_fund_flow(rows: Any) -> Iterable[Tuple[str, Dict[str, Any]]]:
     if not isinstance(rows, dict):
         return
@@ -161,6 +219,23 @@ def _entry_key(category: str, entry: Dict[str, Any]) -> str:
         if value not in (None, ""):
             return str(value)
     return category
+
+
+def _stock_index_compat_symbol(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    base = text.split(".", 1)[0]
+    if base in _STOCK_INDEX_COMPAT_KEYS:
+        return base
+    return text
+
+
+def _is_macro_compat_key(key: Any) -> bool:
+    text = str(key or "").strip().upper()
+    if text in _NON_MACRO_COMPAT_KEYS:
+        return True
+    return _stock_index_compat_symbol(text) in _STOCK_INDEX_COMPAT_KEYS
 
 
 def _entry_value(category: str, entry: Dict[str, Any]) -> Any:
@@ -204,7 +279,15 @@ def _is_compare_missing(category: str, entry: Dict[str, Any]) -> bool:
         return is_stage2_number_placeholder(entry.get("previous_value")) or entry.get("change_rate") is None
     if category == "monetary_policy":
         return entry.get("change_from_120d") is None
+    if category == "bonds":
+        return entry.get("change_120d_bp") is None
     return False
+
+
+def _compare_issue_details(category: str) -> Optional[Dict[str, str]]:
+    if category == "bonds":
+        return {"field": "change_120d_bp"}
+    return None
 
 
 def _needs_source_url(entry: Dict[str, Any]) -> bool:

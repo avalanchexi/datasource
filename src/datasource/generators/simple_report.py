@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Optional
 
 from datasource.utils.coercion import to_float
-from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
+from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.quality_metrics import build_quality_metrics
 from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import load_series_values
@@ -43,12 +43,23 @@ QUALITY_REASON_LABELS = {
     "source_latest_only": "来源仅提供最新值",
     "manual_incomplete": "补数不完整",
     "estimated_not_allowed": "估算值禁用",
+    "missing_source_url": "缺少来源URL",
+    "primary_value_missing": "当前值缺失",
+    "missing_compare_values": "缺少对比值",
+    "fund_flow_window_missing": "资金流窗口缺失",
+}
+STOCK_INDEX_COMPAT_KEYS = {
+    "000001": "上证指数",
+    "399001": "深证成指",
+    "399006": "创业板指",
+    "000300": "沪深300",
+    "000016": "上证50",
 }
 NON_MACRO_KEYS = {
     "GC=F", "CL=F", "BZ=F", "HG=F", "GSG", "BCOM",
     "DXY", "USDCNH", "USDCNY",
     "US10Y", "CN10Y", "CN10Y_CDB",
-    "000016",
+    "000001", "399001", "399006", "000300", "000016",
 }
 DAILY_MACRO_KEYS = {"bdi"}
 DAILY_POLICY_KEYS = {"dr007"}
@@ -57,6 +68,21 @@ EVENTS_DIR = Path("data/trend_history/min/events")
 
 def _to_float(value: Any) -> Optional[float]:
     return to_float(value)
+
+
+def _stock_index_compat_symbol(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if not text:
+        return ""
+    base = text.split(".", 1)[0]
+    if base in STOCK_INDEX_COMPAT_KEYS:
+        return base
+    return text
+
+
+def _is_non_macro_key(key: Any) -> bool:
+    text = str(key or "")
+    return text in NON_MACRO_KEYS or _stock_index_compat_symbol(text) in STOCK_INDEX_COMPAT_KEYS
 
 
 def _normalize_trend(trend: Any) -> Optional[str]:
@@ -482,8 +508,6 @@ def _load_latest_event_marker(indicator_key: str) -> Optional[str]:
 def _is_placeholder_entry(entry: dict) -> bool:
     if entry.get("current_value") in (None, "N/A"):
         return True
-    if entry.get("is_estimated"):
-        return True
     source = str(entry.get("source", ""))
     return "待MCP" in source or "待 WebSearch" in source
 
@@ -556,79 +580,48 @@ def _bond_display_date(bond: dict, report_date: str) -> str:
     return "N/A"
 
 
-def _collect_quality_issues(market_data: dict, policy_rules: Optional[dict] = None) -> list[dict]:
-    issues: list[dict] = []
-    rules = policy_rules or load_policy_rules()
+def _default_quality_field(category: Any, reason: Any) -> str:
+    reason_text = str(reason or "")
+    category_text = str(category or "")
+    if reason_text == "missing_source_url":
+        return "source_url"
+    if reason_text == "missing_compare_values":
+        if category_text == "macro_indicators":
+            return "previous_value/change_rate"
+        if category_text == "bonds":
+            return "change_120d_bp"
+        return "change_from_120d"
+    if reason_text == "fund_flow_window_missing":
+        return "recent_5d/total_120d"
+    if reason_text == "primary_value_missing":
+        return "current_value"
+    return "value"
 
-    def _issue(category: str, key: str, field: str, reason: str, detail: Optional[str] = None) -> None:
-        if reason not in QUALITY_REASONS:
-            reason = "manual_incomplete"
+
+def _collect_quality_issues(market_data: dict, policy_rules: Optional[dict] = None) -> list[dict]:
+    state = build_pipeline_quality_state(
+        market_data,
+        policy_rules=policy_rules,
+        stage="stage4",
+        allow_estimated=True,
+    )
+    issues = []
+    for issue in state.get("quality_blockers") or []:
+        if not isinstance(issue, dict):
+            continue
+        details = issue.get("details")
+        field = ""
+        if isinstance(details, dict):
+            field = str(details.get("field") or "")
         issues.append(
             {
-                "category": category,
-                "key": key,
-                "field": field,
-                "reason": reason,
-                "detail": detail or "",
+                "category": issue.get("category"),
+                "key": issue.get("key"),
+                "field": field or _default_quality_field(issue.get("category"), issue.get("reason")),
+                "reason": issue.get("reason") or "manual_incomplete",
+                "detail": details or "",
             }
         )
-
-    def _as_list(section: Any) -> list:
-        if isinstance(section, dict):
-            return list(section.values())
-        return section or []
-
-    def _estimated_allowed(category: str, key: str, entry: dict) -> bool:
-        allowed, _ = is_estimated_allowlisted(category, key, entry, rules=rules)
-        return allowed
-
-    # Bonds: change_120d_bp 缺失
-    for bond in _as_list(market_data.get("bonds", [])):
-        symbol = bond.get("symbol") or bond.get("name") or "bond"
-        current = bond.get("current_yield")
-        if current in (None, 0.0):
-            _issue("bonds", symbol, "current_yield", "manual_incomplete")
-            continue
-        if bond.get("is_estimated") and not _estimated_allowed("bonds", str(symbol), bond):
-            _issue("bonds", str(symbol), "current_yield", "estimated_not_allowed")
-        change_120d = bond.get("change_120d_bp")
-        if change_120d is None:
-            source = str(bond.get("source", "")).lower()
-            if not _has_trend_history("bonds", str(symbol)):
-                reason = "trend_history_missing"
-            elif "tushare" in source or "us_tycr" in source:
-                reason = "source_latest_only"
-            else:
-                reason = "manual_incomplete"
-            _issue("bonds", str(symbol), "change_120d_bp", reason)
-
-    # Macro indicators: previous_value / change_rate
-    for key, indicator in (market_data.get("macro_indicators", {}) or {}).items():
-        if key in NON_MACRO_KEYS:
-            continue
-        curr = indicator.get("current_value")
-        if curr in (None, "N/A"):
-            _issue("macro_indicators", key, "current_value", "manual_incomplete")
-            continue
-        if indicator.get("is_estimated") and not _estimated_allowed("macro_indicators", key, indicator):
-            _issue("macro_indicators", key, "current_value", "estimated_not_allowed")
-        reason = _extract_reason(indicator.get("note"))
-        if indicator.get("previous_value") is None and indicator.get("change_rate") is None:
-            _issue("macro_indicators", key, "previous_value", reason or "no_previous_value")
-
-    # Monetary policy: change_from_120d
-    for key, policy in (market_data.get("monetary_policy", {}) or {}).items():
-        curr = policy.get("current_value")
-        if curr in (None, "N/A"):
-            _issue("monetary_policy", key, "current_value", "manual_incomplete")
-            continue
-        if policy.get("is_estimated") and not _estimated_allowed("monetary_policy", key, policy):
-            _issue("monetary_policy", key, "current_value", "estimated_not_allowed")
-        reason = _extract_reason(policy.get("note"))
-        change = policy.get("change_from_120d")
-        if change is None:
-            _issue("monetary_policy", key, "change_from_120d", reason or "no_previous_value")
-
     return issues
 
 
@@ -644,6 +637,60 @@ def _collect_anomaly_keys(market_data: dict, *, category: str, reason: str) -> s
         if item.get("category") == category and item.get("reason") == reason and item.get("key"):
             keys.add(str(item.get("key")))
     return keys
+
+
+def _stock_indices_with_macro_compat(market_data: dict[str, Any], stock_indices: list) -> list:
+    rows = list(stock_indices or [])
+    existing = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field in ("symbol", "ts_code", "code"):
+            existing.add(_stock_index_compat_symbol(row.get(field)))
+    macro = market_data.get("macro_indicators", {}) or {}
+
+    for symbol, name in STOCK_INDEX_COMPAT_KEYS.items():
+        if symbol in existing:
+            continue
+        entry = macro.get(symbol)
+        if not isinstance(entry, dict):
+            entry = next(
+                (
+                    candidate
+                    for raw_key, candidate in macro.items()
+                    if _stock_index_compat_symbol(raw_key) == symbol and isinstance(candidate, dict)
+                ),
+                None,
+            )
+        if not isinstance(entry, dict):
+            continue
+        current = _to_float(entry.get("current_value"))
+        if current is None:
+            continue
+
+        change_5d = entry.get("change_5d")
+        if change_5d is None:
+            change_5d = entry.get("change_rate")
+        if change_5d is None:
+            change_5d = 0.0
+
+        rows.append(
+            {
+                "symbol": symbol,
+                "name": entry.get("indicator_name") or name,
+                "current_price": current,
+                "change_5d": change_5d,
+                "change_120d": entry.get("change_120d") or 0.0,
+                "above_ma50": bool(entry.get("above_ma50", False)),
+                "above_ma200": bool(entry.get("above_ma200", False)),
+                "trend_label": entry.get("trend_label") or entry.get("trend") or "兼容回填",
+                "source": entry.get("source"),
+                "source_url": entry.get("source_url"),
+                "compat_source": "macro_indicators_compat_backfill",
+            }
+        )
+
+    return rows
 
 
 def _write_quality_gate_logs(report_date: str, issues: list[dict]) -> None:
@@ -705,7 +752,10 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             return list(section.values())
         return section or []
 
-    stock_indices = _as_list(market_data.get('stock_indices', []))
+    stock_indices = _stock_indices_with_macro_compat(
+        market_data,
+        _as_list(market_data.get('stock_indices', [])),
+    )
     commodities = _as_list(market_data.get('commodities', []))
     bonds = _as_list(market_data.get('bonds', []))
     forex_list = _as_list(market_data.get('forex', []))
@@ -717,18 +767,34 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
     def _collect_estimated_items() -> list[str]:
         items: list[str] = []
+        def _method_suffix(entry: dict) -> str:
+            method = entry.get("estimation_method") or entry.get("metric_basis")
+            return f"({method})" if method else ""
+
         for bond in bonds:
+            if not isinstance(bond, dict):
+                continue
             if bond.get('is_estimated'):
                 name = bond.get('name') or bond.get('symbol') or '债券'
-                items.append(f"债券:{name}")
+                items.append(f"债券:{name}{_method_suffix(bond)}")
+        for comm in commodities:
+            if not isinstance(comm, dict):
+                continue
+            if comm.get('is_estimated'):
+                name = comm.get('name') or comm.get('symbol') or '商品'
+                items.append(f"商品:{name}{_method_suffix(comm)}")
         for indicator in market_data.get('macro_indicators', {}).values():
+            if not isinstance(indicator, dict):
+                continue
             if indicator.get('is_estimated'):
                 name = indicator.get('indicator_name') or '宏观指标'
-                items.append(f"宏观:{name}")
+                items.append(f"宏观:{name}{_method_suffix(indicator)}")
         for policy in market_data.get('monetary_policy', {}).values():
+            if not isinstance(policy, dict):
+                continue
             if policy.get('is_estimated'):
                 name = policy.get('policy_name') or '货币政策'
-                items.append(f"货币政策:{name}")
+                items.append(f"货币政策:{name}{_method_suffix(policy)}")
         for key, flow in market_data.get('fund_flow', {}).items():
             if isinstance(flow, dict) and flow.get('is_estimated'):
                 name = {
@@ -737,7 +803,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
                     "etf": "ETF资金流",
                     "margin": "融资融券",
                 }.get(key, key)
-                items.append(f"资金流:{name}")
+                items.append(f"资金流:{name}{_method_suffix(flow)}")
         return items
 
     estimated_items = _collect_estimated_items()
@@ -797,11 +863,15 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 |------|----------|-----------|-------------|----------|-----------|----------|
 """
     for idx in stock_indices:
-        above_ma50 = "向上" if idx['above_ma50'] else "向下"
-        above_ma200 = "向上" if idx['above_ma200'] else "向下"
+        current_price = _to_float(idx.get("current_price"))
+        price_text = f"{current_price:.2f}" if current_price is not None else NA_TEXT
+        above_ma50 = "向上" if idx.get('above_ma50', False) else "向下"
+        above_ma200 = "向上" if idx.get('above_ma200', False) else "向下"
         change_5d = _fmt_change_cell(idx.get("change_5d"), digits=2, suffix="%")
         change_120d = _fmt_change_cell(idx.get("change_120d"), digits=1, suffix="%")
-        report += f"| {idx['name']} | {idx['current_price']:.2f} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {idx['trend_label']} |\n"
+        name = idx.get("name") or idx.get("symbol") or "指数"
+        trend_label = idx.get("trend_label") or idx.get("trend") or "未知"
+        report += f"| {name} | {price_text} | {change_5d} | {change_120d} | {above_ma50} | {above_ma200} | {trend_label} |\n"
 
     use_commodity_120d_window = any(
         comm.get("change_120d") is not None
@@ -942,7 +1012,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
 
     # 仅展示真正的宏观指标；滤除误写入宏观区的商品/外汇/债券/指数键
     for key, indicator in market_data['macro_indicators'].items():
-        if key in NON_MACRO_KEYS:
+        if _is_non_macro_key(key):
             continue
         curr = indicator.get('current_value', 'N/A')
         prev = indicator.get('previous_value', 'N/A')
@@ -1122,15 +1192,17 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
     def _flow_label(key: str) -> str:
         return FLOW_LABELS.get(key, key)
 
-    def _format_flow_amount(value: Any) -> str:
+    def _format_flow_amount(value: Any, *, is_estimated: bool = False) -> str:
+        suffix = "(估)" if is_estimated else ""
         if isinstance(value, (int, float)):
-            return f"{value:.2f}"
+            return f"{value:.2f}{suffix}"
         return 'N/A'
 
     for key, flow in market_data['fund_flow'].items():
+        is_flow_estimated = bool(flow.get("is_estimated"))
         report += (
-            f"| {_flow_label(key)} | {_format_flow_amount(flow.get('recent_5d'))} | "
-            f"{_format_flow_amount(flow.get('total_120d'))} | {flow.get('trend', 'N/A')} | "
+            f"| {_flow_label(key)} | {_format_flow_amount(flow.get('recent_5d'), is_estimated=is_flow_estimated)} | "
+            f"{_format_flow_amount(flow.get('total_120d'), is_estimated=is_flow_estimated)} | {flow.get('trend', 'N/A')} | "
             f"{flow.get('source', '-')} | {flow.get('note', '-') or '-'} |\n"
         )
 

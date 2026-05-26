@@ -59,6 +59,89 @@ def test_apply_fund_flow_entry_normalizes_websearch_payload():
     assert "原始5日:约140亿元" in entry["note"]
 
 
+def test_apply_fund_flow_entry_field_retry_evidence_overrides_top_window_claim():
+    entry = {
+        "type": "northbound",
+        "recent_5d": None,
+        "total_120d": None,
+        "trend": "待获取",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "recent_5d": 5.0,
+        "total_120d": 120.0,
+        "trend": "流入",
+        "source": "Stage2 field retry",
+        "source_url": "https://data.eastmoney.com/hsgt/",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_window",
+        "field_retry_evidence": {
+            "recent_5d": {
+                "source_url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                "source_tier": "tier3",
+                "window_evidence": "direct_window",
+                "metric_basis": "net_flow_sum",
+            },
+            "total_120d": {
+                "source_url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                "source_tier": "tier3",
+                "window_evidence": "direct_window",
+                "metric_basis": "net_flow_sum",
+            },
+        },
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "unknown"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_recomputes_nested_retry_source_tier_from_url():
+    entry = {
+        "type": "northbound",
+        "recent_5d": None,
+        "total_120d": None,
+        "trend": "待获取",
+        "source": "占位",
+        "note": "",
+    }
+    payload = {
+        "recent_5d": 5.0,
+        "total_120d": 120.0,
+        "trend": "流入",
+        "source": "Stage2.5 manual",
+        "source_url": "https://data.eastmoney.com/hsgt/",
+        "metric_basis": "net_flow_sum",
+        "field_retry_evidence": {
+            "recent_5d": {
+                "source_url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                "source_tier": "tier2",
+                "window_evidence": "direct_window",
+                "metric_basis": "net_flow_sum",
+            },
+            "total_120d": {
+                "source_url": "https://data.10jqka.com.cn/hgt/hgtb/",
+                "source_tier": "tier2",
+                "window_evidence": "direct_window",
+                "metric_basis": "net_flow_sum",
+            },
+        },
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "unknown"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
 def test_apply_fund_flow_entry_marks_zero_anomaly():
     entry = {"type": "southbound", "recent_5d": None, "total_120d": None, "trend": "待获取", "source": "占位", "note": ""}
     payload = {
@@ -212,6 +295,71 @@ def test_merge_bond_entry_preserves_date_fields(monkeypatch):
     merged = injector._merge_bond_entry(existing, payload, is_manual=True)
     assert merged["date"] == "2026-02-09"
     assert merged["as_of_date"] == "2026-02-09"
+
+
+def test_backfill_cdb_proxy_changes_from_cn10y_for_estimated_spread():
+    market_data = {
+        "bonds": [
+            {
+                "symbol": "CN10Y",
+                "current_yield": 1.7519,
+                "change_5d_bp": -1.39,
+                "change_120d_bp": -8.3,
+            },
+            {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 1.85,
+                "change_5d_bp": None,
+                "change_120d_bp": None,
+                "trend": "未知",
+                "is_estimated": True,
+                "source": "CN10Y plus observed CDB spread",
+                "estimation_method": "CN10Y plus observed CDB spread",
+                "note": "reason=trend_history_insufficient",
+            },
+        ]
+    }
+
+    changed = injector._backfill_cdb_proxy_changes_from_cn10y(market_data)
+
+    cdb = market_data["bonds"][1]
+    assert changed == 2
+    assert cdb["change_5d_bp"] == pytest.approx(-1.39)
+    assert cdb["change_120d_bp"] == pytest.approx(-8.3)
+    assert cdb["trend"] == "平稳"
+    assert "cn10y_proxy_change_basis" in cdb["note"]
+    assert cdb["is_estimated"] is True
+
+
+def test_coerce_stage2_results_preserves_bond_estimation_metadata():
+    raw = {
+        "results": [
+            {
+                "task": {"indicator_key": "CN10Y_CDB"},
+                "extraction": {
+                    "value": 1.85,
+                    "source_url": "https://example.com/cdb",
+                    "is_estimated": True,
+                    "estimation_method": "CN10Y plus observed CDB spread",
+                    "metric_basis": "cn10y_proxy_spread",
+                    "confidence": 0.62,
+                    "note": "CN10Y proxy",
+                },
+                "raw_results": [{"url": "https://example.com/cdb"}],
+            }
+        ]
+    }
+
+    schema = injector._coerce_stage2_results_to_schema(raw)
+
+    cdb = schema["bonds"][0]
+    assert cdb["symbol"] == "CN10Y_CDB"
+    assert cdb["current_yield"] == pytest.approx(1.85)
+    assert cdb["is_estimated"] is True
+    assert cdb["estimation_method"] == "CN10Y plus observed CDB spread"
+    assert cdb["metric_basis"] == "cn10y_proxy_spread"
+    assert cdb["confidence"] == pytest.approx(0.62)
+    assert cdb["note"] == "CN10Y proxy"
 
 
 def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
@@ -677,6 +825,182 @@ def test_apply_macro_entry_skips_non_stale_existing_value():
     assert entry["is_stale"] is False
 
 
+def test_injection_summary_records_skipped_existing(tmp_path: Path, monkeypatch):
+    _stub_trend_writes(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260428"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-04-28", "missing_items": {}},
+            "missing_items": [],
+            "macro_indicators": {
+                "cpi": {
+                    "indicator_name": "CPI同比",
+                    "current_value": 2.1,
+                    "previous_value": 1.9,
+                    "change_rate": 10.5,
+                    "unit": "%",
+                    "date": "2026-04",
+                    "source": "TuShare cn_cpi",
+                    "is_estimated": False,
+                    "is_stale": False,
+                    "stale_reason": None,
+                    "note": "",
+                }
+            },
+            "monetary_policy": {},
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {},
+        },
+    )
+    _write_json(
+        manual_path,
+        {
+            "macro_indicators": {
+                "cpi": {
+                    "indicator_name": "CPI同比",
+                    "current_value": 2.0,
+                    "unit": "%",
+                    "date": "2026-04",
+                    "source": "国家统计局",
+                    "source_url": "https://www.stats.gov.cn/sj/zxfb/",
+                    "is_estimated": False,
+                }
+            }
+        },
+    )
+
+    injector.inject_websearch_results(market_path, manual_path, output_path)
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    summary = output["metadata"]["injection_summary"]
+    assert summary["counts"]["skipped_existing"] == 1
+    assert summary["skipped_existing"] == [
+        {
+            "category": "macro_indicators",
+            "key": "cpi",
+            "reason": "existing_value_present",
+            "existing_value": 2.1,
+            "incoming_value": 2.0,
+        }
+    ]
+
+
+def test_macro_entry_same_value_updates_metadata_without_force():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": 2.1,
+        "previous_value": 1.9,
+        "change_rate": 10.5,
+        "unit": "%",
+        "date": "2026-03",
+        "source": "Stage2 DeepSeek",
+        "source_url": "https://example.com/stage2",
+        "is_estimated": True,
+        "is_stale": False,
+        "stale_reason": None,
+        "note": "旧来源",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.10",
+        "unit": "%",
+        "date": "2026-04",
+        "source": "国家统计局",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/",
+        "is_estimated": False,
+        "note": "官方发布",
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_macro_entry(
+        "cpi",
+        entry,
+        payload,
+        "2026-04-28",
+        summary=summary,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.1)
+    assert entry["source_url"] == "https://www.stats.gov.cn/sj/zxfb/"
+    assert entry["source"] == "websearch_manual(国家统计局)"
+    assert entry["date"] == "2026-04"
+    assert entry["note"] == "官方发布"
+    assert entry["is_estimated"] is False
+    summary_payload = summary.to_dict()
+    assert summary_payload["counts"]["metadata_updated"] == 1
+    assert summary_payload["counts"]["injected"] == 0
+    assert summary_payload["metadata_updated"] == [
+        {
+            "category": "macro_indicators",
+            "key": "cpi",
+            "reason": "same_numeric_value_report_fields_merged",
+            "existing_value": 2.1,
+            "incoming_value": 2.1,
+        }
+    ]
+
+
+def test_macro_entry_force_override_records_values():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": 2.1,
+        "previous_value": 1.9,
+        "change_rate": 10.5,
+        "unit": "%",
+        "date": "2026-03",
+        "source": "Stage2 DeepSeek",
+        "is_estimated": True,
+        "is_stale": False,
+        "stale_reason": None,
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": "2.0",
+        "previous_value": "1.8",
+        "change_rate": "11.1",
+        "unit": "%",
+        "date": "2026-04",
+        "source": "国家统计局",
+        "source_url": "https://www.stats.gov.cn/sj/zxfb/",
+        "is_estimated": False,
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_macro_entry(
+        "cpi",
+        entry,
+        payload,
+        "2026-04-28",
+        force_override=True,
+        summary=summary,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(2.0)
+    summary_payload = summary.to_dict()
+    assert summary_payload["forced_override"] == [
+        {
+            "category": "macro_indicators",
+            "key": "cpi",
+            "reason": "force_override",
+            "existing_value": 2.1,
+            "incoming_value": 2.0,
+        }
+    ]
+
+
 def test_apply_macro_entry_overrides_stale_and_clears_flag():
     entry = {
         "indicator_name": "CPI同比",
@@ -801,6 +1125,764 @@ def _has_quality_blocker(output, category, key, reason="estimated_not_allowed"):
         "key": key,
         "reason": reason,
     } in output["metadata"].get("quality_blockers", [])
+
+
+def test_apply_macro_entry_same_value_merges_compare_fields():
+    entry = {
+        "indicator_name": "industrial",
+        "current_value": 4.1,
+        "previous_value": None,
+        "change_rate": None,
+        "value_type": None,
+    }
+    payload = {
+        "current_value": 4.1,
+        "previous_value": 5.7,
+        "change_rate": -28.07,
+        "value_type": "yoy_month",
+        "yoy_month": 4.1,
+        "source": "manual",
+        "source_url": "https://www.stats.gov.cn/industrial",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_macro_entry(
+        "industrial",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(4.1)
+    assert entry["previous_value"] == pytest.approx(5.7)
+    assert entry["change_rate"] == pytest.approx(-28.07)
+    assert entry["value_type"] == "yoy_month"
+    assert entry["yoy_month"] == pytest.approx(4.1)
+    assert entry["source_url"] == "https://www.stats.gov.cn/industrial"
+
+
+def test_apply_monetary_entry_same_value_merges_change_and_non_estimated_flag():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 6.3,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_same_value_preserves_existing_official_source():
+    official_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    entry = {
+        "policy_name": "reverse_repo",
+        "current_value": 1.4,
+        "change_from_120d": None,
+        "source": "structured",
+        "source_url": official_url,
+        "note": "structured_provider:official_china official_source_period_unit_match",
+        "is_estimated": False,
+    }
+    payload = {
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "source": "TrendForce reverse repo chart",
+        "source_url": "https://datatrack.trendforce.com/Chart/content/3912/china-pboc-interest-rate-7-day-reverse-repo-rate",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reverse_repo",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["source_url"] == official_url
+    assert entry["source"] == "structured"
+    assert "official_source_period_unit_match" in entry["note"]
+
+
+def test_apply_monetary_entry_same_value_preserves_official_non_estimated_status():
+    official_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    entry = {
+        "policy_name": "reverse_repo",
+        "current_value": 1.4,
+        "change_from_120d": None,
+        "source": "structured",
+        "source_url": official_url,
+        "note": "structured_provider:official_china official_source_period_unit_match",
+        "is_estimated": False,
+    }
+    payload = {
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "source": "non official mirror",
+        "source_url": "https://example.com/reverse-repo",
+        "is_estimated": True,
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reverse_repo",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["source_url"] == official_url
+    assert entry["is_estimated"] is False
+
+
+def test_apply_monetary_entry_stale_override_preserves_official_source_and_status():
+    official_url = (
+        "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/"
+        "125475/2026052208514823570/index.html"
+    )
+    entry = {
+        "policy_name": "reverse_repo",
+        "current_value": 1.4,
+        "change_from_120d": None,
+        "source": "structured",
+        "source_url": official_url,
+        "note": "structured_provider:official_china official_source_period_unit_match",
+        "is_estimated": False,
+        "is_stale": True,
+        "stale_reason": "missing_compare_values",
+    }
+    payload = {
+        "current_value": 1.4,
+        "change_from_120d": 0.0,
+        "source": "non official mirror",
+        "source_url": "https://example.com/reverse-repo",
+        "note": "third-party same value",
+        "is_estimated": True,
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reverse_repo",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        override_stale=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["source_url"] == official_url
+    assert entry["source"] == "structured"
+    assert "official_source_period_unit_match" in entry["note"]
+    assert entry["is_estimated"] is False
+    assert entry["is_stale"] is False
+
+
+def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manual_value():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_replaces_nonofficial_reserve_ratio_compare_gap():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": False,
+        "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+        "note": "structured_provider:trading_economics 缺少发布机构(中国人民银行)",
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-05-22",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_source_url_alias():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "sourceUrl": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_url_alias():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_http_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "http://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_chinamoney_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.chinamoney.com.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_conflicting_note_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "note": "conflict https://evil.com/x",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_multiple_text_urls():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "source": "primary https://www.pbc.gov.cn/source",
+        "note": "secondary https://www.pbc.gov.cn/note",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+
+
+def test_apply_monetary_entry_trusted_reserve_ratio_no_override_stale_preserves_stale_flag():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "rrr_type": "weighted",
+        "is_estimated": True,
+        "is_stale": True,
+        "stale_reason": "old",
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        override_stale=False,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is False
+    assert entry["is_stale"] is True
+    assert entry["stale_reason"] == "old"
+
+
+def test_apply_monetary_entry_trusted_reserve_ratio_rrr_type_conflict_keeps_estimated():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "rrr_type": "statutory",
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["rrr_type"] == "statutory"
+    assert entry["is_estimated"] is True
+
+
+def test_apply_monetary_entry_stale_rrr_type_conflict_keeps_estimated_and_stale():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "rrr_type": "statutory",
+        "is_estimated": True,
+        "is_stale": True,
+        "stale_reason": "old",
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["rrr_type"] == "statutory"
+    assert entry["is_estimated"] is True
+    assert entry["is_stale"] is True
+    assert entry["stale_reason"] == "old"
+
+
+def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_without_explicit_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 7.5,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source": "PBoC manual evidence https://www.pbc.gov.cn/rrr",
+        "note": "official note https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is False
+    assert entry["current_value"] == pytest.approx(7.5)
+    assert entry["change_from_120d"] is None
+    assert entry["is_estimated"] is True
+    assert "rrr_type" not in entry
+    assert "source_url" not in entry
+
+
+def test_apply_monetary_entry_same_value_does_not_clear_estimated_without_explicit_source_url():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 6.3,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source": "PBoC manual evidence https://www.pbc.gov.cn/rrr",
+        "note": "official note https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is True
+    assert entry["rrr_type"] == "weighted"
+
+
+def test_apply_monetary_entry_non_manual_same_value_does_not_clear_estimated():
+    entry = {
+        "policy_name": "reserve_ratio",
+        "current_value": 6.3,
+        "change_from_120d": None,
+        "is_estimated": True,
+    }
+    payload = {
+        "current_value": 6.3,
+        "change_from_120d": 0.0,
+        "source_url": "https://www.pbc.gov.cn/rrr",
+        "is_estimated": False,
+        "rrr_type": "weighted",
+    }
+
+    updated = injector._apply_monetary_entry(
+        "reserve_ratio",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=False,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["current_value"] == pytest.approx(6.3)
+    assert entry["change_from_120d"] == pytest.approx(0.0)
+    assert entry["is_estimated"] is True
+    assert entry["rrr_type"] == "weighted"
+    assert entry["source_url"] == "https://www.pbc.gov.cn/rrr"
+
+
+def test_apply_macro_entry_same_value_no_override_stale_preserves_stale_flag():
+    entry = {
+        "indicator_name": "industrial",
+        "current_value": 4.1,
+        "previous_value": None,
+        "change_rate": None,
+        "value_type": None,
+        "is_stale": True,
+        "stale_reason": "monthly data stale",
+    }
+    payload = {
+        "current_value": 4.1,
+        "previous_value": 5.7,
+        "change_rate": -28.07,
+        "value_type": "yoy_month",
+        "yoy_month": 4.1,
+        "source": "manual",
+        "source_url": "https://www.stats.gov.cn/industrial",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_macro_entry(
+        "industrial",
+        entry,
+        payload,
+        "2026-04-30",
+        is_manual=True,
+        override_stale=False,
+        trend_history_base_dir=None,
+    )
+
+    assert updated is True
+    assert entry["previous_value"] == pytest.approx(5.7)
+    assert entry["change_rate"] == pytest.approx(-28.07)
+    assert entry["is_stale"] is True
+    assert entry["stale_reason"] == "monthly data stale"
+
+
+def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
+    market_data = {
+        "metadata": {"date": "2026-04-30"},
+        "missing_items": [],
+        "macro_indicators": {
+            "industrial": {
+                "indicator_name": "industrial",
+                "current_value": 4.1,
+                "previous_value": None,
+                "change_rate": None,
+                "value_type": None,
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {
+            "reserve_ratio": {
+                "policy_name": "reserve_ratio",
+                "current_value": 6.3,
+                "change_from_120d": None,
+                "is_estimated": True,
+            }
+        },
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    injector._apply_pipeline_quality_state(market_data)
+
+    assert _has_quality_blocker(market_data, "macro_indicators", "industrial", "missing_compare_values")
+    assert _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio", "missing_compare_values")
+    assert _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio")
+
+    injector._apply_macro_entry(
+        "industrial",
+        market_data["macro_indicators"]["industrial"],
+        {
+            "current_value": 4.1,
+            "previous_value": 5.7,
+            "change_rate": -28.07,
+            "value_type": "yoy_month",
+            "yoy_month": 4.1,
+            "source": "manual",
+            "source_url": "https://www.stats.gov.cn/industrial",
+            "is_estimated": False,
+        },
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+    injector._apply_monetary_entry(
+        "reserve_ratio",
+        market_data["monetary_policy"]["reserve_ratio"],
+        {
+            "current_value": 6.3,
+            "change_from_120d": 0.0,
+            "source_url": "https://www.pbc.gov.cn/rrr",
+            "is_estimated": False,
+            "rrr_type": "weighted",
+        },
+        "2026-04-30",
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    injector._apply_pipeline_quality_state(market_data)
+
+    assert not _has_quality_blocker(market_data, "macro_indicators", "industrial", "missing_compare_values")
+    assert not _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio", "missing_compare_values")
+    assert not _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio")
 
 
 @pytest.mark.parametrize(
@@ -1422,6 +2504,17 @@ def test_manual_official_helper_malformed_http_token_blocks_issuer_fallback():
     ) is False
 
 
+def test_manual_official_helper_source_url_text_does_not_count_as_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "policy_name": "MLF",
+            "source": "https://www.pbc.gov.cn/official",
+        },
+    ) is False
+
+
 def test_manual_official_helper_trusted_explicit_source_url_is_official():
     assert injector._is_manual_official_value(
         "monetary_policy",
@@ -1432,6 +2525,17 @@ def test_manual_official_helper_trusted_explicit_source_url_is_official():
             "source": "PBOC official",
         },
     ) is True
+
+
+def test_manual_official_helper_explicit_trusted_url_with_conflicting_note_url_blocks_official():
+    assert injector._is_manual_official_value(
+        "monetary_policy",
+        "mlf",
+        {
+            "source_url": "https://www.pbc.gov.cn/official",
+            "note": "conflict https://evil.com/x",
+        },
+    ) is False
 
 
 def test_manual_official_helper_bcom_decimal_note_does_not_count_as_url_evidence():
@@ -1763,11 +2867,15 @@ def test_manual_etf_eastmoney_estimate_stays_estimated_and_blocked(tmp_path: Pat
     entry = output["fund_flow"]["etf"]
     assert entry["is_estimated"] is True
     assert "manual_official_not_estimated" not in str(entry.get("note") or "")
-    assert {
-        "category": "fund_flow",
-        "key": "etf",
-        "reason": "estimated_not_allowed",
-    } in output["metadata"].get("quality_blockers", [])
+    blockers = output["metadata"].get("quality_blockers", [])
+    etf_blocker = next(
+        item
+        for item in blockers
+        if item.get("category") == "fund_flow"
+        and item.get("key") == "etf"
+        and item.get("reason") == "estimated_not_allowed"
+    )
+    assert etf_blocker["details"]["metric_basis"] == "estimated_net_flow"
 
 
 def test_stage25_writes_unified_quality_state_files(tmp_path: Path, monkeypatch):
@@ -1927,6 +3035,376 @@ def test_stage25_preserves_manual_source_url_and_fund_flow_metric_basis(tmp_path
     assert output["commodities"][0]["source_url"] == "https://example.com/gold"
     assert output["fund_flow"]["northbound"]["source_url"] == "https://example.com/northbound"
     assert output["fund_flow"]["northbound"]["metric_basis"] == "net_flow_sum"
+
+
+def test_apply_fund_flow_entry_forces_news_summary_estimated_when_marked_false():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": -50.0,
+        "total_120d": -9000.0,
+        "trend": "流出",
+        "source": "新浪财经 ETF季度报告 2026Q1 全市场 ETF 净赎回 9211 亿元",
+        "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+        "metric_basis": "news_net_flow",
+        "window_evidence": "news_summary",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload)
+
+    assert updated is True
+    assert entry["recent_5d"] == -50.0
+    assert entry["total_120d"] == -9000.0
+    assert entry["source_tier"] == "tier3"
+    assert entry["window_evidence"] == "news_summary"
+    assert entry["metric_basis"] == "news_net_flow"
+    assert entry["is_estimated"] is True
+    assert entry["estimation_method"] == "fund_flow_manual_window_not_direct"
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_fund_flow_forced_estimated_records_summary_details():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": -50.0,
+        "total_120d": -9000.0,
+        "trend": "流出",
+        "source": "新浪财经 ETF 单日新闻外推全市场资金流",
+        "source_url": "https://finance.sina.com.cn/news.html",
+        "metric_basis": "news_net_flow",
+        "is_estimated": False,
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
+
+    assert updated is True
+    assert entry["is_estimated"] is True
+    item = summary.to_dict()["fund_flow_forced_estimated"][0]
+    assert item["category"] == "fund_flow"
+    assert item["key"] == "etf"
+    assert item["source_tier"] == "tier3"
+    assert item["window_evidence"] == "news_summary"
+    assert item["metric_basis"] == "news_net_flow"
+    assert item["reason"] == "fund_flow_estimated_gate"
+
+
+def test_fund_flow_forced_estimated_records_summary_when_estimate_flag_missing():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": -50.0,
+        "total_120d": -9000.0,
+        "trend": "流出",
+        "source": "新浪财经 ETF 单日新闻外推全市场资金流",
+        "source_url": "https://finance.sina.com.cn/news.html",
+        "metric_basis": "news_net_flow",
+    }
+    summary = injector.InjectionSummary()
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
+
+    assert updated is True
+    assert entry["is_estimated"] is True
+    item = summary.to_dict()["fund_flow_forced_estimated"][0]
+    assert item["key"] == "etf"
+    assert item["source_tier"] == "tier3"
+    assert item["window_evidence"] == "news_summary"
+    assert item["metric_basis"] == "news_net_flow"
+
+
+def test_stage2_results_fund_flow_forced_estimated_summary_details(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run_dir = tmp_path / "data" / "runs" / "20260521"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    websearch_path = run_dir / "websearch_results_auto.json"
+    output_path = run_dir / "market_data_complete.json"
+    _write_json(
+        market_path,
+        {
+            "metadata": {"date": "2026-05-21", "missing_items": {}},
+            "missing_items": [],
+            "macro_indicators": {},
+            "monetary_policy": {},
+            "bonds": [],
+            "forex": [],
+            "commodities": [],
+            "stock_indices": [],
+            "fund_flow": {
+                "etf": {
+                    "type": "etf",
+                    "recent_5d": None,
+                    "total_120d": None,
+                    "trend": "待获取",
+                    "source": "placeholder",
+                }
+            },
+        },
+    )
+    _write_json(
+        websearch_path,
+        {
+            "results": [
+                {
+                    "task": {"indicator_key": "etf"},
+                    "extraction": {
+                        "recent_5d": -50.0,
+                        "total_120d": -9000.0,
+                        "trend": "outflow",
+                        "source_url": "https://finance.sina.com.cn/news.html",
+                        "note": "ETF 单日新闻外推全市场资金流",
+                        "is_estimated": False,
+                        "metric_basis": "news_net_flow",
+                        "window_evidence": "news_summary",
+                    },
+                    "raw_results": [{"url": "https://finance.sina.com.cn/news.html"}],
+                }
+            ]
+        },
+    )
+
+    injector.inject_websearch_data(
+        market_path,
+        websearch_path,
+        output_path,
+        backfill_trend=False,
+        disable_trend_history_write=True,
+    )
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    forced = output["metadata"]["injection_summary"]["fund_flow_forced_estimated"]
+    assert forced == [
+        {
+            "category": "fund_flow",
+            "key": "etf",
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "metric_basis": "news_net_flow",
+            "reason": "fund_flow_estimated_gate",
+        }
+    ]
+
+
+def test_apply_fund_flow_entry_keeps_structured_direct_window_not_estimated():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富 沪深港通日频净买入序列求和",
+        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["recent_5d"] == 85.6
+    assert entry["total_120d"] == 1250.0
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is False
+    assert "fund_flow_estimated_gate" not in entry["note"]
+
+
+def test_apply_fund_flow_entry_rejects_spoofed_source_tier_for_gate():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "手工标记为东方财富日频序列",
+        "source_url": "https://example.com/fund-flow",
+        "source_tier": "tier2",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "unknown"
+    assert entry["claimed_source_tier"] == "tier2"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_rejects_non_structured_eastmoney_page_for_gate():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富财经新闻描述沪深港通资金流",
+        "source_url": "https://finance.eastmoney.com/a/202605191234567.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "unknown"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_rejects_non_structured_fund_eastmoney_page_for_gate():
+    entry = {"type": "etf", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 63.2,
+        "total_120d": 1500.0,
+        "trend": "流入",
+        "source": "东方财富基金资讯文章描述ETF资金流",
+        "source_url": "https://fund.eastmoney.com/a/202605191234567.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "etf", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "unknown"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is True
+    assert "fund_flow_estimated_gate" in entry["note"]
+
+
+def test_apply_fund_flow_entry_normalizes_trusted_direct_window_estimated_true_to_false():
+    entry = {"type": "northbound", "recent_5d": None, "total_120d": None}
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富 沪深港通日频净买入序列求和",
+        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": True,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert entry["source_tier"] == "tier2"
+    assert entry["window_evidence"] == "direct_daily_series"
+    assert entry["metric_basis"] == "net_flow_sum"
+    assert entry["is_estimated"] is False
+    assert "fund_flow_estimated_gate" not in entry["note"]
+
+
+def test_apply_fund_flow_entry_clears_stale_claimed_source_tier_when_absent():
+    entry = {
+        "type": "northbound",
+        "recent_5d": None,
+        "total_120d": None,
+        "claimed_source_tier": "tier2",
+    }
+    payload = {
+        "recent_5d": 85.6,
+        "total_120d": 1250.0,
+        "trend": "流入",
+        "source": "东方财富 沪深港通日频净买入序列求和",
+        "source_url": "https://data.eastmoney.com/hsgt/hsgtV2.html",
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_daily_series",
+        "is_estimated": False,
+    }
+
+    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+
+    assert updated is True
+    assert "claimed_source_tier" not in entry
+    assert entry["source_tier"] == "tier2"
+    assert entry["is_estimated"] is False
+
+
+def test_merge_commodity_entry_recomputes_daily_change_from_previous_price():
+    payload = {
+        "symbol": "BZ=F",
+        "current_price": 65.0,
+        "previous_price": 70.0,
+        "source_url": "https://example.com/brent",
+    }
+
+    merged = injector._merge_commodity_entry(
+        {},
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(-7.1429)
+    assert merged["daily_change_base_price"] == 70.0
+    assert merged["daily_change_basis"] == "manual_previous_price"
+
+    existing = {
+        "symbol": "BZ=F",
+        "current_price": 68.0,
+        "daily_change": 3.47,
+    }
+    merged_existing = injector._merge_commodity_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged_existing["daily_change"] == pytest.approx(-7.1429)
+    assert merged_existing["daily_change_base_price"] == 70.0
+    assert merged_existing["daily_change_basis"] == "manual_previous_price"
+
+
+def test_merge_commodity_entry_respects_daily_change_over_previous_value():
+    payload = {
+        "symbol": "BZ=F",
+        "current_price": 65.0,
+        "previous_value": 70.0,
+        "daily_change": -5.0,
+        "source_url": "https://example.com/brent",
+    }
+
+    merged = injector._merge_commodity_entry(
+        {"symbol": "BZ=F", "current_price": 68.0, "daily_change": 3.47},
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["current_price"] == pytest.approx(65.0)
+    assert merged["daily_change"] == pytest.approx(-5.0)
+    assert "daily_change_base_price" not in merged
+
+
+def test_merge_commodity_entry_zero_current_price_does_not_fallback_to_existing():
+    payload = {
+        "symbol": "BZ=F",
+        "current_price": 0.0,
+        "previous_price": 70.0,
+        "source_url": "https://example.com/brent",
+    }
+
+    merged = injector._merge_commodity_entry(
+        {"symbol": "BZ=F", "current_price": 68.0, "daily_change": 3.47},
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["current_price"] == pytest.approx(0.0)
+    assert merged["daily_change"] == pytest.approx(-100.0)
+    assert merged["daily_change_base_price"] == 70.0
 
 
 def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monkeypatch):

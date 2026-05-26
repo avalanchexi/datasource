@@ -4,11 +4,88 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+_DATASOURCE_PREFLIGHT_SOURCED=0
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  _DATASOURCE_PREFLIGHT_SOURCED=1
+fi
+
+_collect_active_proxy_lines() {
+  for key in http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy; do
+    value="${!key-}"
+    if [ -n "$value" ]; then
+      printf '%s=%s\n' "$key" "$value"
+    fi
+  done
+}
+
+DATASOURCE_PREFLIGHT_ORIGINAL_ACTIVE_PROXY_LINES="$(_collect_active_proxy_lines)"
+
 # shellcheck disable=SC1091
 source scripts/runtime_env.sh
 
+DATASOURCE_NETWORK_MODE="${DATASOURCE_NETWORK_MODE:-direct}"
 PREFLIGHT_CONNECT_TIMEOUT="${PREFLIGHT_CONNECT_TIMEOUT:-10}"
 PREFLIGHT_MAX_TIME="${PREFLIGHT_MAX_TIME:-15}"
+
+_active_proxy_lines() {
+  _collect_active_proxy_lines
+}
+
+_network_mode_proxy_lines() {
+  if [ "${DATASOURCE_NETWORK_MODE:-direct}" = "proxy" ] && [ -n "${DATASOURCE_PREFLIGHT_ORIGINAL_ACTIVE_PROXY_LINES:-}" ]; then
+    printf '%s\n' "$DATASOURCE_PREFLIGHT_ORIGINAL_ACTIVE_PROXY_LINES"
+  else
+    _active_proxy_lines
+  fi
+}
+
+_report_proxy_state() {
+  echo "[OK] Network mode: ${DATASOURCE_NETWORK_MODE}"
+  proxy_lines="$(_network_mode_proxy_lines)"
+  if [ -n "$proxy_lines" ]; then
+    printf '%s\n' "$proxy_lines"
+  else
+    echo "Proxy cleared"
+  fi
+}
+
+_check_proxy_mode() {
+  if [ "${DATASOURCE_NETWORK_MODE:-direct}" != "proxy" ]; then
+    return 0
+  fi
+
+  has_socks_proxy=0
+  while IFS= read -r proxy_line; do
+    [ -n "$proxy_line" ] || continue
+    proxy_value="${proxy_line#*=}"
+    case "$proxy_value" in
+      [sS][oO][cC][kK][sS]*://*)
+        has_socks_proxy=1
+        break
+        ;;
+    esac
+  done <<EOF
+$(_network_mode_proxy_lines)
+EOF
+
+  if [ "$has_socks_proxy" != "1" ]; then
+    return 0
+  fi
+
+  if "$DATASOURCE_PYTHON" - <<'PY' >/dev/null 2>&1
+import socksio
+PY
+  then
+    return 0
+  fi
+
+  echo "[FAIL] SOCKS proxy requires socksio/httpx[socks]. Install SOCKS support or use DATASOURCE_NETWORK_MODE=direct."
+  return 1
+}
+
+if [ "${DATASOURCE_PREFLIGHT_SOURCE_ONLY:-}" = "1" ] && [ "$_DATASOURCE_PREFLIGHT_SOURCED" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 for k in TAVILY_API_KEY DEEPSEEK_API_KEY TUSHARE_TOKEN; do
   v=${!k-}
@@ -88,6 +165,9 @@ TAVILY_URL="https://api.tavily.com"
 DEEPSEEK_URL="${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
 TUSHARE_URL="https://api.tushare.pro"
 
+_report_proxy_state
+_check_proxy_mode
+
 _check_dns "$(_url_host "$TAVILY_URL")"
 _check_dns "$(_url_host "$DEEPSEEK_URL")"
 _check_dns "$(_url_host "$TUSHARE_URL")"
@@ -100,4 +180,3 @@ for k in TAVILY_API_KEY DEEPSEEK_API_KEY TUSHARE_TOKEN; do
   echo "[OK] $k present (${#k} name chars)"
 done
 echo "[OK] Python: $DATASOURCE_PYTHON"
-env | grep -Ei '^(http_proxy|https_proxy|HTTP_PROXY|HTTPS_PROXY)=' || echo "Proxy cleared"

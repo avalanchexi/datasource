@@ -42,6 +42,9 @@ async def run_tasks_lc(
         _validate_general_extraction,
         _update_missing_items,
         _apply_extraction,
+        _augment_extraction_metadata,
+        _post_writeback_manual_reason,
+        _mark_post_writeback_manual_required,
         _filter_by_domain,
         _prefer_fresh_snippets,
     )
@@ -198,12 +201,17 @@ async def run_tasks_lc(
         search_result = res.get("search_result") or {}
         manual_required = False
         hybrid_note = ""
+        raw_results = res.get("raw_results", [])
+
+        _augment_extraction_metadata(extraction, task, raw_results)
 
         if is_fund_flow and (extraction.get("confidence", 0.0) < 0.5 or extraction.get("value") is None):
             manual_required = True
 
         if is_fund_flow:
-            val_adj, unit_manual, note_append = _validate_fund_flow_extraction(extraction)
+            val_adj, unit_manual, note_append = _validate_fund_flow_extraction(
+                extraction, indicator_key=task["indicator_key"]
+            )
             extraction["value"] = val_adj
             combined_note = " ".join(s for s in [extraction.get("note", ""), hybrid_note, note_append] if s).strip()
             extraction["note"] = combined_note or None
@@ -244,8 +252,19 @@ async def run_tasks_lc(
             failures.append(task_record)
         else:
             _apply_extraction(market_payload, task, extraction)
-            _update_missing_items(market_payload, task["indicator_key"])
-            completed.append(task_record)
+            post_writeback_reason = _post_writeback_manual_reason(market_payload, task["indicator_key"])
+            if post_writeback_reason:
+                _mark_post_writeback_manual_required(
+                    market_payload,
+                    task_record,
+                    extraction,
+                    task["indicator_key"],
+                    post_writeback_reason,
+                )
+                failures.append(task_record)
+            else:
+                _update_missing_items(market_payload, task["indicator_key"])
+                completed.append(task_record)
 
         _append_task_log(task_record)
         websearch_results.append(
@@ -253,7 +272,9 @@ async def run_tasks_lc(
                 "task": task,
                 "extraction": extraction,
                 "extraction_backend": "langchain",
-                "raw_results": res.get("raw_results", []),
+                "raw_results": raw_results,
+                "manual_required": task_record.get("manual_required"),
+                "manual_reason": task_record.get("manual_reason") or extraction.get("manual_reason"),
             }
         )
 

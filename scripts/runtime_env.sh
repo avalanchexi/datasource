@@ -17,6 +17,23 @@ esac
 VENV_ACTIVATE=""
 VENV_PYTHON=""
 DATASOURCE_SELECTED_PYTHON=""
+_datasource_network_mode_is_proxy() {
+  [ "$(printf '%s' "${DATASOURCE_NETWORK_MODE:-direct}" | tr '[:upper:]' '[:lower:]')" = "proxy" ]
+}
+
+_datasource_clear_active_proxies() {
+  if _datasource_network_mode_is_proxy; then
+    return 0
+  fi
+  unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy
+}
+
+if [ -f ".venv/.datasource_bootstrap_failed" ]; then
+  echo "[ERROR] .venv has a failed bootstrap stamp: .venv/.datasource_bootstrap_failed"
+  echo "[ERROR] Fix the cause, then remove .venv/.datasource_bootstrap_failed, or remove/recreate .venv"
+  return 1 2>/dev/null || exit 1
+fi
+
 if [ -f ".venv/bin/activate" ]; then
   VENV_ACTIVATE=".venv/bin/activate"
   VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/bin/python"
@@ -28,7 +45,25 @@ elif [ "$IS_WINDOWS_NATIVE_BASH" = "1" ] && [ -f ".venv/Scripts/activate" ]; the
     VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/Scripts/python"
   fi
 elif [ -d ".venv" ]; then
-  if [ -n "$(find ".venv" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+  if [ -z "$(find ".venv" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]; then
+    if [ "${DATASOURCE_AUTO_VENV:-}" = "1" ]; then
+      if [ ! -r "scripts/bootstrap_venv.sh" ]; then
+        echo "[ERROR] DATASOURCE_AUTO_VENV=1 requested but scripts/bootstrap_venv.sh is not readable"
+        return 1 2>/dev/null || exit 1
+      fi
+      _datasource_clear_active_proxies
+      if ! bash scripts/bootstrap_venv.sh; then
+        return 1 2>/dev/null || exit 1
+      fi
+      if [ -f ".venv/bin/activate" ]; then
+        VENV_ACTIVATE=".venv/bin/activate"
+        VENV_PYTHON="$DATASOURCE_RUNTIME_DIR/.venv/bin/python"
+      else
+        echo "[ERROR] DATASOURCE_AUTO_VENV=1 bootstrap did not create .venv/bin/activate"
+        return 1 2>/dev/null || exit 1
+      fi
+    fi
+  else
     echo "[ERROR] .venv exists but no usable activate script found"
     echo "[ERROR] Recreate it with: python -m venv .venv"
     return 1 2>/dev/null || exit 1
@@ -56,6 +91,7 @@ elif [ "${ALLOW_SYSTEM_PYTHON:-}" = "1" ]; then
   fi
 else
   echo "[ERROR] Missing virtual environment. Run: python -m venv .venv"
+  echo "[ERROR] To auto-bootstrap an empty .venv in Ubuntu/Claude Code, set DATASOURCE_AUTO_VENV=1"
   echo "[ERROR] To use current system Python explicitly, set ALLOW_SYSTEM_PYTHON=1"
   return 1 2>/dev/null || exit 1
 fi
@@ -77,7 +113,7 @@ fi
 DATASOURCE_PYTHON="$DATASOURCE_SELECTED_PYTHON"
 
 # Keep no_proxy/NO_PROXY, clear active proxy variables for direct connectivity.
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+_datasource_clear_active_proxies
 
 EXISTING_PY_PATH="${PYTHONPATH:-}"
 if [ -n "$EXISTING_PY_PATH" ]; then
@@ -95,3 +131,5 @@ export PYTHONPATH
 
 unset DATASOURCE_SELECTED_PYTHON
 unset DATASOURCE_ALLEXPORT_WAS_SET
+unset -f _datasource_clear_active_proxies
+unset -f _datasource_network_mode_is_proxy

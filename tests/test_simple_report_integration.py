@@ -344,6 +344,7 @@ def test_quality_gate_does_not_red_flag_estimated_allowlist_items():
         },
     }
     market = _base_market()
+    market["metadata"]["date"] = "2026-05-08"
     market["bonds"] = [
         {
             "symbol": "CN10Y_CDB",
@@ -371,6 +372,116 @@ def test_quality_gate_does_not_red_flag_estimated_allowlist_items():
     issues = simple_report._collect_quality_issues(market, policy_rules=rules)
 
     assert not issues
+
+
+def test_report_quality_section_uses_unified_state_for_manual_source_url(tmp_path: Path):
+    market = _base_market()
+    market["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "name": "COMEX Gold",
+            "current_price": 2650.5,
+            "unit": "$/oz",
+            "source": "websearch_manual",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_date": market["metadata"]["date"]},
+        "fallback_used": False,
+        "pending_websearch": [],
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "commodities.GC=F" in text
+    assert "缺失（缺少来源URL）" in text
+
+
+def test_report_quality_section_flags_missing_bond_120d_change(tmp_path: Path):
+    market = _base_market()
+    market["bonds"] = [
+        {
+            "symbol": "US10Y",
+            "name": "美国10年期国债",
+            "current_yield": 4.25,
+            "change_5d_bp": -1.2,
+            "source_url": "https://example.com/us10y",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_date": market["metadata"]["date"]},
+        "fallback_used": False,
+        "pending_websearch": [],
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "bonds.US10Y" in text
+    assert "change_120d_bp 缺失（缺少对比值）" in text
+
+
+def test_report_shows_bdi_estimated_date_instead_of_pending_websearch(tmp_path: Path):
+    market = _base_market()
+    market["metadata"]["date"] = "2026-05-19"
+    market["macro_indicators"] = {
+        "bdi": {
+            "indicator_name": "BDI",
+            "current_value": 2017.0,
+            "previous_value": 2031.0,
+            "change_rate": -0.69,
+            "unit": "points",
+            "date": "2026-05-18",
+            "source": "websearch_manual(TradingEconomics Baltic Dry Index)",
+            "source_url": "https://tradingeconomics.com/commodity/baltic",
+            "is_estimated": True,
+        }
+    }
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.725,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| BDI | 2017.0points(估) | 2031.0points(估) | -0.7points(估) | points | 2026-05-18 |" in text
+    assert "N/A（待 WebSearch）" not in text
 
 
 def test_commodity_daily_change_spike_is_hidden_in_report(tmp_path: Path):
@@ -445,6 +556,7 @@ def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
 
     assert "估计值提醒" in text
     assert "资金流:ETF资金流" in text
+    assert "| ETF资金流 | 85.60(估) | 1250.00(估) | 流入 | fallback estimate | estimated fallback pending official source |" in text
 
 
 def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
@@ -480,3 +592,162 @@ def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
     text = out.read_text(encoding="utf-8")
 
     assert "| 美元指数（TuShare USDOLLAR.FXCM proxy） | 105.2300 | +0.12% | +1.34% | 上行 |" in text
+
+
+def test_report_backfills_stock_indices_from_macro_compat(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["stock_indices"] = []
+    market["macro_indicators"] = {
+        "000300": {
+            "indicator_name": "沪深300",
+            "current_value": 4685.3,
+            "previous_value": 4600.0,
+            "change_rate": 1.85,
+            "unit": "点",
+            "source": "manual",
+            "source_url": "https://example.com/000300",
+        }
+    }
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| 沪深300 | 4685.30 |" in text
+
+
+def test_report_deduplicates_stock_indices_with_exchange_suffix(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["stock_indices"] = [
+        {
+            "symbol": "000001.SH",
+            "name": "上证指数",
+            "current_price": 3200.0,
+            "change_5d": 0.5,
+            "change_120d": 3.2,
+            "above_ma50": True,
+            "above_ma200": True,
+            "trend_label": "上行",
+        }
+    ]
+    market["macro_indicators"] = {
+        "000001": {
+            "indicator_name": "上证指数",
+            "current_value": 4000.0,
+            "change_rate": 9.9,
+            "unit": "点",
+        }
+    }
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| 上证指数 | 3200.00 |" in text
+    assert "| 上证指数 | 4000.00 |" not in text
+
+
+def test_report_filters_suffixed_index_keys_from_macro_table(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["macro_indicators"] = {
+        "000300.SH": {
+            "indicator_name": "沪深300",
+            "current_value": 4685.3,
+            "previous_value": 4600.0,
+            "change_rate": 1.85,
+            "unit": "点",
+        }
+    }
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert text.count("| 沪深300 |") == 1
+
+
+def test_report_estimated_note_includes_category_and_method(tmp_path: Path):
+    market = _base_market()
+    market["metadata"] = {"date": "2026-05-21", "data_completeness": 1.0}
+    market["commodities"] = [
+        {
+            "symbol": "BCOM",
+            "name": "彭博商品指数",
+            "current_price": 108.5,
+            "unit": "点",
+            "daily_change": 0.1,
+            "change_120d": 2.0,
+            "trend": "上行",
+            "is_estimated": True,
+            "estimation_method": "manual_estimated",
+        }
+    ]
+    pring = {
+        "final_stage": "Stage 2",
+        "confidence": 0.8,
+        "recommendation": "中性",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "商品:彭博商品指数(manual_estimated)" in text

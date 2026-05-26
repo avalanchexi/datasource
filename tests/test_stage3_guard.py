@@ -102,6 +102,104 @@ def test_require_data_completeness_does_not_skip_fund_flow_missing_source_url():
     assert "missing_source_url" in str(exc.value)
 
 
+def test_stage3_skip_fund_flow_check_keeps_non_fund_flow_blockers():
+    payload = {
+        "metadata": {
+            "date": "2026-05-25",
+            "data_completeness": 0.95,
+            "ai_websearch_enhanced": True,
+        },
+        "macro_indicators": {
+            "industrial": {
+                "current_value": 4.1,
+                "source_url": "https://example.com/industrial",
+            }
+        },
+        "fund_flow": {
+            "etf": {"recent_5d": None, "total_120d": None},
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(
+            payload,
+            0.8,
+            allow_estimated=True,
+            skip_fund_flow_check=True,
+        )
+
+    message = str(exc.value)
+    assert "macro_indicators.industrial missing_compare_values" in message
+    assert "fund_flow.etf fund_flow_window_missing" not in message
+
+
+def test_stage3_skip_fund_flow_check_uses_shared_skip_reasons():
+    quality_state = {
+        "quality_blockers": [
+            {"category": "fund_flow", "key": "etf", "reason": "fund_flow_window_missing"},
+            {"category": "fund_flow", "key": "northbound", "reason": "missing_value"},
+        ]
+    }
+
+    assert s3._filtered_quality_blockers(quality_state, skip_fund_flow_check=True) == [
+        {"category": "fund_flow", "key": "northbound", "reason": "missing_value"},
+    ]
+
+
+def test_require_data_completeness_blocks_estimated_fund_flow_even_with_allow_estimated():
+    payload = {
+        "metadata": {"data_completeness": 0.95},
+        "missing_items": [],
+        "fund_flow": {
+            "etf": {
+                "recent_5d": -50.0,
+                "total_120d": -9000.0,
+                "trend": "流出",
+                "source": "websearch_manual",
+                "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+                "metric_basis": "news_net_flow",
+                "source_tier": "tier3",
+                "window_evidence": "news_summary",
+                "is_estimated": True,
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+
+    assert "fund_flow.etf" in str(exc.value)
+    assert "estimated_not_allowed" in str(exc.value)
+
+
+def test_require_data_completeness_blocks_etf_missing_windows_even_with_allow_estimated():
+    payload = {
+        "metadata": {"data_completeness": 0.9737},
+        "missing_items": [],
+        "fund_flow": {
+            "etf": {
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "待核查",
+                "source": "异常零值-需核查",
+                "source_url": "https://data.eastmoney.com/etf/",
+                "manual_required": True,
+                "manual_reason": "fund_flow_window_missing",
+                "is_estimated": False,
+            }
+        },
+    }
+
+    with pytest.raises(RuntimeError) as exc:
+        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+
+    message = str(exc.value)
+    assert "fund_flow.etf" in message
+    assert "fund_flow_window_missing" in message
+    assert "recent_5d" in message
+    assert "total_120d" in message
+
+
 def test_require_data_completeness_fail_on_low_score():
     payload = {
         "metadata": {"data_completeness": 0.5},
@@ -116,7 +214,12 @@ def test_require_data_completeness_allows_cn10y_cdb_estimated():
         "metadata": {"data_completeness": 0.9},
         "missing_items": [],
         "bonds": [
-            {"symbol": "CN10Y_CDB", "current_yield": 1.97, "is_estimated": True},
+            {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 1.97,
+                "change_120d_bp": -27.69,
+                "is_estimated": True,
+            },
         ],
     }
     s3._require_data_completeness(payload, 0.8, allow_estimated=False)
@@ -277,10 +380,11 @@ def test_run_analysis_reports_all_blockers_once(tmp_path: Path, monkeypatch):
             )
         )
     msg = str(exc.value)
-    assert "completeness:" in msg
-    assert "unified_quality:" in msg
-    assert "gap_monitor(" in msg
-    assert "stage2:" in msg
+    assert "[completeness/unified_quality]" in msg
+    assert "- data_completeness=0.500 (<0.8)" in msg
+    assert "[gap_monitor]" in msg
+    assert "- manual_required:" in msg
+    assert "[stage2 flag]" in msg
 
 
 def test_run_analysis_does_not_block_on_stale_policy_file_when_live_state_clean(tmp_path: Path, monkeypatch):
@@ -394,7 +498,7 @@ def test_run_analysis_blocks_unresolved_policy_redlist_missing_from_payload(tmp_
         )
 
     msg = str(exc.value)
-    assert "policy:" in msg
+    assert "[policy gate]" in msg
     assert "mlf" in msg
 
 
@@ -450,7 +554,7 @@ def test_run_analysis_blocks_category_specific_policy_redlist_missing_from_paylo
         )
 
     msg = str(exc.value)
-    assert "policy:" in msg
+    assert "[policy gate]" in msg
     assert "monetary_policy.mlf" in msg
 
 
@@ -491,7 +595,8 @@ def test_run_analysis_blocks_gap_monitor_missing_item_absent_from_payload(tmp_pa
         )
 
     msg = str(exc.value)
-    assert "gap_monitor" in msg
+    assert "[gap_monitor]" in msg
+    assert "- manual_required:" in msg
     assert "mlf" in msg
 
 
@@ -565,3 +670,85 @@ def test_run_analysis_does_not_block_on_stale_gap_monitor_when_live_state_clean(
     ]
     assert "gap_monitor_file_diagnostic_only" in warning_codes
     assert output_path.exists()
+
+
+def test_run_analysis_blocks_ambiguous_gap_monitor_item_when_fund_flow_skipped(
+    tmp_path: Path,
+    monkeypatch,
+):
+    market_payload = {
+        "metadata": {
+            "date": "2026-05-25",
+            "data_completeness": 1.0,
+            "ai_websearch_enhanced": True,
+        },
+        "macro_indicators": {
+            "shared": {
+                "current_value": 5.2,
+                "previous_value": 5.0,
+                "change_rate": 4.0,
+                "source_url": "https://example.com/shared-macro",
+                "is_estimated": False,
+            }
+        },
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {
+            "shared": {
+                "recent_5d": None,
+                "total_120d": None,
+                "trend": "待补",
+                "source": "待人工补数(Stage2 manual_required)",
+                "is_estimated": False,
+            }
+        },
+    }
+    run_dir = tmp_path / "data" / "runs" / "20260525"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "gap_monitor.json").write_text(
+        json.dumps(
+            {"manual_required": [{"key": "shared"}], "pending_tasks": []},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    market_path = tmp_path / "market.json"
+    output_path = tmp_path / "pring.json"
+    market_path.write_text(json.dumps(market_payload, ensure_ascii=False), encoding="utf-8")
+
+    class DummyContract:
+        def __init__(self, **payload):
+            self.metadata = payload.get("metadata", {})
+            self.macro_indicators = payload.get("macro_indicators", {})
+            self.monetary_policy = payload.get("monetary_policy", {})
+
+    class DummyAnalyzer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def analyze_pring_stage(self, days):
+            return {"stage": "Expansion", "confidence": 0.9}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(s3, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(s3, "get_manager", lambda: object())
+
+    with pytest.raises(RuntimeError) as exc:
+        asyncio.run(
+            s3._run_analysis(
+                market_path=market_path,
+                output_path=output_path,
+                allow_fallback=False,
+                skip_gap_check=False,
+                skip_fund_flow_check=True,
+            )
+        )
+
+    msg = str(exc.value)
+    assert "[gap_monitor]" in msg
+    assert "shared" in msg
+    assert "gap_monitor_file_diagnostic_only" not in msg
