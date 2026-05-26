@@ -1264,6 +1264,49 @@ def test_candidate_query_quality_rejects_top_level_bcom_total_return_historical_
     assert quality["usable_count"] == 0
 
 
+def test_candidate_query_quality_rejects_top_level_bcomtr_alias_historical_close():
+    bcom = SEARCH_PROFILES["BCOM"]
+    task = {
+        "indicator_key": "BCOM",
+        "preferred_domains": bcom["preferred_domains"],
+        "required_keywords": bcom["required_keywords"],
+        "exclude_keywords": bcom["exclude_keywords"],
+        "strict_required_keywords": bcom["strict_required_keywords"],
+        "evidence_keywords": bcom["evidence_keywords"],
+        "good_url_patterns": bcom["good_url_patterns"],
+        "bad_url_patterns": bcom["bad_url_patterns"],
+        "expected_period_tokens": [],
+        "issuer": bcom["issuer"],
+        "issuer_aliases": bcom["issuer_aliases"],
+        "unit": bcom["unit"],
+    }
+    candidate = {
+        "query": bcom["query"],
+        "preferred_domains": bcom["preferred_domains"],
+        "required_keywords": bcom["required_keywords"],
+        "exclude_keywords": bcom["exclude_keywords"],
+    }
+
+    quality = _candidate_query_quality(
+        task,
+        candidate,
+        [
+            {
+                "url": "https://www.investing.com/indices/bcomtr-historical-data",
+                "title": "BCOMTR Historical Data",
+                "content": (
+                    "Bloomberg Commodity Index historical data showed the close "
+                    "at 315.42 points on 2026-05-22."
+                ),
+                "score": 0.74,
+            }
+        ],
+    )
+
+    assert quality["unusable_reason"] == "strict_keyword_miss"
+    assert quality["usable_count"] == 0
+
+
 def test_candidate_query_quality_marks_etf_stockdata_scope_mismatch():
     task = {
         "indicator_key": "etf",

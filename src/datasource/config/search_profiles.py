@@ -378,6 +378,9 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         ],
         required_keywords=["bcom", "bloomberg commodity index", "彭博商品指数"],
         exclude_keywords=[
+            "BCOMTR",
+            "BCOMX",
+            "GCOM",
             "gsci",
             "gsg",
             "Bloomberg Commodity Index Total Return",
