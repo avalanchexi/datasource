@@ -31,6 +31,7 @@ USDCNY_URL = "https://www.chinamoney.com.cn/chinese/bkccpr/"
 USDCNY_API_URL = "https://www.chinamoney.com.cn/ags/ms/cm-u-bk-ccpr/CcprHisNew"
 NBS_URL = "https://www.stats.gov.cn/sj/zxfb/"
 RESERVE_RATIO_URL = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html"
+MLF_MULTI_PRICE_REFERENCE_RATE = 2.0
 
 
 class OfficialChinaProvider(Stage2StructuredProvider):
@@ -179,6 +180,13 @@ class OfficialChinaProvider(Stage2StructuredProvider):
                 target_date=target_date,
                 date_match_mode="month",
             )
+            if detail_url is None and target_date:
+                detail_url = self._find_link(
+                    html,
+                    url,
+                    include_tokens=("中期借贷便利",),
+                    exclude_tokens=(),
+                )
         elif key == "industrial":
             detail_url = self._find_link(
                 html,
@@ -251,18 +259,35 @@ class OfficialChinaProvider(Stage2StructuredProvider):
     def _parse_monetary_result(self, key, raw_key, task, html, url, reference_date):
         value = self._parse_rate(html)
         if value is None:
-            if key == "mlf" and "多重价位" in html:
-                operation_amount = self._parse_operation_amount(html)
-                raise StructuredProviderError(
-                    provider=self.name,
-                    indicator_key=raw_key,
-                    reason="multi_price_no_unified_rate",
-                    message="MLF announcement uses multiple-price bidding and has no unified rate",
-                    diagnostics={
-                        "url": url,
-                        "operation_amount": operation_amount,
-                        "evidence_text": self._evidence(html),
-                    },
+            if key == "mlf" and self._is_mlf_multi_price_notice(html):
+                operation_date = self._parse_date(html) or self._parse_date_from_url(url)
+                target_date = self._target_operation_date(task)
+                if operation_date is None:
+                    raise StructuredProviderError(
+                        provider=self.name,
+                        indicator_key=raw_key,
+                        reason="period_mismatch",
+                        message="PBoC MLF multi-price notice does not expose a parseable operation date",
+                        diagnostics={"url": url, "evidence_text": self._evidence(html)},
+                    )
+                if target_date and not self._operation_date_matches(key, operation_date, target_date):
+                    raise StructuredProviderError(
+                        provider=self.name,
+                        indicator_key=raw_key,
+                        reason="period_mismatch",
+                        message="PBoC MLF notice month does not match the task period",
+                        diagnostics={
+                            "url": url,
+                            "operation_date": operation_date,
+                            "target_date": target_date,
+                            "evidence_text": self._evidence(html),
+                        },
+                    )
+                return self._build_mlf_multi_price_reference(
+                    raw_key=raw_key,
+                    html=html,
+                    url=url,
+                    operation_date=operation_date,
                 )
             return None
 
@@ -316,6 +341,49 @@ class OfficialChinaProvider(Stage2StructuredProvider):
             as_of_date=operation_date or reference_date,
             confidence=0.9,
             diagnostics=diagnostics,
+        )
+
+    @staticmethod
+    def _is_mlf_multi_price_notice(html):
+        normalized = OfficialChinaProvider._normalize_text(html)
+        return (
+            "中期借贷便利" in normalized
+            and any(marker in normalized for marker in ("多重价位", "利率招标", "无统一利率"))
+        )
+
+    def _build_mlf_multi_price_reference(self, raw_key, html, url, operation_date):
+        operation_amount = self._parse_operation_amount(html)
+        note = "多重价位中标，无统一利率；展示参考值；manual_official_not_estimated"
+        payload = {
+            "value": MLF_MULTI_PRICE_REFERENCE_RATE,
+            "unit": "%",
+            "is_estimated": False,
+            "policy_name": "MLF 中期借贷便利（多重价位中标，参考值）",
+            "previous_value": MLF_MULTI_PRICE_REFERENCE_RATE,
+            "change_rate": 0.0,
+            "change_from_120d": 0.0,
+            "manual_reason": "多重价位，参考值，口径不适用",
+            "note": note,
+        }
+        if operation_amount is not None:
+            payload["operation_amount"] = operation_amount
+        return StructuredResult(
+            provider=self.name,
+            indicator_key=raw_key,
+            category="monetary_policy",
+            payload=payload,
+            source="Official China structured source",
+            source_url=url,
+            source_tier=classify_structured_source_tier(url),
+            as_of_date=operation_date,
+            confidence=0.9,
+            diagnostics={
+                "evidence_text": self._evidence(html),
+                "canonical_indicator_key": "mlf",
+                "multi_price_reference": True,
+                "reference_rate": MLF_MULTI_PRICE_REFERENCE_RATE,
+                "note": note,
+            },
         )
 
     def _parse_usdcny_result(self, raw_key, html, url, reference_date):

@@ -110,6 +110,26 @@ def test_pipeline_quality_state_blocks_disallowed_estimated_values_even_with_all
     assert "monetary_policy.m2" in state["policy_evaluation"]["estimated_blockers"]
 
 
+def test_pipeline_quality_state_accepts_official_mlf_multi_price_reference():
+    payload = _base_payload()
+    payload["monetary_policy"]["mlf"] = {
+        "policy_name": "MLF 中期借贷便利（多重价位中标，参考值）",
+        "current_value": 2.0,
+        "change_from_120d": 0.0,
+        "unit": "%",
+        "date": "2026-05-22",
+        "source": "Official China structured source",
+        "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/2026052217453752767/index.html",
+        "is_estimated": False,
+        "note": "多重价位中标，无统一利率；展示参考值",
+    }
+
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    assert {"category": "monetary_policy", "key": "mlf", "reason": "estimated_not_allowed"} not in state["quality_blockers"]
+    assert {"category": "monetary_policy", "key": "mlf", "reason": "missing_compare_values"} not in state["quality_blockers"]
+
+
 def test_pipeline_quality_state_flags_commodity_window_mismatch():
     payload = _base_payload()
     payload["commodities"] = [

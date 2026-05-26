@@ -1363,7 +1363,35 @@ async def test_official_china_provider_follows_nbs_industrial_sales_paginated_de
 
 
 @pytest.mark.asyncio
-async def test_official_china_provider_reports_mlf_multi_price_without_unified_rate():
+async def test_official_china_provider_returns_mlf_multi_price_reference_result():
+    list_html = (
+        '<a href="./2026052217453752767/index.html">'
+        "2026年5月中期借贷便利招标公告</a>"
+    )
+    detail_html = "开展6000亿元中期借贷便利（MLF）操作，固定数量、利率招标、多重价位中标方式。"
+
+    async def fetch_text(url, params=None):
+        if url == OfficialChinaProvider.MLF_URL:
+            return list_html
+        return detail_html
+
+    provider = OfficialChinaProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "mlf", "ref_date": "2026-05-23"}, {}, "2026-05-23")
+
+    extraction = result.to_extraction()
+    assert result.provider == "official_china"
+    assert result.source_url.startswith("https://www.pbc.gov.cn/")
+    assert extraction["value"] == 2.0
+    assert extraction["unit"] == "%"
+    assert extraction["is_estimated"] is False
+    assert extraction["change_from_120d"] == 0.0
+    assert "多重价位" in extraction["manual_reason"]
+    assert "参考值" in extraction["manual_reason"]
+    assert "展示参考值" in extraction["diagnostics"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_official_china_provider_rejects_mlf_multi_price_wrong_month():
     list_html = (
         '<a href="./2026052217453752767/index.html">'
         "2026年5月中期借贷便利招标公告</a>"
@@ -1378,9 +1406,9 @@ async def test_official_china_provider_reports_mlf_multi_price_without_unified_r
     provider = OfficialChinaProvider(fetch_text=fetch_text)
 
     with pytest.raises(StructuredProviderError) as exc_info:
-        await provider.fetch({"indicator_key": "mlf"}, {}, "2026-05-23")
+        await provider.fetch({"indicator_key": "mlf", "ref_date": "2026-06-03"}, {}, "2026-06-03")
 
-    assert exc_info.value.reason == "multi_price_no_unified_rate"
+    assert exc_info.value.reason == "period_mismatch"
 
 
 @pytest.mark.asyncio
