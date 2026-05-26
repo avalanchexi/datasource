@@ -1271,7 +1271,17 @@ def _apply_report_usage_profiles() -> None:
                 "资金流向",
             ],
             "good_url_patterns": ["data.eastmoney.com"],
-            "bad_url_patterns": ["caifuhao.eastmoney.com", "/news/", "单只", "费率", "规模创新高"],
+            "bad_url_patterns": [
+                "caifuhao.eastmoney.com",
+                "/news/",
+                "data.eastmoney.com/stockdata/",
+                "/stockdata/",
+                "个股",
+                "单只",
+                "十大持仓",
+                "费率",
+                "规模创新高",
+            ],
             "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
         }
     )
@@ -1435,14 +1445,64 @@ def _apply_report_usage_profiles() -> None:
             "exclude_keywords": ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"],
         },
     )
+    _prepend_profile_family(
+        "BCOM",
+        {
+            "name": "investing_historical_close",
+            "queries": [
+                "Bloomberg Commodity Index historical data close {closing_date}",
+                "Bloomberg Commodity historical data last price {closing_date}",
+                "Investing Bloomberg Commodity Index historical data {closing_date_label}",
+            ],
+            "preferred_domains": ["investing.com", "ca.investing.com"],
+            "required_keywords": ["Bloomberg Commodity Index", "historical data"],
+            "exclude_keywords": [
+                "BCOMTR",
+                "BCOMX",
+                "GCOM",
+                "GSG",
+                "GSCI",
+                "methodology",
+                "weights",
+                "sub-index",
+                "subindex",
+            ],
+        },
+    )
     SEARCH_PROFILES["BCOM"].update(
         {
             "max_query_candidates": 3,
-            "evidence_keywords": ["BCOM:IND", "Bloomberg Commodity Index", "BCOM", "level", "last price"],
-            "good_url_patterns": ["bloomberg.com/quote/BCOM:IND", "tradingeconomics.com", "stockcharts.com"],
+            "evidence_keywords": [
+                "BCOM:IND",
+                "Bloomberg Commodity Index",
+                "BCOM",
+                "level",
+                "last price",
+                "historical data",
+                "close",
+                "points",
+            ],
+            "good_url_patterns": [
+                "bloomberg.com/quote/BCOM:IND",
+                "tradingeconomics.com",
+                "stockcharts.com",
+                "investing.com/indices/bloomberg-commodity-historical-data",
+                "ca.investing.com/indices/bloomberg-commodity-historical-data",
+            ],
             "bad_url_patterns": _dedupe_preserve(
                 list(SEARCH_PROFILES["BCOM"].get("bad_url_patterns") or [])
-                + ["BCOMX", "GCOM", "GSG", "GSCI", "sub-index", "subindex"]
+                + [
+                    "BCOMTR",
+                    "BCOMX",
+                    "GCOM",
+                    "GSG",
+                    "GSCI",
+                    "sub-index",
+                    "subindex",
+                    "target weights",
+                    "annual rebalance",
+                    "methodology",
+                ]
             ),
             "extract_policy": {"use_tavily_extract": False, "extract_topk": 0},
         }
@@ -1533,7 +1593,7 @@ def _apply_report_usage_profiles() -> None:
     )
 
     for profile_key, family_name in {
-        "BCOM": "dated_index_quote",
+        "BCOM": "investing_historical_close",
         "GSG": "dated_etf_quote",
         "DXY": "dated_index_quote",
     }.items():

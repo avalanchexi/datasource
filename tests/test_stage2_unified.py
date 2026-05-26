@@ -1128,6 +1128,92 @@ def test_high_gap_quote_profiles_have_report_quality_patterns():
     assert "China 10Y Treasury" in cn10y_cdb["bad_url_patterns"]
 
 
+def test_bcom_profile_includes_investing_historical_close_family():
+    bcom = SEARCH_PROFILES["BCOM"]
+    family_names = [family["name"] for family in bcom["query_families"]]
+
+    assert family_names[0] == "investing_historical_close"
+    assert any(
+        "Bloomberg Commodity historical data" in query
+        for family in bcom["query_families"]
+        for query in family["queries"]
+    )
+    assert "investing.com/indices/bloomberg-commodity-historical-data" in bcom["good_url_patterns"]
+    assert "ca.investing.com/indices/bloomberg-commodity-historical-data" in bcom["good_url_patterns"]
+    assert "BCOMTR" in bcom["bad_url_patterns"]
+
+
+def test_candidate_query_quality_accepts_bcom_investing_historical_close():
+    task = {
+        "indicator_key": "BCOM",
+        "unit": "points",
+        "preferred_domains": ["investing.com", "ca.investing.com"],
+        "required_keywords": ["Bloomberg Commodity Index"],
+        "exclude_keywords": ["BCOMTR", "GSCI", "GSG", "methodology"],
+        "evidence_keywords": ["Bloomberg Commodity Index", "historical data", "close", "points"],
+        "good_url_patterns": [
+            "investing.com/indices/bloomberg-commodity-historical-data",
+            "ca.investing.com/indices/bloomberg-commodity-historical-data",
+        ],
+        "bad_url_patterns": ["BCOMTR", "GSCI", "GSG", "methodology", "weights"],
+        "required_output_fields": ["current_price"],
+    }
+    candidate = {
+        "query": "Bloomberg Commodity Index historical data close 2026-05-22",
+        "preferred_domains": task["preferred_domains"],
+        "required_keywords": ["Bloomberg Commodity Index"],
+        "exclude_keywords": ["BCOMTR", "GSCI", "GSG", "methodology"],
+    }
+    quality = _candidate_query_quality(
+        task,
+        candidate,
+        [
+            {
+                "url": "https://ca.investing.com/indices/bloomberg-commodity-historical-data",
+                "title": "Bloomberg Commodity Historical Data",
+                "content": "Bloomberg Commodity Index historical data showed the close at 138.6635 points on 2026-05-22.",
+                "score": 0.71,
+            }
+        ],
+    )
+
+    assert quality["unusable_reason"] is None
+    assert quality["usable_count"] == 1
+    assert quality["good_url_hit_count"] == 1
+    assert quality["value_evidence_score"] > 0
+
+
+def test_candidate_query_quality_marks_etf_stockdata_scope_mismatch():
+    task = {
+        "indicator_key": "etf",
+        "preferred_domains": ["data.eastmoney.com"],
+        "good_url_patterns": ["data.eastmoney.com/fund/etf"],
+        "bad_url_patterns": ["data.eastmoney.com/stockdata/", "/stockdata/", "个股", "单只"],
+        "evidence_keywords": ["全市场", "A股ETF", "近5日", "近120日", "累计", "合计"],
+        "required_output_fields": ["recent_5d", "total_120d", "trend"],
+    }
+    candidate = {
+        "query": "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+        "preferred_domains": ["data.eastmoney.com"],
+    }
+    quality = _candidate_query_quality(
+        task,
+        candidate,
+        [
+            {
+                "url": "https://data.eastmoney.com/stockdata/688796.html",
+                "title": "个股资金流向",
+                "content": "688796个股资金流向显示主力净流入1.2亿元，未披露全市场A股ETF近5日或近120日合计窗口。",
+                "score": 0.83,
+            }
+        ],
+    )
+
+    assert quality["unusable_reason"] == "search_result_scope_mismatch"
+    assert quality["usable_count"] == 0
+    assert quality["bad_url_hit_count"] == 1
+
+
 def test_daily_quote_profiles_include_run_date_and_value_page_filters():
     quote_keys = ("GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG", "DXY", "bdi")
     for key in quote_keys:
@@ -1202,7 +1288,7 @@ def test_task_planner_carries_quote_profile_budget_and_extract_policy(tmp_path: 
 @pytest.mark.parametrize(
     ("indicator_key", "expected_family"),
     [
-        ("BCOM", "dated_index_quote"),
+        ("BCOM", "investing_historical_close"),
         ("GSG", "dated_etf_quote"),
         ("DXY", "dated_index_quote"),
     ],
