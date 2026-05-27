@@ -184,6 +184,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - fund_flow gate 的 `source_tier` 从 `source_url` 域名推断；manual JSON 中手工填写的 `source_tier`/`claimed_source_tier` 仅可作为诊断说明，不能释放 gate。
 - fund_flow Tier1 域名：`hkex.com.hk`、`sse.com.cn`、`szse.cn`；Tier2 结构化 path：`data.eastmoney.com/hsgt`、`data.eastmoney.com/etf`、`data.eastmoney.com/fund`、`data.eastmoney.com/rzrq`、`tushare.pro/document`。其他新闻、研报、季度/年度摘要和单日描述属于 Tier3，不能把外推窗口标成非估算。
 - fund_flow 手工补数若使用 `news_net_flow`、`estimated_net_flow`、单日外推、季度/年度/年内摘要、外推或无法证明目标窗口，Stage2.5 会强制 `is_estimated=true` 并写入 `estimated_not_allowed` blocker；不得为了通过 gate 手工改成 `false`。
+- `--allow-fund-flow-downgrade` 仅用于 Stage4 正式报告中的 fund_flow 降级：它只过滤 fund_flow 的窗口缺失和估算阻断，不会修改 `market_data_complete.json`，也不得把 ETF 新闻外推、季度/年度摘要、单日外推、`news_net_flow` 或 `estimated_net_flow` 改成 `is_estimated=false`。非 fund_flow 阻断、缺 source_url、fallback Pring、日期不匹配仍必须失败。
 - 注入成功后会刷新 `data/runs/${DATE_NH}/quality_metrics.json`、写入 trend_history，并清理 `metadata.missing_items` 与顶层 `missing_items`。
 - 若终端显示“注入数据项: 0”，说明结果无可解析数值或文件为空，应改用手工 schema 版 `_manual.json`。
 
@@ -192,7 +193,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 ### 5.6 Stage4 Report
@@ -200,7 +202,8 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 ### 5.7 收尾校验

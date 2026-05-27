@@ -115,13 +115,15 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 
 # Stage 4: 报告生成（正式入口）
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 # 兼容入口：tests/scripts/generate_simple_report_test.py（保留历史调用）
 
 # 验证：确保无缺口
@@ -191,6 +193,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json  # 应为空对象或无 pending/manua
 **`--allow-estimated` 作用范围**: 仅绕过 `estimated_items`（`is_estimated=True` 的数据进入评分），**不绕过** `compare_gaps`、`stale_redlist` 和 `policy gate`
 
 **fund_flow 估算规则**: `source_url` 不等于窗口真实值。北向/南向/ETF/融资融券只有在结构化来源直接覆盖 5日/120日窗口时才能 `is_estimated=false`；Tier1 域名为 `hkex.com.hk`、`sse.com.cn`、`szse.cn`，Tier2 结构化 path 为 `data.eastmoney.com/hsgt`、`data.eastmoney.com/etf`、`data.eastmoney.com/fund`、`data.eastmoney.com/rzrq`、`tushare.pro/document`；允许的 `window_evidence` 为 `direct_window`、`direct_daily_series`、`direct_balance_delta`。新闻、季度/年度/年内摘要、单日外推、`news_net_flow`、`estimated_net_flow` 一律保持估算并由 gate 阻断或降级展示。`source_tier` 从 URL/domain 推断，不信任 manual JSON 手填值。
+
+**fund_flow 正式降级**: ETF 等 fund_flow 窗口不可验证时，Stage3 可用 `--skip-fund-flow-check`，Stage4 用 `--allow-fund-flow-downgrade`。该路径只允许报告继续生成，不改变数据真实性；ETF 仍保持 `is_estimated=true` 并进入估算披露。缺 `source_url`、非 fund_flow 阻断、`fallback_used=true`、日期不匹配仍会阻断。
 
 **Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
