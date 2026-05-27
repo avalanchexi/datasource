@@ -460,7 +460,11 @@ def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
             "total_120d": 1250.0,
             "trend": "流入",
             "source": "fallback estimate",
-            "note": "estimated fallback pending official source",
+            "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+            "note": "estimated fallback pending official source; metric_basis=news_net_flow; window_evidence=news_summary",
+            "metric_basis": "news_net_flow",
+            "window_evidence": "news_summary",
+            "estimation_method": "fund_flow_manual_window_not_direct",
             "is_estimated": True,
         }
     }
@@ -485,7 +489,9 @@ def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
 
     assert "估计值提醒" in text
     assert "资金流:ETF资金流" in text
-    assert "| ETF资金流 | 85.60(估) | 1250.00(估) | 流入 | fallback estimate | estimated fallback pending official source |" in text
+    assert "news_net_flow" in text
+    assert "news_summary" in text
+    assert "| ETF资金流 | 85.60(估) | 1250.00(估) | 流入 | fallback estimate | estimated fallback pending official source; metric_basis=news_net_flow; window_evidence=news_summary |" in text
 
 
 def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
