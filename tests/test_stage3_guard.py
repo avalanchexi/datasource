@@ -621,3 +621,124 @@ def test_run_analysis_does_not_block_on_stale_gap_monitor_when_live_state_clean(
     ]
     assert "gap_monitor_file_diagnostic_only" in warning_codes
     assert output_path.exists()
+
+
+def test_require_data_completeness_skips_estimated_fund_flow_when_requested():
+    payload = {
+        "metadata": {"data_completeness": 0.95},
+        "missing_items": [],
+        "fund_flow": {
+            "etf": {
+                "recent_5d": -50.0,
+                "total_120d": -9000.0,
+                "trend": "流出",
+                "source": "websearch_manual",
+                "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+                "metric_basis": "news_net_flow",
+                "source_tier": "tier3",
+                "window_evidence": "news_summary",
+                "is_estimated": True,
+            }
+        },
+    }
+
+    s3._require_data_completeness(
+        payload,
+        0.8,
+        allow_estimated=True,
+        skip_fund_flow_check=True,
+    )
+
+
+def test_run_analysis_records_fund_flow_downgrade_metadata(tmp_path: Path, monkeypatch):
+    market_payload = {
+        "metadata": {
+            "date": "2026-05-27",
+            "data_completeness": 1.0,
+            "ai_websearch_enhanced": True,
+        },
+        "missing_items": [],
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {
+            "etf": {
+                "recent_5d": -200.0,
+                "total_120d": -1500.0,
+                "trend": "流出",
+                "source": "websearch_manual",
+                "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+                "metric_basis": "news_net_flow",
+                "source_tier": "tier3",
+                "window_evidence": "news_summary",
+                "is_estimated": True,
+            }
+        },
+    }
+    run_dir = tmp_path / "data" / "runs" / "20260527"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "gap_monitor.json").write_text(
+        json.dumps(
+            {
+                "manual_required": [{"category": "fund_flow", "key": "etf"}],
+                "pending_tasks": [{"category": "fund_flow", "key": "etf"}],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    market_path = tmp_path / "market.json"
+    output_path = tmp_path / "pring.json"
+    market_path.write_text(json.dumps(market_payload, ensure_ascii=False), encoding="utf-8")
+
+    class DummyContract:
+        def __init__(self, **payload):
+            self.metadata = payload.get("metadata", {})
+            self.macro_indicators = payload.get("macro_indicators", {})
+            self.monetary_policy = payload.get("monetary_policy", {})
+
+    class DummyAnalyzer:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        async def analyze_pring_stage(self, days):
+            return {"stage": "Expansion", "confidence": 0.9}
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(s3, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(s3, "get_manager", lambda: object())
+
+    result = asyncio.run(
+        s3._run_analysis(
+            market_path=market_path,
+            output_path=output_path,
+            allow_estimated=True,
+            skip_fund_flow_check=True,
+            skip_gap_check=False,
+            allow_fallback=False,
+        )
+    )
+
+    downgraded = result["metadata"]["fund_flow_downgraded_items"]
+    assert downgraded == [
+        {
+            "category": "fund_flow",
+            "key": "etf",
+            "reason": "estimated_not_allowed",
+            "details": {
+                "source_tier": "tier3",
+                "window_evidence": "news_summary",
+                "metric_basis": "news_net_flow",
+            },
+        }
+    ]
+    warning_codes = [
+        row.get("code")
+        for row in result["metadata"].get("non_blocking_warnings", [])
+    ]
+    assert "fund_flow_downgraded" in warning_codes
+    assert output_path.exists()

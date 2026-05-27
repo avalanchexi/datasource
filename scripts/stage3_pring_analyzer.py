@@ -26,17 +26,15 @@ from datasource.utils.gate_formatting import (
     format_quality_issue,
 )
 from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
+from datasource.utils.pipeline_gate import (
+    collect_fund_flow_downgraded_items,
+    filter_effective_quality_blockers,
+)
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 MIN_COMPLETENESS_DEFAULT = 0.80
-FUND_FLOW_SKIP_REASONS = {
-    "fund_flow_window_missing",
-    "missing_or_zero_value",
-    "missing_value",
-    "placeholder_value",
-}
 
 
 def _flatten_missing_items(market_payload: Dict[str, Any]) -> List[str]:
@@ -204,27 +202,6 @@ def _message_items(message: str) -> List[str]:
     return items
 
 
-def _filtered_quality_blockers(
-    quality_state: Dict[str, Any],
-    *,
-    skip_fund_flow_check: bool,
-) -> List[Dict[str, Any]]:
-    blockers = quality_state.get("quality_blockers") or []
-    if not isinstance(blockers, list):
-        return []
-    if not skip_fund_flow_check:
-        return [item for item in blockers if isinstance(item, dict)]
-    return [
-        item
-        for item in blockers
-        if isinstance(item, dict)
-        and not (
-            item.get("category") == "fund_flow"
-            and item.get("reason") in FUND_FLOW_SKIP_REASONS
-        )
-    ]
-
-
 def _gap_item_key(item: Any) -> str:
     if isinstance(item, dict):
         for field in ("key", "indicator_key", "symbol", "pair", "task", "type", "name"):
@@ -293,9 +270,9 @@ def _require_data_completeness(
         stage="stage3",
         allow_estimated=allow_estimated,
     )
-    quality_blockers = _filtered_quality_blockers(
+    quality_blockers = filter_effective_quality_blockers(
         quality_state,
-        skip_fund_flow_check=skip_fund_flow_check,
+        allow_fund_flow_downgrade=skip_fund_flow_check,
     )
 
     blocks: List[GateBlock] = []
@@ -472,10 +449,15 @@ async def _run_analysis(
         allow_estimated=allow_estimated,
     )
     live_quality_blocker_keys = _quality_blocker_keys(
-        _filtered_quality_blockers(
+        filter_effective_quality_blockers(
             live_quality_state,
-            skip_fund_flow_check=skip_fund_flow_check,
+            allow_fund_flow_downgrade=skip_fund_flow_check,
         )
+    )
+    fund_flow_downgraded_items = (
+        collect_fund_flow_downgraded_items(live_quality_state)
+        if skip_fund_flow_check
+        else []
     )
     meta_date = (
         market_payload.get("metadata", {}).get("date")
@@ -700,6 +682,27 @@ async def _run_analysis(
         "gap_monitor_cleared": True,
         "min_completeness": min_completeness,
     })
+    if fund_flow_downgraded_items:
+        pring_result["metadata"]["fund_flow_downgraded_items"] = fund_flow_downgraded_items
+        _append_non_blocking_warning(
+            market_payload,
+            {
+                "level": "warning",
+                "code": "fund_flow_downgraded",
+                "key": "*",
+                "message": (
+                    "fund_flow blockers downgraded for report generation: "
+                    + ", ".join(
+                        sorted(
+                            {
+                                f"{item.get('category')}.{item.get('key')}:{item.get('reason')}"
+                                for item in fund_flow_downgraded_items
+                            }
+                        )
+                    )
+                ),
+            },
+        )
     pring_result.setdefault("final_stage", pring_result.get("stage", "未知"))
     pring_result.setdefault("confidence", pring_result.get("confidence", 0.0))
     pring_result.setdefault("recommendation", pring_result.get("recommendation", "数据不足，无法生成建议"))
