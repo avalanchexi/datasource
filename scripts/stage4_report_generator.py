@@ -21,6 +21,11 @@ from datasource.utils.gate_formatting import (
     format_gate_blocks,
     format_quality_issue,
 )
+from datasource.utils.pipeline_gate import (
+    assert_no_fallback_pring_result,
+    filter_effective_gap_items,
+    filter_effective_quality_blockers,
+)
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.run_paths import build_run_paths_from_reference
 
@@ -51,18 +56,29 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="gap_monitor JSON 路径（默认: data/runs/YYYYMMDD/gap_monitor.json）",
     )
+    parser.add_argument(
+        "--allow-fund-flow-downgrade",
+        action="store_true",
+        help="允许仅对 fund_flow 窗口/估算阻断做正式降级，其他质量阻断仍失败",
+    )
     return parser.parse_args()
 
 
-def _assert_stage4_quality_gate(market_payload: Dict[str, Any]) -> None:
+def _assert_stage4_quality_gate(
+    market_payload: Dict[str, Any],
+    *,
+    allow_fund_flow_downgrade: bool = False,
+) -> None:
     quality_state = build_pipeline_quality_state(
         market_payload,
         stage="stage4",
         allow_estimated=True,
     )
-    quality_blockers = quality_state.get("quality_blockers") or []
-    policy = quality_state.get("policy_evaluation") or {}
-    policy_blocked = bool(policy.get("block_stage3"))
+    quality_blockers = filter_effective_quality_blockers(
+        quality_state,
+        allow_fund_flow_downgrade=allow_fund_flow_downgrade,
+    )
+    policy_blocked = bool(quality_blockers)
 
     if not quality_blockers and not policy_blocked:
         return
@@ -241,12 +257,30 @@ def main() -> None:
             stage="stage4",
             allow_estimated=True,
         )
-        pending = _unresolved_gap_items(market_payload, quality_state, pending)
-        manual = _unresolved_gap_items(market_payload, quality_state, manual)
+        pending = filter_effective_gap_items(
+            market_payload,
+            quality_state,
+            pending,
+            allow_fund_flow_downgrade=args.allow_fund_flow_downgrade,
+        )
+        manual = filter_effective_gap_items(
+            market_payload,
+            quality_state,
+            manual,
+            allow_fund_flow_downgrade=args.allow_fund_flow_downgrade,
+        )
         if pending or manual:
+            quality_details = [
+                format_quality_issue(issue)
+                for issue in filter_effective_quality_blockers(
+                    quality_state,
+                    allow_fund_flow_downgrade=args.allow_fund_flow_downgrade,
+                )
+            ]
+            detail_suffix = f"，quality_blockers={quality_details}" if quality_details else ""
             raise RuntimeError(
                 f"gap_monitor 未清空（{gap_path}），pending={pending}, "
-                f"manual_required={manual}，请先补齐再生成报告。"
+                f"manual_required={manual}{detail_suffix}，请先补齐再生成报告。"
             )
     else:
         print(f"[WARN] gap_monitor 文件未找到（查找: {gap_path}），跳过 gap 校验")
@@ -256,7 +290,11 @@ def main() -> None:
     if not meta.get("ai_websearch_enhanced"):
         raise RuntimeError("metadata.ai_websearch_enhanced 未设置，Stage4 已阻断。请先完成 Stage2。")
 
-    _assert_stage4_quality_gate(market_payload)
+    assert_no_fallback_pring_result(pring_payload)
+    _assert_stage4_quality_gate(
+        market_payload,
+        allow_fund_flow_downgrade=args.allow_fund_flow_downgrade,
+    )
     _assert_pring_matches_market(market_payload, pring_payload)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

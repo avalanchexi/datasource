@@ -303,3 +303,186 @@ def test_stage4_blocks_pring_date_mismatch(tmp_path, monkeypatch):
     message = str(exc.value)
     assert "2026-04-27" in message
     assert "2026-04-26" in message
+
+
+def _write_stage4_payloads(tmp_path, *, market_extra, pring_extra=None, gap_payload=None):
+    data_dir = tmp_path / "data" / "runs" / "20260527"
+    reports_dir = tmp_path / "reports"
+    data_dir.mkdir(parents=True)
+    reports_dir.mkdir()
+    market_path = data_dir / "market_data_complete.json"
+    pring_path = data_dir / "pring_result.json"
+    gap_path = data_dir / "gap_monitor.json"
+    output_path = reports_dir / "out.md"
+
+    market_payload = {
+        "metadata": {"ai_websearch_enhanced": True, "date": "2026-05-27"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+    market_payload.update(market_extra)
+    pring_payload = {"metadata": {"analysis_date": "2026-05-27"}, "fallback_used": False}
+    if pring_extra:
+        pring_payload.update(pring_extra)
+    if gap_payload is None:
+        gap_payload = {"pending_tasks": [], "manual_required": []}
+
+    market_path.write_text(json.dumps(market_payload, ensure_ascii=False), encoding="utf-8")
+    pring_path.write_text(json.dumps(pring_payload, ensure_ascii=False), encoding="utf-8")
+    gap_path.write_text(json.dumps(gap_payload, ensure_ascii=False), encoding="utf-8")
+    return market_path, pring_path, output_path
+
+
+def _estimated_etf_market_extra():
+    return {
+        "fund_flow": {
+            "etf": {
+                "recent_5d": -200.0,
+                "total_120d": -1500.0,
+                "trend": "流出",
+                "source": "websearch_manual",
+                "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
+                "metric_basis": "news_net_flow",
+                "source_tier": "tier3",
+                "window_evidence": "news_summary",
+                "is_estimated": True,
+            }
+        }
+    }
+
+
+def test_stage4_blocks_estimated_fund_flow_without_downgrade_flag(tmp_path, monkeypatch):
+    market_path, pring_path, output_path = _write_stage4_payloads(
+        tmp_path,
+        market_extra=_estimated_etf_market_extra(),
+        gap_payload={"pending_tasks": [], "manual_required": []},
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    message = str(exc.value)
+    assert "fund_flow.etf" in message
+    assert "estimated_not_allowed" in message
+
+
+def test_stage4_allows_estimated_fund_flow_with_downgrade_flag(tmp_path, monkeypatch):
+    market_path, pring_path, output_path = _write_stage4_payloads(
+        tmp_path,
+        market_extra=_estimated_etf_market_extra(),
+        gap_payload={
+            "pending_tasks": [{"category": "fund_flow", "key": "etf"}],
+            "manual_required": [{"category": "fund_flow", "key": "etf"}],
+        },
+    )
+    called = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(stage4, "generate_report", lambda *args: called.append(args))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+            "--allow-fund-flow-downgrade",
+        ],
+    )
+
+    stage4.main()
+
+    assert called == [(market_path, pring_path, output_path)]
+    market_payload = json.loads(market_path.read_text(encoding="utf-8"))
+    assert market_payload["fund_flow"]["etf"]["is_estimated"] is True
+
+
+def test_stage4_downgrade_flag_still_blocks_non_fund_flow_quality_issue(tmp_path, monkeypatch):
+    market_extra = _estimated_etf_market_extra()
+    market_extra["macro_indicators"] = {
+        "industrial": {
+            "current_value": 5.2,
+            "previous_value": None,
+            "change_rate": None,
+            "source_url": "https://example.com/industrial",
+            "is_estimated": False,
+        }
+    }
+    market_path, pring_path, output_path = _write_stage4_payloads(
+        tmp_path,
+        market_extra=market_extra,
+        gap_payload={
+            "pending_tasks": [
+                {"category": "fund_flow", "key": "etf"},
+                {"category": "macro_indicators", "key": "industrial"},
+            ],
+            "manual_required": [],
+        },
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+            "--allow-fund-flow-downgrade",
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    message = str(exc.value)
+    assert "macro_indicators.industrial" in message
+    assert "missing_compare_values" in message
+
+
+def test_stage4_rejects_fallback_pring_result_by_default(tmp_path, monkeypatch):
+    market_path, pring_path, output_path = _write_stage4_payloads(
+        tmp_path,
+        market_extra={},
+        pring_extra={"fallback_used": True},
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_report_generator.py",
+            "--market-data",
+            str(market_path),
+            "--pring-result",
+            str(pring_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        stage4.main()
+
+    assert "fallback_used=true" in str(exc.value)
