@@ -272,6 +272,7 @@ def _require_data_completeness(
     )
     quality_blockers = filter_effective_quality_blockers(
         quality_state,
+        market_payload=market_payload,
         allow_fund_flow_downgrade=skip_fund_flow_check,
     )
 
@@ -451,11 +452,15 @@ async def _run_analysis(
     live_quality_blocker_keys = _quality_blocker_keys(
         filter_effective_quality_blockers(
             live_quality_state,
+            market_payload=market_payload,
             allow_fund_flow_downgrade=skip_fund_flow_check,
         )
     )
     fund_flow_downgraded_items = (
-        collect_fund_flow_downgraded_items(live_quality_state)
+        collect_fund_flow_downgraded_items(
+            live_quality_state,
+            market_payload=market_payload,
+        )
         if skip_fund_flow_check
         else []
     )

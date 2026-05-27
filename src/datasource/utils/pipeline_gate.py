@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 
 FUND_FLOW_DOWNGRADE_REASONS = frozenset(
     {
@@ -28,26 +29,46 @@ def _is_fund_flow_downgrade_issue(issue: Any) -> bool:
 def filter_effective_quality_blockers(
     quality_state: Dict[str, Any],
     *,
+    market_payload: Optional[Dict[str, Any]] = None,
     allow_fund_flow_downgrade: bool = False,
 ) -> List[Dict[str, Any]]:
-    """Return effective blockers from build_pipeline_quality_state() output."""
+    """Return effective blockers from build_pipeline_quality_state() output.
+
+    Fund-flow downgrades require explicit source evidence in the market payload.
+    Without the payload, or without a source_url/url on the matching entry, the
+    blocker remains effective.
+    """
     blockers = quality_state.get("quality_blockers") or []
     if not isinstance(blockers, list):
         return []
     normalized = [item for item in blockers if isinstance(item, dict)]
     if not allow_fund_flow_downgrade:
         return normalized
-    return [item for item in normalized if not _is_fund_flow_downgrade_issue(item)]
+    return [
+        item
+        for item in normalized
+        if not (
+            _is_fund_flow_downgrade_issue(item)
+            and _fund_flow_issue_has_source_url(market_payload, item)
+        )
+    ]
 
 
 def collect_fund_flow_downgraded_items(
     quality_state: Dict[str, Any],
+    *,
+    market_payload: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Return fund_flow blockers downgraded from build_pipeline_quality_state()."""
     blockers = quality_state.get("quality_blockers") or []
     if not isinstance(blockers, list):
         return []
-    return [dict(item) for item in blockers if _is_fund_flow_downgrade_issue(item)]
+    return [
+        dict(item)
+        for item in blockers
+        if _is_fund_flow_downgrade_issue(item)
+        and _fund_flow_issue_has_source_url(market_payload, item)
+    ]
 
 
 def filter_effective_gap_items(
@@ -65,6 +86,7 @@ def filter_effective_gap_items(
         (str(issue.get("category") or "").lower(), str(issue.get("key") or "").lower())
         for issue in filter_effective_quality_blockers(
             quality_state,
+            market_payload=market_payload,
             allow_fund_flow_downgrade=allow_fund_flow_downgrade,
         )
         if isinstance(issue, dict)
@@ -115,6 +137,33 @@ def _gap_item_label(item: Any) -> str:
                 return str(value)
         return str(item)
     return str(item)
+
+
+def _fund_flow_issue_has_source_url(
+    market_payload: Optional[Dict[str, Any]],
+    issue: Dict[str, Any],
+) -> bool:
+    if not isinstance(market_payload, dict):
+        return False
+    rows = market_payload.get("fund_flow")
+    if not isinstance(rows, dict):
+        return False
+    key = issue.get("key")
+    if key in (None, ""):
+        return False
+    entry = rows.get(str(key))
+    if not isinstance(entry, dict):
+        return False
+    source_url = entry.get("source_url") or entry.get("url")
+    return _is_http_url(source_url)
+
+
+def _is_http_url(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or any(char.isspace() for char in text):
+        return False
+    parsed = urlparse(text)
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
 
 
 def _gap_item_category(item: Any) -> Optional[str]:

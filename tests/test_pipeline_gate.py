@@ -57,6 +57,7 @@ def test_filter_effective_quality_blockers_downgrades_only_fund_flow_estimate():
     strict = filter_effective_quality_blockers(state)
     downgraded = filter_effective_quality_blockers(
         state,
+        market_payload=payload,
         allow_fund_flow_downgrade=True,
     )
 
@@ -103,6 +104,7 @@ def test_filter_effective_quality_blockers_keeps_fund_flow_missing_source_url():
 
     downgraded = filter_effective_quality_blockers(
         state,
+        market_payload=payload,
         allow_fund_flow_downgrade=True,
     )
 
@@ -110,6 +112,63 @@ def test_filter_effective_quality_blockers_keeps_fund_flow_missing_source_url():
         "category": "fund_flow",
         "key": "etf",
         "reason": "missing_source_url",
+    } in downgraded
+
+
+def test_filter_effective_quality_blockers_keeps_unmarked_fund_flow_missing_source_url():
+    payload = _base_payload()
+    payload["fund_flow"] = {
+        "etf": {
+            "recent_5d": -200.0,
+            "total_120d": -1500.0,
+            "trend": "流出",
+            "source": "fallback estimate",
+            "metric_basis": "news_net_flow",
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "is_estimated": True,
+        }
+    }
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    downgraded = filter_effective_quality_blockers(
+        state,
+        market_payload=payload,
+        allow_fund_flow_downgrade=True,
+    )
+
+    assert {
+        "category": "fund_flow",
+        "key": "etf",
+        "reason": "estimated_not_allowed",
+        "details": {
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "metric_basis": "news_net_flow",
+        },
+    } in downgraded
+
+
+def test_filter_effective_quality_blockers_keeps_invalid_fund_flow_source_url():
+    payload = _estimated_etf_payload()
+    payload["fund_flow"]["etf"]["source_url"] = "N/A"
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    downgraded = filter_effective_quality_blockers(
+        state,
+        market_payload=payload,
+        allow_fund_flow_downgrade=True,
+    )
+
+    assert {
+        "category": "fund_flow",
+        "key": "etf",
+        "reason": "estimated_not_allowed",
+        "details": {
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "metric_basis": "news_net_flow",
+        },
     } in downgraded
 
 
@@ -129,6 +188,7 @@ def test_filter_effective_quality_blockers_downgrades_missing_fund_flow_windows(
 
     downgraded = filter_effective_quality_blockers(
         state,
+        market_payload=payload,
         allow_fund_flow_downgrade=True,
     )
 
@@ -220,6 +280,7 @@ def test_filter_effective_quality_blockers_downgrades_non_etf_fund_flow_estimate
     strict = filter_effective_quality_blockers(state)
     downgraded = filter_effective_quality_blockers(
         state,
+        market_payload=payload,
         allow_fund_flow_downgrade=True,
     )
 
@@ -247,7 +308,7 @@ def test_collect_fund_flow_downgraded_items_returns_only_downgradable_items():
     }
     state = build_pipeline_quality_state(payload, allow_estimated=True)
 
-    items = collect_fund_flow_downgraded_items(state)
+    items = collect_fund_flow_downgraded_items(state, market_payload=payload)
 
     assert items == [
         {

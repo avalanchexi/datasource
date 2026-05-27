@@ -1225,12 +1225,31 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
             return f"{value:.2f}{suffix}"
         return 'N/A'
 
+    def _format_flow_note(flow: dict) -> str:
+        parts = []
+        note = str(flow.get("note") or "").strip()
+        if note:
+            parts.append(note)
+        existing = " ".join(parts)
+        for field in ("metric_basis", "window_evidence", "source_url"):
+            value = flow.get(field)
+            if field == "source_url" and value in (None, ""):
+                value = flow.get("url")
+            if value in (None, ""):
+                continue
+            text = str(value).strip()
+            field_text = f"{field}={text}"
+            if text and field_text not in existing:
+                parts.append(field_text)
+                existing = " ".join(parts)
+        return "; ".join(parts) if parts else "-"
+
     for key, flow in market_data['fund_flow'].items():
         is_flow_estimated = bool(flow.get("is_estimated"))
         report += (
             f"| {_flow_label(key)} | {_format_flow_amount(flow.get('recent_5d'), is_estimated=is_flow_estimated)} | "
             f"{_format_flow_amount(flow.get('total_120d'), is_estimated=is_flow_estimated)} | {flow.get('trend', 'N/A')} | "
-            f"{flow.get('source', '-')} | {flow.get('note', '-') or '-'} |\n"
+            f"{flow.get('source', '-')} | {_format_flow_note(flow)} |\n"
         )
 
     estimated_note = ""

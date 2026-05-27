@@ -461,7 +461,7 @@ def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
             "trend": "流入",
             "source": "fallback estimate",
             "source_url": "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
-            "note": "estimated fallback pending official source; metric_basis=news_net_flow; window_evidence=news_summary",
+            "note": "estimated fallback pending official source: news_net_flow https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml",
             "metric_basis": "news_net_flow",
             "window_evidence": "news_summary",
             "estimation_method": "fund_flow_manual_window_not_direct",
@@ -491,7 +491,45 @@ def test_report_estimated_appendix_includes_fund_flow_etf(tmp_path: Path):
     assert "资金流:ETF资金流" in text
     assert "news_net_flow" in text
     assert "news_summary" in text
-    assert "| ETF资金流 | 85.60(估) | 1250.00(估) | 流入 | fallback estimate | estimated fallback pending official source; metric_basis=news_net_flow; window_evidence=news_summary |" in text
+    assert "https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml" in text
+    assert "| ETF资金流 | 85.60(估) | 1250.00(估) | 流入 | fallback estimate | estimated fallback pending official source: news_net_flow https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml; metric_basis=news_net_flow; window_evidence=news_summary; source_url=https://finance.sina.com.cn/wm/2026-05-06/doc-inhwxhnr3468401.shtml |" in text
+
+
+def test_report_fund_flow_window_missing_discloses_structured_evidence(tmp_path: Path):
+    market = _base_market()
+    market["fund_flow"] = {
+        "etf": {
+            "recent_5d": None,
+            "total_120d": None,
+            "trend": "待核查",
+            "source": "websearch_manual",
+            "source_url": "https://data.eastmoney.com/etf/",
+            "metric_basis": "etf_total_size_delta",
+            "window_evidence": "direct_balance_delta",
+            "is_estimated": False,
+        }
+    }
+    pring = {
+        "final_stage": "stage 3",
+        "confidence": 0.61,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+    generate_report(m, p, out)
+    text = out.read_text(encoding="utf-8")
+
+    assert "资金流:ETF资金流" not in text
+    assert "| ETF资金流 | N/A | N/A | 待核查 | websearch_manual | metric_basis=etf_total_size_delta; window_evidence=direct_balance_delta; source_url=https://data.eastmoney.com/etf/ |" in text
 
 
 def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
