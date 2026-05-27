@@ -60,16 +60,28 @@ def test_filter_effective_quality_blockers_downgrades_only_fund_flow_estimate():
         allow_fund_flow_downgrade=True,
     )
 
-    assert {"category": "fund_flow", "key": "etf", "reason": "estimated_not_allowed", "details": {
-        "source_tier": "tier3",
-        "window_evidence": "news_summary",
-        "metric_basis": "news_net_flow",
-    }} in strict
-    assert {"category": "macro_indicators", "key": "industrial", "reason": "missing_compare_values"} in strict
-    assert {"category": "macro_indicators", "key": "industrial", "reason": "missing_compare_values"} in downgraded
+    assert {
+        "category": "fund_flow",
+        "key": "etf",
+        "reason": "estimated_not_allowed",
+        "details": {
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "metric_basis": "news_net_flow",
+        },
+    } in strict
+    assert {
+        "category": "macro_indicators",
+        "key": "industrial",
+        "reason": "missing_compare_values",
+    } in strict
+    assert {
+        "category": "macro_indicators",
+        "key": "industrial",
+        "reason": "missing_compare_values",
+    } in downgraded
     assert not any(
-        item["category"] == "fund_flow" and item["key"] == "etf"
-        for item in downgraded
+        item["category"] == "fund_flow" and item["key"] == "etf" for item in downgraded
     )
 
 
@@ -94,7 +106,11 @@ def test_filter_effective_quality_blockers_keeps_fund_flow_missing_source_url():
         allow_fund_flow_downgrade=True,
     )
 
-    assert {"category": "fund_flow", "key": "etf", "reason": "missing_source_url"} in downgraded
+    assert {
+        "category": "fund_flow",
+        "key": "etf",
+        "reason": "missing_source_url",
+    } in downgraded
 
 
 def test_filter_effective_quality_blockers_downgrades_missing_fund_flow_windows():
@@ -159,6 +175,65 @@ def test_filter_effective_gap_items_keeps_absent_fund_flow_item():
     )
 
     assert unresolved == gap_items
+
+
+def test_filter_effective_gap_items_uses_canonical_key_for_list_alias_match():
+    payload = _base_payload()
+    payload["commodities"] = [
+        {
+            "symbol": "GC=F",
+            "name": "COMEX黄金",
+            "current_price": None,
+            "source_url": "https://example.com/gold",
+        }
+    ]
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+    gap_items = [{"category": "commodities", "name": "COMEX黄金"}]
+
+    unresolved = filter_effective_gap_items(payload, state, gap_items)
+
+    assert {
+        "category": "commodities",
+        "key": "GC=F",
+        "reason": "primary_value_missing",
+    } in state["quality_blockers"]
+    assert unresolved == gap_items
+
+
+def test_filter_effective_quality_blockers_downgrades_non_etf_fund_flow_estimate():
+    payload = _base_payload()
+    payload["fund_flow"] = {
+        "northbound": {
+            "recent_5d": 12.3,
+            "total_120d": 456.7,
+            "trend": "流入",
+            "source": "websearch_manual",
+            "source_url": "https://data.eastmoney.com/hsgt/",
+            "metric_basis": "news_net_flow",
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "is_estimated": True,
+        }
+    }
+    state = build_pipeline_quality_state(payload, allow_estimated=True)
+
+    strict = filter_effective_quality_blockers(state)
+    downgraded = filter_effective_quality_blockers(
+        state,
+        allow_fund_flow_downgrade=True,
+    )
+
+    assert {
+        "category": "fund_flow",
+        "key": "northbound",
+        "reason": "estimated_not_allowed",
+        "details": {
+            "source_tier": "tier3",
+            "window_evidence": "news_summary",
+            "metric_basis": "news_net_flow",
+        },
+    } in strict
+    assert downgraded == []
 
 
 def test_collect_fund_flow_downgraded_items_returns_only_downgradable_items():
