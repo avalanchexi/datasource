@@ -61,6 +61,7 @@ CN10Y_CDB_BASIS_PATTERNS = (
 
 WINDOW_EVIDENCE_OK = {"direct_window", "direct_daily_series", "direct_balance_delta"}
 ESTIMATED_FLOW_BASIS = {"news_net_flow", "estimated_net_flow"}
+URL_FORBIDDEN_CHARS = set(",;，；。|[]{}（）()<>\"'`")
 
 CURRENT_VALUE_FIELDS = (
     "current_value",
@@ -142,7 +143,7 @@ def _is_valid_source_url(value: Any) -> bool:
     text = value.strip()
     if not text or text.lower() in {"n/a", "na", "none", "null"}:
         return False
-    if "," in text or ";" in text or text.count("://") != 1:
+    if any(char in URL_FORBIDDEN_CHARS for char in text) or text.count("://") != 1:
         return False
     if any(char.isspace() for char in text):
         return False
@@ -390,10 +391,41 @@ def build_review(
     }
 
 
-def resolve_paths(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path]:
+def _resolve_explicit_market_paths(
+    args: argparse.Namespace,
+    market_path: Path,
+    market_payload: JsonObject,
+) -> Tuple[Path, Path, Path, Path]:
+    needs_run_paths = not (args.gap_monitor and args.quality_metrics and args.output)
+    run_paths = None
+    if needs_run_paths:
+        try:
+            run_paths = build_run_paths_from_reference(
+                date=args.date,
+                payload=market_payload,
+                path=market_path,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "cannot infer run date for explicit --market-data; provide --date or "
+                "explicit --gap-monitor, --quality-metrics, and --output paths"
+            ) from exc
+
+    gap_path = Path(args.gap_monitor) if args.gap_monitor else run_paths.gap_monitor
+    quality_path = Path(args.quality_metrics) if args.quality_metrics else run_paths.quality_metrics
+    output_path = Path(args.output) if args.output else run_paths.data_dir / "stage4_risk_review.json"
+    return market_path, gap_path, quality_path, output_path
+
+
+def resolve_paths(
+    args: argparse.Namespace,
+    market_payload: Optional[JsonObject] = None,
+) -> Tuple[Path, Path, Path, Path]:
     if args.market_data:
         market_path = Path(args.market_data)
-        run_paths = build_run_paths_from_reference(path=market_path, fallback_to_today=True)
+        if market_payload is None:
+            raise ValueError("market_payload is required when resolving explicit --market-data paths")
+        return _resolve_explicit_market_paths(args, market_path, market_payload)
     elif args.date:
         run_paths = build_run_paths(args.date)
         market_path = run_paths.market_data_complete
@@ -409,10 +441,16 @@ def resolve_paths(args: argparse.Namespace) -> Tuple[Path, Path, Path, Path]:
 
 def main() -> None:
     args = parse_args()
-    market_path, gap_path, quality_path, output_path = resolve_paths(args)
+    if args.market_data:
+        market_path = Path(args.market_data)
+        market_payload = _load_json(market_path, required=True)
+        assert market_payload is not None
+        market_path, gap_path, quality_path, output_path = resolve_paths(args, market_payload)
+    else:
+        market_path, gap_path, quality_path, output_path = resolve_paths(args)
+        market_payload = _load_json(market_path, required=True)
+        assert market_payload is not None
 
-    market_payload = _load_json(market_path, required=True)
-    assert market_payload is not None
 
     missing_optional_files: List[str] = []
     gap_monitor = _load_json(gap_path, required=False)
