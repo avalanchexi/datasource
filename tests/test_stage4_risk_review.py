@@ -272,6 +272,56 @@ def test_cli_writes_review_json_for_synthetic_market_file(tmp_path, monkeypatch)
     assert _has_finding(review, "blocker", "forex.USDCNY", "missing_source_url")
 
 
+def test_cli_missing_explicit_market_data_file_reports_required_path(
+    tmp_path,
+    monkeypatch,
+):
+    market_path = tmp_path / "missing_market_data.json"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_risk_review.py",
+            "--market-data",
+            str(market_path),
+            "--output",
+            str(tmp_path / "review.json"),
+        ],
+    )
+
+    with pytest.raises(FileNotFoundError) as exc:
+        stage4["main"]()
+
+    message = str(exc.value)
+    assert "required market data input not found" in message
+    assert str(market_path) in message
+
+
+def test_cli_malformed_required_market_data_json_reports_path_context(
+    tmp_path,
+    monkeypatch,
+):
+    market_path = tmp_path / "bad_market_data.json"
+    market_path.write_text('{"metadata": ', encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "stage4_risk_review.py",
+            "--market-data",
+            str(market_path),
+            "--output",
+            str(tmp_path / "review.json"),
+        ],
+    )
+
+    with pytest.raises(ValueError) as exc:
+        stage4["main"]()
+
+    message = str(exc.value)
+    assert f"failed to load JSON {market_path}" in message
+
+
 def test_explicit_market_data_without_path_date_uses_payload_date_for_default_output(
     tmp_path,
     monkeypatch,
