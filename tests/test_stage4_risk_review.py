@@ -81,6 +81,29 @@ def test_bcom_single_commodity_scope_is_blocker():
     )
 
 
+def test_bcom_silver_single_commodity_scope_is_blocker():
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "commodities": {
+            "BCOM": {
+                "symbol": "BCOM",
+                "name": "Bloomberg Silver Commodity Index",
+                "current_value": 88.2,
+                "source_url": "https://example.com/markets/bloomberg-silver",
+            }
+        },
+    }
+
+    review = _build_review(payload)
+
+    assert _has_finding(
+        review,
+        "blocker",
+        "commodities.BCOM",
+        "bcom_scope_mismatch",
+    )
+
+
 def test_bcom_plain_bloomberg_commodity_index_still_review_required():
     payload = {
         "metadata": {"date": "2026-05-28"},
@@ -129,6 +152,41 @@ def test_cn10y_cdb_estimated_without_explicit_basis_is_review_required():
     )
 
 
+@pytest.mark.parametrize(
+    "estimation_method",
+    [
+        "spread",
+        "missing spread basis",
+        "利差",
+        "加点",
+    ],
+)
+def test_cn10y_cdb_estimated_with_vague_spread_basis_is_review_required(
+    estimation_method,
+):
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "bonds": {
+            "CN10Y_CDB": {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 2.18,
+                "is_estimated": True,
+                "estimation_method": estimation_method,
+                "source_url": "https://example.com/cn10y-cdb",
+            }
+        },
+    }
+
+    review = _build_review(payload)
+
+    assert _has_finding(
+        review,
+        "review_required",
+        "bonds.CN10Y_CDB",
+        "cn10y_cdb_estimate_missing_basis",
+    )
+
+
 def test_cn10y_cdb_estimated_with_explicit_spread_basis_info():
     payload = {
         "metadata": {"date": "2026-05-28"},
@@ -138,6 +196,39 @@ def test_cn10y_cdb_estimated_with_explicit_spread_basis_info():
                 "current_yield": 2.18,
                 "is_estimated": True,
                 "estimation_method": "CN10Y plus observed CDB spread 22bp",
+                "source_url": "https://example.com/cn10y-cdb",
+            }
+        },
+    }
+
+    review = _build_review(payload)
+
+    assert _has_finding(
+        review,
+        "info",
+        "bonds.CN10Y_CDB",
+        "cn10y_cdb_estimate_disclosed",
+    )
+    assert "cn10y_cdb_estimate_missing_basis" not in _codes(review, "review_required")
+
+
+@pytest.mark.parametrize(
+    "estimation_method",
+    [
+        "国债+20bp",
+        "国债+约20bp",
+        "国开债利差 22bp",
+    ],
+)
+def test_cn10y_cdb_estimated_with_explicit_bp_basis_info(estimation_method):
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "bonds": {
+            "CN10Y_CDB": {
+                "symbol": "CN10Y_CDB",
+                "current_yield": 2.18,
+                "is_estimated": True,
+                "estimation_method": estimation_method,
                 "source_url": "https://example.com/cn10y-cdb",
             }
         },

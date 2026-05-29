@@ -54,20 +54,19 @@ BCOM_SINGLE_COMMODITY_TOKENS = (
     "bloomberg-crude-oil",
     "bloomberg-natural-gas",
 )
-
-CN10Y_CDB_BASIS_TOKENS = (
-    "spread",
-    "cdb spread",
-    "利差",
-    "加点",
-    "cn10y plus",
-    "10y plus",
+BCOM_SINGLE_COMMODITY_PATTERN = re.compile(
+    r"\bbloomberg\s+([a-z0-9][a-z0-9&/\- ]*?)\s+commodity\s+index\b"
 )
+
 CN10Y_CDB_BASIS_PATTERNS = (
-    re.compile(r"国债\s*(?:\+|加)\s*约?\s*\d+(?:\.\d+)?\s*bp"),
-    re.compile(r"(?:cn10y|10y|国债)\s*(?:\+|加).{0,16}(?:spread|利差|加点|cdb|国开)"),
-    re.compile(r"(?:cn10y|10y|国债).{0,16}(?:plus|加点|利差)"),
-    re.compile(r"(?:spread|利差|加点).{0,16}(?:国开|cdb|cn10y|10y|国债)"),
+    re.compile(r"\b(?:cn10y|10y)\s+plus\s+(?:observed\s+)?(?:cdb\s+)?spread\b"),
+    re.compile(r"国债\s*(?:\+|加)\s*约?\s*\d+(?:\.\d+)?\s*(?:bp|bps|基点)"),
+    re.compile(
+        r"(?:cdb|cn10y|10y|国开债?|国债).{0,24}(?:spread|利差|加点).{0,24}\d+(?:\.\d+)?\s*(?:bp|bps|基点)"
+    ),
+    re.compile(
+        r"(?:spread|利差|加点).{0,24}\d+(?:\.\d+)?\s*(?:bp|bps|基点).{0,24}(?:cdb|cn10y|10y|国开债?|国债)"
+    ),
 )
 
 WINDOW_EVIDENCE_OK = {"direct_window", "direct_daily_series", "direct_balance_delta"}
@@ -276,6 +275,18 @@ def review_bcom(payload: JsonObject) -> List[Finding]:
                     item,
                 )
             ]
+    single_commodity_match = BCOM_SINGLE_COMMODITY_PATTERN.search(text)
+    if single_commodity_match:
+        commodity_scope = single_commodity_match.group(1).strip()
+        return [
+            _finding(
+                "blocker",
+                "commodities.BCOM",
+                "bcom_scope_mismatch",
+                f"BCOM evidence appears to reference single-commodity scope: Bloomberg {commodity_scope} Commodity Index",
+                item,
+            )
+        ]
     return [
         _finding(
             "review_required",
@@ -292,9 +303,7 @@ def review_cn10y_cdb(payload: JsonObject) -> List[Finding]:
     if not isinstance(item, dict) or item.get("is_estimated") is not True:
         return []
     text = _item_text(item)
-    has_basis = any(token in text for token in CN10Y_CDB_BASIS_TOKENS) or any(
-        pattern.search(text) for pattern in CN10Y_CDB_BASIS_PATTERNS
-    )
+    has_basis = any(pattern.search(text) for pattern in CN10Y_CDB_BASIS_PATTERNS)
     if has_basis:
         return [
             _finding(
