@@ -28,6 +28,12 @@
 - Stage3 的 `--allow-estimated` 只允许 `is_estimated=True` 数据参与评分，不绕过 `compare_gaps`、`stale_redlist` 或 policy gate。
 
 ## 3. Setup & Health Check
+0. Shell/venv 探活（任何 Stage1/Stage2 前先跑）:
+   ```bash
+   bash scripts/env_probe.sh
+   ```
+   `env_probe.sh` 只检查本地执行通道，不读取 API key、不访问外网、不替代 preflight。若输出 `OK`，继续 `bash run_preflight.sh`；若输出 `USE_WSL`，说明当前 shell 与仓库/venv 布局错配，应切到 `C:\Windows\System32\bash.exe` 进入 WSL 后再执行项目脚本；若输出同时包含 `dofork` 和 `errno 11` 的 Git/MSYS bash 错误时，不要反复重跑流水线或优先杀进程，先切 WSL。
+
 1. Create env:
    ```bash
    python -m venv .venv
@@ -198,6 +204,13 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 ```
 
 ### 5.6 Stage4 Report
+```bash
+bash run_clean.sh python scripts/stage4_risk_review.py \
+  --date "$DATE" \
+  --allow-fund-flow-downgrade
+```
+- Stage4 前先运行 `stage4_risk_review.py` 生成 `data/runs/${DATE_NH}/stage4_risk_review.json`。该脚本只读复核，不修改数据；`blocker` 应先处理，`review_required` 必须人工确认报告披露可接受后再生成正式报告。
+
 ```bash
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \

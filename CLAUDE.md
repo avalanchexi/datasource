@@ -22,6 +22,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
 - **采集优先级固定**: `TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover) -> Stage2.5`；排障可用 `--disable-structured-providers` 回到搜索-only 诊断路径，当前流程不使用旧版外部补数链路
 
+## Before You Start (cold-session checklist)
+
+1. `bash scripts/env_probe.sh` — 先确认执行通道与 `.venv` 布局。当前本机仓库是 Linux/WSL venv；若 Git/MSYS bash 输出同时包含 `dofork` 和 `errno 11`，或探活输出 `USE_WSL`，切到 `C:\Windows\System32\bash.exe` 后再运行项目脚本，不要在坏 MSYS bash 上重试流水线。
+2. `bash run_preflight.sh` — 验证三个 API key + 清代理 + DNS/HTTPS 探活。失败是 hard fail，不要继续。
+3. 所有流水线脚本通过 `bash run_clean.sh python scripts/stage2_unified_enhancer.py` 这类 `run_clean.sh` 包装命令执行；不要直跑。
+4. Stage1 → Stage2 → Stage2.5 → Stage3 → Stage4，每日按序一次性跑完。**Tavily 每日只能跑 1 次** — 422/quota 后改走 Stage2.5 manual，不要重跑 Stage2。
+5. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
+6. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
+
 ## Quick Start
 
 ```bash
@@ -119,6 +128,11 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --skip-fund-flow-check
 
 # Stage 4: 报告生成（正式入口）
+bash run_clean.sh python scripts/stage4_risk_review.py \
+  --date "$DATE" \
+  --allow-fund-flow-downgrade
+# 先处理 blocker；review_required 经人工确认披露可接受后再生成正式报告。
+
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
