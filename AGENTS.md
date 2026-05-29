@@ -209,7 +209,7 @@ bash run_clean.sh python scripts/stage4_risk_review.py \
   --date "$DATE" \
   --allow-fund-flow-downgrade
 ```
-- Stage4 前先运行 `stage4_risk_review.py` 生成 `data/runs/${DATE_NH}/stage4_risk_review.json`。该脚本只读复核，不修改数据；`blocker` 应先处理，`review_required` 必须人工确认报告披露可接受后再生成正式报告。
+- Stage4 前建议运行 `stage4_risk_review.py` 生成 `data/runs/${DATE_NH}/stage4_risk_review.json`。该脚本只读复核，不修改数据，也不会自动阻断正式报告生成；生成前应检查 `blocker`/`review_required`，`blocker` 应处理或有意识豁免，`review_required` 用于披露和口径复核。
 
 ```bash
 bash run_clean.sh python scripts/stage4_report_generator.py \

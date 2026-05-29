@@ -131,7 +131,7 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 bash run_clean.sh python scripts/stage4_risk_review.py \
   --date "$DATE" \
   --allow-fund-flow-downgrade
-# 先处理 blocker；review_required 经人工确认披露可接受后再生成正式报告。
+# 只读复核，不自动阻断；生成前检查 blocker/review_required，前者处理或有意识豁免，后者用于披露和口径复核。
 
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
