@@ -9,13 +9,14 @@ that highlights reportable-but-risky data items before Markdown generation.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
-
-from datasource.utils.run_paths import build_run_paths, build_run_paths_from_reference
 
 
 Finding = Dict[str, Any]
@@ -83,6 +84,45 @@ CURRENT_VALUE_FIELDS = (
     "price",
 )
 FUND_FLOW_VALUE_FIELDS = ("recent_5d", "total_120d", "current_value")
+
+
+def _load_run_paths_module() -> ModuleType:
+    helper_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "datasource"
+        / "utils"
+        / "run_paths.py"
+    )
+    if not helper_path.exists():
+        raise ImportError(f"cannot load run_paths helper; file not found: {helper_path}")
+
+    module_name = "_stage4_risk_review_run_paths"
+    spec = importlib.util.spec_from_file_location(module_name, helper_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load run_paths helper from: {helper_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    previous_module = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise ImportError(f"cannot execute run_paths helper from {helper_path}: {exc}") from exc
+    finally:
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
+    return module
+
+
+_run_paths = _load_run_paths_module()
+try:
+    build_run_paths = _run_paths.build_run_paths
+    build_run_paths_from_reference = _run_paths.build_run_paths_from_reference
+except AttributeError as exc:
+    raise ImportError("run_paths helper is missing required path builder functions") from exc
 
 
 def parse_args() -> argparse.Namespace:

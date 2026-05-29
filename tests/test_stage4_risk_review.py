@@ -1,5 +1,6 @@
 import json
 import runpy
+import sys
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,33 @@ def _has_finding(review, severity, key, code):
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_run_path_does_not_import_datasource_package():
+    saved_modules = {
+        name: module
+        for name, module in sys.modules.items()
+        if name == "datasource" or name.startswith("datasource.")
+    }
+    for name in saved_modules:
+        sys.modules.pop(name, None)
+
+    try:
+        runpy.run_path(
+            Path(__file__).resolve().parents[1] / "scripts" / "stage4_risk_review.py",
+            run_name="stage4_risk_review_import_test",
+        )
+
+        assert "datasource" not in sys.modules
+        assert not any(name.startswith("datasource.") for name in sys.modules)
+    finally:
+        for name in [
+            name
+            for name in sys.modules
+            if name == "datasource" or name.startswith("datasource.")
+        ]:
+            sys.modules.pop(name, None)
+        sys.modules.update(saved_modules)
 
 
 def test_bcom_total_return_scope_is_blocker():
