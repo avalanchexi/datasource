@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -44,13 +45,18 @@ BCOM_BAD_TOKENS = (
 
 CN10Y_CDB_BASIS_TOKENS = (
     "spread",
-    "proxy",
-    "cn10y",
     "cdb spread",
     "利差",
+    "proxy",
     "代理",
-    "估算",
-    "国债",
+    "cn10y plus",
+    "cn10y proxy",
+    "加点",
+)
+CN10Y_CDB_BASIS_PATTERNS = (
+    re.compile(r"cn10y\s*(?:\+|plus|加|proxy)"),
+    re.compile(r"(?:国债|cn10y).{0,12}(?:利差|加点|代理)"),
+    re.compile(r"(?:利差|加点|代理).{0,12}(?:国开|cdb|cn10y)"),
 )
 
 WINDOW_EVIDENCE_OK = {"direct_window", "direct_daily_series", "direct_balance_delta"}
@@ -229,7 +235,9 @@ def review_cn10y_cdb(payload: JsonObject) -> List[Finding]:
     if not isinstance(item, dict) or item.get("is_estimated") is not True:
         return []
     text = _item_text(item)
-    has_basis = any(token in text for token in CN10Y_CDB_BASIS_TOKENS)
+    has_basis = any(token in text for token in CN10Y_CDB_BASIS_TOKENS) or any(
+        pattern.search(text) for pattern in CN10Y_CDB_BASIS_PATTERNS
+    )
     if has_basis:
         return [
             _finding(
@@ -267,7 +275,7 @@ def review_fund_flow(
         basis = str(item.get("metric_basis") or "").strip()
         window_evidence = str(item.get("window_evidence") or "").strip()
         estimated = item.get("is_estimated") is True
-        weak_window = bool(window_evidence) and window_evidence not in WINDOW_EVIDENCE_OK
+        weak_window = window_evidence not in WINDOW_EVIDENCE_OK
         estimated_basis = basis in ESTIMATED_FLOW_BASIS
         if not (estimated or estimated_basis or weak_window):
             continue
