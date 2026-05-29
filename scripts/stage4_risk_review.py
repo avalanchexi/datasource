@@ -52,6 +52,7 @@ CN10Y_CDB_BASIS_TOKENS = (
     "10y plus",
 )
 CN10Y_CDB_BASIS_PATTERNS = (
+    re.compile(r"国债\s*(?:\+|加)\s*约?\s*\d+(?:\.\d+)?\s*bp"),
     re.compile(r"(?:cn10y|10y|国债)\s*(?:\+|加).{0,16}(?:spread|利差|加点|cdb|国开)"),
     re.compile(r"(?:cn10y|10y|国债).{0,16}(?:plus|加点|利差)"),
     re.compile(r"(?:spread|利差|加点).{0,16}(?:国开|cdb|cn10y|10y|国债)"),
