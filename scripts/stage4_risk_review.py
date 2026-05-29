@@ -11,9 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urlparse
 
 from datasource.utils.run_paths import build_run_paths, build_run_paths_from_reference
 
@@ -97,7 +97,10 @@ def _load_json(path: Path, *, required: bool) -> Optional[JsonObject]:
             raise FileNotFoundError(f"required market data input not found: {path}")
         return None
     with path.open("r", encoding="utf-8") as handle:
-        payload = json.load(handle)
+        try:
+            payload = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"failed to load JSON {path}: {exc}") from exc
     if not isinstance(payload, dict):
         raise ValueError(f"JSON root must be an object: {path}")
     return payload
@@ -132,8 +135,35 @@ def _has_numeric_current(item: JsonObject, *, category: str) -> bool:
     return any(_is_number(item.get(field)) for field in fields)
 
 
-def _source_url(item: JsonObject) -> Any:
-    return item.get("source_url")
+def _is_valid_source_url(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or text.lower() in {"n/a", "na", "none", "null"}:
+        return False
+    if any(char.isspace() for char in text):
+        return False
+    parsed = urlparse(text)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and parsed.geturl() == text
+
+
+def _normalized_source_url(item: JsonObject) -> Optional[str]:
+    for field in ("source_url", "url"):
+        value = item.get(field)
+        if _is_valid_source_url(value):
+            return str(value).strip()
+    return None
+
+
+def _diagnostic_source_url(item: JsonObject) -> Any:
+    normalized = _normalized_source_url(item)
+    if normalized:
+        return normalized
+    for field in ("source_url", "url"):
+        value = item.get(field)
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def _entry_key(category: str, name: str, item: JsonObject) -> str:
@@ -189,8 +219,10 @@ def _finding(severity: str, key: str, code: str, message: str, item: JsonObject)
         "code": code,
         "message": message,
     }
+    diagnostic_url = _diagnostic_source_url(item)
+    if diagnostic_url not in (None, ""):
+        result["source_url"] = diagnostic_url
     for field in (
-        "source_url",
         "is_estimated",
         "metric_basis",
         "window_evidence",
@@ -300,7 +332,7 @@ def review_source_evidence(payload: JsonObject) -> List[Finding]:
     for category, key, item in _iter_items(payload):
         if not _has_numeric_current(item, category=category):
             continue
-        if _source_url(item):
+        if _normalized_source_url(item):
             continue
         severity = "blocker" if key in CRITICAL_SOURCE_KEYS else "review_required"
         findings.append(
@@ -341,7 +373,6 @@ def build_review(
     metadata = market_payload.get("metadata") if isinstance(market_payload.get("metadata"), dict) else {}
     return {
         "metadata": {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
             "date": metadata.get("date") or metadata.get("end_date") or metadata.get("start_date"),
             "allow_fund_flow_downgrade": allow_fund_flow_downgrade,
             "gap_monitor_present": gap_monitor is not None,
