@@ -208,6 +208,43 @@ def test_fund_flow_estimated_news_basis_without_downgrade_uses_estimate_review_c
     assert "fund_flow_downgrade_review" not in _codes(review, "review_required")
 
 
+@pytest.mark.parametrize(
+    ("item_updates", "case_name"),
+    [
+        ({"is_estimated": True}, "estimated_flag_only"),
+        ({"metric_basis": "estimated_net_flow"}, "estimated_metric_basis"),
+        ({"window_evidence": "news_summary"}, "weak_window_evidence"),
+        ({"window_evidence": ""}, "missing_window_evidence"),
+    ],
+)
+def test_fund_flow_independent_risk_triggers_are_review_required(
+    item_updates,
+    case_name,
+):
+    base_item = {
+        "recent_5d": 12.3,
+        "total_120d": 456.7,
+        "is_estimated": False,
+        "metric_basis": "net_flow_sum",
+        "window_evidence": "direct_window",
+        "source_url": "https://example.com/fund-flow",
+    }
+    base_item.update(item_updates)
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "fund_flow": {case_name: base_item},
+    }
+
+    review = _build_review(payload)
+
+    assert _has_finding(
+        review,
+        "review_required",
+        f"fund_flow.{case_name}",
+        "fund_flow_estimate_review",
+    )
+
+
 def test_critical_numeric_item_without_source_url_is_blocker():
     payload = {
         "metadata": {"date": "2026-05-28"},
@@ -321,6 +358,8 @@ def test_cli_writes_review_json_for_synthetic_market_file(tmp_path, monkeypatch)
 
     review = json.loads(output_path.read_text(encoding="utf-8"))
     assert review["metadata"]["date"] == "2026-05-28"
+    assert review["metadata"]["gap_monitor_present"] is False
+    assert review["metadata"]["quality_metrics_present"] is False
     assert _has_finding(review, "blocker", "forex.USDCNY", "missing_source_url")
 
 
