@@ -14,6 +14,17 @@ case "$platform" in
 esac
 
 repo_path="$(pwd -P 2>/dev/null || pwd)"
+wsl_repo_path="$repo_path"
+case "$wsl_repo_path" in
+  /[a-zA-Z]/*)
+    drive="${wsl_repo_path:1:1}"
+    rest="${wsl_repo_path:2}"
+    drive="$(printf '%s' "$drive" | tr '[:upper:]' '[:lower:]')"
+    wsl_repo_path="/mnt/${drive}${rest}"
+    ;;
+esac
+wsl_repo_path_quoted="'$(printf '%s' "$wsl_repo_path" | sed "s/'/'\\\\''/g")'"
+
 if [ -f ".venv/bin/activate" ]; then
   venv_layout="linux"
   python_path="$ROOT_DIR/.venv/bin/python"
@@ -46,7 +57,19 @@ fi
 
 if [ "$status" = "OK" ]; then
   case "$venv_layout" in
-    linux|windows)
+    windows)
+      if [ "$platform" = "Linux" ]; then
+        status="BROKEN_ENV"
+        reason="Windows venv layout is not usable under Linux/WSL"
+      elif [ -z "$python_path" ] || [ ! -x "$python_path" ]; then
+        status="BROKEN_ENV"
+        reason="Selected venv Python is not executable: $python_path"
+      elif ! python_exec="$("$python_path" -c "import sys; print(sys.executable)" 2>&1)"; then
+        status="BROKEN_ENV"
+        reason="Selected venv Python failed: $python_exec"
+      fi
+      ;;
+    linux)
       if [ -z "$python_path" ] || [ ! -x "$python_path" ]; then
         status="BROKEN_ENV"
         reason="Selected venv Python is not executable: $python_path"
@@ -83,7 +106,7 @@ case "$status" in
     exit 0
     ;;
   USE_WSL)
-    printf 'next=C:\\Windows\\System32\\bash.exe -lc "cd %s && bash run_preflight.sh"\n' "$repo_path"
+    printf 'next=C:\\Windows\\System32\\bash.exe -lc "cd %s && bash run_preflight.sh"\n' "$wsl_repo_path_quoted"
     exit 3
     ;;
   *)
