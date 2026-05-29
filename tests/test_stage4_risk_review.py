@@ -531,6 +531,19 @@ def test_cli_malformed_required_market_data_json_reports_path_context(
     assert f"failed to load JSON {market_path}" in message
 
 
+def test_cli_without_date_or_market_data_fails_with_deterministic_error(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("sys.argv", ["stage4_risk_review.py"])
+
+    with pytest.raises(ValueError) as exc:
+        stage4["main"]()
+
+    assert "--date or --market-data is required" in str(exc.value)
+
+
 def test_explicit_market_data_without_path_date_uses_payload_date_for_default_output(
     tmp_path,
     monkeypatch,

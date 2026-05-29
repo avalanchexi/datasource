@@ -461,8 +461,7 @@ def resolve_paths(
         run_paths = build_run_paths(args.date)
         market_path = run_paths.market_data_complete
     else:
-        run_paths = build_run_paths_from_reference(fallback_to_today=True)
-        market_path = run_paths.market_data_complete
+        raise ValueError("--date or --market-data is required")
 
     gap_path = Path(args.gap_monitor) if args.gap_monitor else run_paths.gap_monitor
     quality_path = Path(args.quality_metrics) if args.quality_metrics else run_paths.quality_metrics
