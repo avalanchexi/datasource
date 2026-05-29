@@ -253,6 +253,7 @@ def test_cli_writes_review_json_for_synthetic_market_file(tmp_path, monkeypatch)
             "forex": {"USDCNY": {"pair": "USDCNY", "current_rate": 7.12}},
         },
     )
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "sys.argv",
         [
