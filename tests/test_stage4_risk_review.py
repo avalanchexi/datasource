@@ -360,6 +360,10 @@ def test_cli_writes_review_json_for_synthetic_market_file(tmp_path, monkeypatch)
     assert review["metadata"]["date"] == "2026-05-28"
     assert review["metadata"]["gap_monitor_present"] is False
     assert review["metadata"]["quality_metrics_present"] is False
+    assert review["metadata"]["missing_optional_files"] == [
+        "data/runs/20260528/gap_monitor.json",
+        "data/runs/20260528/quality_metrics.json",
+    ]
     assert _has_finding(review, "blocker", "forex.USDCNY", "missing_source_url")
 
 
