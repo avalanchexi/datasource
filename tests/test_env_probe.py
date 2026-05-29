@@ -5,13 +5,16 @@ from pathlib import Path
 from typing import Optional
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
 def _copy_probe(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
-    body = Path("scripts/env_probe.sh").read_text(encoding="utf-8").replace(
-        "\r\n", "\n"
-    )
+    body = (REPO_ROOT / "scripts/env_probe.sh").read_text(
+        encoding="utf-8"
+    ).replace("\r\n", "\n")
     probe = scripts / "env_probe.sh"
     probe.write_bytes(body.encode("utf-8"))
     probe.chmod(0o755)
@@ -67,7 +70,13 @@ def _run_probe(
     path_prefix: Optional[Path] = None,
     fake_pwd: Optional[str] = None,
 ) -> subprocess.CompletedProcess:
-    env = os.environ.copy()
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": os.environ.get("HOME", str(root)),
+        "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
     command = "bash scripts/env_probe.sh"
     if fake_pwd is not None:
         command = (
@@ -104,7 +113,7 @@ def _env_probe_single_quote(value: str) -> str:
 
 
 def test_env_probe_script_uses_lf_line_endings() -> None:
-    body = Path("scripts/env_probe.sh").read_bytes()
+    body = (REPO_ROOT / "scripts/env_probe.sh").read_bytes()
 
     assert b"\r\n" not in body
 
@@ -147,6 +156,19 @@ def test_missing_venv_returns_broken_env(tmp_path: Path) -> None:
     assert "[BROKEN_ENV] env_probe" in result.stdout
     assert "venv_layout=missing" in result.stdout
     assert "Missing .venv; create it before running the pipeline" in result.stdout
+
+
+def test_venv_directory_without_activate_returns_broken_env(tmp_path: Path) -> None:
+    root = _copy_probe(tmp_path)
+    fake_bin = _write_fake_uname(root, "Linux")
+    (root / ".venv").mkdir()
+
+    result = _run_probe(root, path_prefix=fake_bin)
+
+    assert result.returncode == 2
+    assert "[BROKEN_ENV] env_probe" in result.stdout
+    assert "venv_layout=broken" in result.stdout
+    assert ".venv exists but no usable activate script was found" in result.stdout
 
 
 def test_non_executable_venv_python_returns_broken_env(tmp_path: Path) -> None:
