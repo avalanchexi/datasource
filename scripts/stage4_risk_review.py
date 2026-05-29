@@ -44,6 +44,17 @@ BCOM_BAD_TOKENS = (
     "ishares",
 )
 
+BCOM_SINGLE_COMMODITY_TOKENS = (
+    "bloomberg gold commodity index",
+    "bloomberg copper commodity index",
+    "bloomberg crude oil commodity index",
+    "bloomberg natural gas commodity index",
+    "bloomberg-gold",
+    "bloomberg-copper",
+    "bloomberg-crude-oil",
+    "bloomberg-natural-gas",
+)
+
 CN10Y_CDB_BASIS_TOKENS = (
     "spread",
     "cdb spread",
@@ -251,6 +262,17 @@ def review_bcom(payload: JsonObject) -> List[Finding]:
                     "commodities.BCOM",
                     "bcom_scope_mismatch",
                     f"BCOM evidence appears to reference incompatible scope: {token}",
+                    item,
+                )
+            ]
+    for token in BCOM_SINGLE_COMMODITY_TOKENS:
+        if token in text:
+            return [
+                _finding(
+                    "blocker",
+                    "commodities.BCOM",
+                    "bcom_scope_mismatch",
+                    f"BCOM evidence appears to reference single-commodity scope: {token}",
                     item,
                 )
             ]

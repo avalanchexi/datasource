@@ -58,6 +58,29 @@ def test_bcom_total_return_scope_is_blocker():
     )
 
 
+def test_bcom_single_commodity_scope_is_blocker():
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "commodities": {
+            "BCOM": {
+                "symbol": "BCOM",
+                "name": "Bloomberg Gold Commodity Index",
+                "current_value": 88.2,
+                "source_url": "https://example.com/markets/bloomberg-gold",
+            }
+        },
+    }
+
+    review = _build_review(payload)
+
+    assert _has_finding(
+        review,
+        "blocker",
+        "commodities.BCOM",
+        "bcom_scope_mismatch",
+    )
+
+
 def test_bcom_plain_bloomberg_commodity_index_still_review_required():
     payload = {
         "metadata": {"date": "2026-05-28"},
