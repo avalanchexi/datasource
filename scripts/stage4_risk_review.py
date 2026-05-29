@@ -47,16 +47,14 @@ CN10Y_CDB_BASIS_TOKENS = (
     "spread",
     "cdb spread",
     "利差",
-    "proxy",
-    "代理",
-    "cn10y plus",
-    "cn10y proxy",
     "加点",
+    "cn10y plus",
+    "10y plus",
 )
 CN10Y_CDB_BASIS_PATTERNS = (
-    re.compile(r"cn10y\s*(?:\+|plus|加|proxy)"),
-    re.compile(r"(?:国债|cn10y).{0,12}(?:利差|加点|代理)"),
-    re.compile(r"(?:利差|加点|代理).{0,12}(?:国开|cdb|cn10y)"),
+    re.compile(r"(?:cn10y|10y|国债)\s*(?:\+|加).{0,16}(?:spread|利差|加点|cdb|国开)"),
+    re.compile(r"(?:cn10y|10y|国债).{0,16}(?:plus|加点|利差)"),
+    re.compile(r"(?:spread|利差|加点).{0,16}(?:国开|cdb|cn10y|10y|国债)"),
 )
 
 WINDOW_EVIDENCE_OK = {"direct_window", "direct_daily_series", "direct_balance_delta"}
