@@ -156,6 +156,58 @@ def test_fund_flow_estimated_news_basis_with_allow_downgrade_is_review_required(
     )
 
 
+def test_fund_flow_direct_window_non_estimated_does_not_produce_fund_flow_finding():
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "fund_flow": {
+            "northbound": {
+                "recent_5d": 12.3,
+                "total_120d": 456.7,
+                "is_estimated": False,
+                "metric_basis": "net_flow_sum",
+                "window_evidence": "direct_window",
+                "source_url": "https://example.com/northbound-flow",
+            }
+        },
+    }
+
+    review = _build_review(payload)
+
+    fund_flow_findings = [
+        finding
+        for severity in ("blocker", "review_required", "info")
+        for finding in _findings(review, severity)
+        if finding["key"].startswith("fund_flow.")
+    ]
+    assert fund_flow_findings == []
+
+
+def test_fund_flow_estimated_news_basis_without_downgrade_uses_estimate_review_code():
+    payload = {
+        "metadata": {"date": "2026-05-28"},
+        "fund_flow": {
+            "southbound": {
+                "recent_5d": 12.3,
+                "total_120d": 456.7,
+                "is_estimated": True,
+                "metric_basis": "news_net_flow",
+                "window_evidence": "news_summary",
+                "source_url": "https://example.com/southbound-flow",
+            }
+        },
+    }
+
+    review = _build_review(payload, allow_fund_flow_downgrade=False)
+
+    assert _has_finding(
+        review,
+        "review_required",
+        "fund_flow.southbound",
+        "fund_flow_estimate_review",
+    )
+    assert "fund_flow_downgrade_review" not in _codes(review, "review_required")
+
+
 def test_critical_numeric_item_without_source_url_is_blocker():
     payload = {
         "metadata": {"date": "2026-05-28"},
