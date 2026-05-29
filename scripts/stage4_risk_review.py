@@ -27,6 +27,7 @@ CRITICAL_SOURCE_KEYS = {
     "forex.USDCNY",
     "macro_indicators.bdi",
     "monetary_policy.mlf",
+    "monetary_policy.rrr",
     "monetary_policy.reserve_ratio",
 }
 
@@ -140,6 +141,8 @@ def _is_valid_source_url(value: Any) -> bool:
         return False
     text = value.strip()
     if not text or text.lower() in {"n/a", "na", "none", "null"}:
+        return False
+    if "," in text or ";" in text or text.count("://") != 1:
         return False
     if any(char.isspace() for char in text):
         return False
