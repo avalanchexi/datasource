@@ -18,7 +18,6 @@ from types import ModuleType
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlparse
 
-
 Finding = Dict[str, Any]
 JsonObject = Dict[str, Any]
 
@@ -95,7 +94,9 @@ def _load_run_paths_module() -> ModuleType:
         / "run_paths.py"
     )
     if not helper_path.exists():
-        raise ImportError(f"cannot load run_paths helper; file not found: {helper_path}")
+        raise ImportError(
+            f"cannot load run_paths helper; file not found: {helper_path}"
+        )
 
     module_name = "_stage4_risk_review_run_paths"
     spec = importlib.util.spec_from_file_location(module_name, helper_path)
@@ -108,7 +109,9 @@ def _load_run_paths_module() -> ModuleType:
     try:
         spec.loader.exec_module(module)
     except Exception as exc:
-        raise ImportError(f"cannot execute run_paths helper from {helper_path}: {exc}") from exc
+        raise ImportError(
+            f"cannot execute run_paths helper from {helper_path}: {exc}"
+        ) from exc
     finally:
         if previous_module is None:
             sys.modules.pop(module_name, None)
@@ -122,7 +125,9 @@ try:
     build_run_paths = _run_paths.build_run_paths
     build_run_paths_from_reference = _run_paths.build_run_paths_from_reference
 except AttributeError as exc:
-    raise ImportError("run_paths helper is missing required path builder functions") from exc
+    raise ImportError(
+        "run_paths helper is missing required path builder functions"
+    ) from exc
 
 
 def parse_args() -> argparse.Namespace:
@@ -130,11 +135,19 @@ def parse_args() -> argparse.Namespace:
         description="Stage4 前只读风险复核",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--date", default=None, help="运行日期，支持 YYYY-MM-DD 或 YYYYMMDD")
-    parser.add_argument("--market-data", default=None, help="market_data_complete.json 路径")
+    parser.add_argument(
+        "--date", default=None, help="运行日期，支持 YYYY-MM-DD 或 YYYYMMDD"
+    )
+    parser.add_argument(
+        "--market-data", default=None, help="market_data_complete.json 路径"
+    )
     parser.add_argument("--gap-monitor", default=None, help="gap_monitor.json 路径")
-    parser.add_argument("--quality-metrics", default=None, help="quality_metrics.json 路径")
-    parser.add_argument("--output", default=None, help="stage4_risk_review.json 输出路径")
+    parser.add_argument(
+        "--quality-metrics", default=None, help="quality_metrics.json 路径"
+    )
+    parser.add_argument(
+        "--output", default=None, help="stage4_risk_review.json 输出路径"
+    )
     parser.add_argument(
         "--allow-fund-flow-downgrade",
         action="store_true",
@@ -175,7 +188,9 @@ def _item_text(item: JsonObject) -> str:
         "data_source",
         "provider",
     )
-    return " ".join(str(item.get(field)) for field in fields if item.get(field) not in (None, "")).lower()
+    return " ".join(
+        str(item.get(field)) for field in fields if item.get(field) not in (None, "")
+    ).lower()
 
 
 def _is_number(value: Any) -> bool:
@@ -198,7 +213,11 @@ def _is_valid_source_url(value: Any) -> bool:
     if any(char.isspace() for char in text):
         return False
     parsed = urlparse(text)
-    return parsed.scheme in {"http", "https"} and bool(parsed.netloc) and parsed.geturl() == text
+    return (
+        parsed.scheme in {"http", "https"}
+        and bool(parsed.netloc)
+        and parsed.geturl() == text
+    )
 
 
 def _normalized_source_url(item: JsonObject) -> Optional[str]:
@@ -250,7 +269,9 @@ def _iter_items(payload: JsonObject) -> Iterable[Tuple[str, str, JsonObject]]:
                     yield str(category), f"{category}.{key}", item
 
 
-def _find_item(payload: JsonObject, category: str, target_key: str) -> Optional[JsonObject]:
+def _find_item(
+    payload: JsonObject, category: str, target_key: str
+) -> Optional[JsonObject]:
     target_lower = target_key.lower()
     for found_category, full_key, item in _iter_items(payload):
         if found_category != category:
@@ -266,7 +287,9 @@ def _find_item(payload: JsonObject, category: str, target_key: str) -> Optional[
     return None
 
 
-def _finding(severity: str, key: str, code: str, message: str, item: JsonObject) -> Finding:
+def _finding(
+    severity: str, key: str, code: str, message: str, item: JsonObject
+) -> Finding:
     result: Finding = {
         "severity": severity,
         "key": key,
@@ -441,14 +464,24 @@ def build_review(
     )
     findings.extend(review_source_evidence(market_payload))
 
-    grouped: Dict[str, List[Finding]] = {"blocker": [], "review_required": [], "info": []}
+    grouped: Dict[str, List[Finding]] = {
+        "blocker": [],
+        "review_required": [],
+        "info": [],
+    }
     for finding in findings:
         grouped[finding["severity"]].append(finding)
 
-    metadata = market_payload.get("metadata") if isinstance(market_payload.get("metadata"), dict) else {}
+    metadata = (
+        market_payload.get("metadata")
+        if isinstance(market_payload.get("metadata"), dict)
+        else {}
+    )
     return {
         "metadata": {
-            "date": metadata.get("date") or metadata.get("end_date") or metadata.get("start_date"),
+            "date": metadata.get("date")
+            or metadata.get("end_date")
+            or metadata.get("start_date"),
             "allow_fund_flow_downgrade": allow_fund_flow_downgrade,
             "gap_monitor_present": gap_monitor is not None,
             "quality_metrics_present": quality_metrics is not None,
@@ -483,8 +516,16 @@ def _resolve_explicit_market_paths(
             ) from exc
 
     gap_path = Path(args.gap_monitor) if args.gap_monitor else run_paths.gap_monitor
-    quality_path = Path(args.quality_metrics) if args.quality_metrics else run_paths.quality_metrics
-    output_path = Path(args.output) if args.output else run_paths.data_dir / "stage4_risk_review.json"
+    quality_path = (
+        Path(args.quality_metrics)
+        if args.quality_metrics
+        else run_paths.quality_metrics
+    )
+    output_path = (
+        Path(args.output)
+        if args.output
+        else run_paths.data_dir / "stage4_risk_review.json"
+    )
     return market_path, gap_path, quality_path, output_path
 
 
@@ -495,7 +536,9 @@ def resolve_paths(
     if args.market_data:
         market_path = Path(args.market_data)
         if market_payload is None:
-            raise ValueError("market_payload is required when resolving explicit --market-data paths")
+            raise ValueError(
+                "market_payload is required when resolving explicit --market-data paths"
+            )
         return _resolve_explicit_market_paths(args, market_path, market_payload)
     elif args.date:
         run_paths = build_run_paths(args.date)
@@ -504,8 +547,16 @@ def resolve_paths(
         raise ValueError("--date or --market-data is required")
 
     gap_path = Path(args.gap_monitor) if args.gap_monitor else run_paths.gap_monitor
-    quality_path = Path(args.quality_metrics) if args.quality_metrics else run_paths.quality_metrics
-    output_path = Path(args.output) if args.output else run_paths.data_dir / "stage4_risk_review.json"
+    quality_path = (
+        Path(args.quality_metrics)
+        if args.quality_metrics
+        else run_paths.quality_metrics
+    )
+    output_path = (
+        Path(args.output)
+        if args.output
+        else run_paths.data_dir / "stage4_risk_review.json"
+    )
     return market_path, gap_path, quality_path, output_path
 
 
@@ -515,12 +566,13 @@ def main() -> None:
         market_path = Path(args.market_data)
         market_payload = _load_json(market_path, required=True)
         assert market_payload is not None
-        market_path, gap_path, quality_path, output_path = resolve_paths(args, market_payload)
+        market_path, gap_path, quality_path, output_path = resolve_paths(
+            args, market_payload
+        )
     else:
         market_path, gap_path, quality_path, output_path = resolve_paths(args)
         market_payload = _load_json(market_path, required=True)
         assert market_payload is not None
-
 
     missing_optional_files: List[str] = []
     gap_monitor = _load_json(gap_path, required=False)

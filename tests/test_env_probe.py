@@ -4,7 +4,6 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -12,9 +11,11 @@ def _copy_probe(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     scripts = root / "scripts"
     scripts.mkdir(parents=True)
-    body = (REPO_ROOT / "scripts/env_probe.sh").read_text(
-        encoding="utf-8"
-    ).replace("\r\n", "\n")
+    body = (
+        (REPO_ROOT / "scripts/env_probe.sh")
+        .read_text(encoding="utf-8")
+        .replace("\r\n", "\n")
+    )
     probe = scripts / "env_probe.sh"
     probe.write_bytes(body.encode("utf-8"))
     probe.chmod(0o755)
@@ -27,7 +28,7 @@ def _write_fake_uname(root: Path, system_name: str) -> Path:
     (fake_bin / "uname").write_bytes(
         (
             "#!/usr/bin/env bash\n"
-            "if [ \"${1:-}\" = \"-s\" ]; then\n"
+            'if [ "${1:-}" = "-s" ]; then\n'
             f"  printf '%s\\n' {shlex.quote(system_name)}\n"
             "else\n"
             f"  printf '%s\\n' {shlex.quote(system_name)}\n"
@@ -81,8 +82,8 @@ def _run_probe(
     if fake_pwd is not None:
         command = (
             "cd() { "
-            "if [ \"${1:-}\" = \"$ENV_PROBE_FAKE_PWD\" ]; then return 0; fi; "
-            "builtin cd \"$@\"; "
+            'if [ "${1:-}" = "$ENV_PROBE_FAKE_PWD" ]; then return 0; fi; '
+            'builtin cd "$@"; '
             "}; "
             "pwd() { printf '%s\\n' \"$ENV_PROBE_FAKE_PWD\"; }; "
             "export -f cd; "
@@ -92,7 +93,7 @@ def _run_probe(
         env["ENV_PROBE_FAKE_PWD"] = fake_pwd
     if path_prefix is not None:
         command = (
-            f"PATH={shlex.quote(path_prefix.as_posix())}:\"$PATH\"; "
+            f'PATH={shlex.quote(path_prefix.as_posix())}:"$PATH"; '
             f"export PATH; {command}"
         )
     return subprocess.run(
@@ -142,7 +143,9 @@ def test_msys_with_linux_venv_returns_use_wsl(tmp_path: Path) -> None:
 
     assert result.returncode == 3
     assert "[USE_WSL] env_probe" in result.stdout
-    assert "Windows native bash is active but .venv uses Linux/WSL layout" in result.stdout
+    assert (
+        "Windows native bash is active but .venv uses Linux/WSL layout" in result.stdout
+    )
     assert "C:\\Windows\\System32\\bash.exe" in result.stdout
 
 
@@ -210,7 +213,7 @@ def test_msys_drive_path_next_command_is_wsl_converted_and_shell_quoted(
     expected_path = "/mnt/d/Repo With Spaces/quote's/repo"
     expected_next = (
         "next=C:\\Windows\\System32\\bash.exe -lc "
-        f"\"cd {_env_probe_single_quote(expected_path)} && bash run_preflight.sh\""
+        f'"cd {_env_probe_single_quote(expected_path)} && bash run_preflight.sh"'
     )
     assert f"repo_path={fake_repo_path}" in result.stdout
     assert expected_next in result.stdout

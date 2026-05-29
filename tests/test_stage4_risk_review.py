@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 stage4 = runpy.run_path(
     Path(__file__).resolve().parents[1] / "scripts" / "stage4_risk_review.py",
     run_name="stage4_risk_review_test",
@@ -416,7 +415,9 @@ def test_critical_numeric_item_without_source_url_is_blocker():
         "https://example.com/path|official",
     ],
 )
-def test_malformed_source_url_is_invalid_evidence_and_triggers_missing_source_url(source_url):
+def test_malformed_source_url_is_invalid_evidence_and_triggers_missing_source_url(
+    source_url,
+):
     payload = {
         "metadata": {"date": "2026-05-28"},
         "macro_indicators": {
