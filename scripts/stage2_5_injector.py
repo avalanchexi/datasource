@@ -3358,6 +3358,64 @@ def _should_backfill_numeric(value: Any) -> bool:
         return True
 
 
+FOREX_DAILY_CHANGE_SOURCE_MARKERS = (
+    "direct_daily_series",
+    "change_1d",
+)
+
+
+def _is_forex_daily_change_absence_text(text: str) -> bool:
+    return bool(
+        re.search(r"\breason\s*=", text)
+        or re.search(r"\b(?:missing|no)[_\s-]", text)
+        or any(
+            marker in text
+            for marker in (
+                "deepseek_no_value",
+                "missing_previous_value",
+                "missing_value",
+                "no_previous_value",
+                "no_value",
+            )
+        )
+    )
+
+
+def _has_forex_daily_change_evidence(entry: Dict[str, Any]) -> bool:
+    explicit_keys = (
+        "daily_change_basis",
+        "daily_change_source",
+        "daily_change_source_url",
+        "daily_change_base_date",
+        "daily_change_base_price",
+    )
+    for key in explicit_keys:
+        value = entry.get(key)
+        if value in (None, ""):
+            continue
+        value_text = str(value).strip().lower()
+        if value_text and not _is_forex_daily_change_absence_text(value_text):
+            return True
+    for field in ("source", "note", "manual_reason"):
+        evidence_text = str(entry.get(field) or "").lower()
+        for part in re.split(r"[,;|，；\n]+", evidence_text):
+            part = part.strip()
+            if not part or _is_forex_daily_change_absence_text(part):
+                continue
+            if any(marker in part for marker in FOREX_DAILY_CHANGE_SOURCE_MARKERS):
+                return True
+    return False
+
+
+def _should_backfill_forex_daily_change(entry: Dict[str, Any]) -> bool:
+    value = _coerce_float(entry.get("daily_change"))
+    if value is None:
+        return True
+    if abs(value) >= 1e-9:
+        return False
+    return not _has_forex_daily_change_evidence(entry)
+
+
 def _append_note(entry: Dict[str, Any], message: str) -> None:
     if not message:
         return
@@ -3548,6 +3606,7 @@ def _backfill_trend_changes(
         daily_hist = _calc_daily_change_from_trend_history("forex", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
         used_hist_1d = False
+        should_backfill_daily = _should_backfill_forex_daily_change(fx)
         if _should_backfill_numeric(fx.get("change_120d")):
             if hist.get("change_120d") is not None:
                 fx["change_120d"] = round(float(hist["change_120d"]), 2)
@@ -3558,9 +3617,12 @@ def _backfill_trend_changes(
                 reason = hist.get("reason_120d") or "trend_history_missing"
                 _record_backfill_issue(metadata, "forex", symbol, "change_120d", reason)
                 _append_note(fx, f"reason={reason}")
-        if fx.get("daily_change") is None:
+        if should_backfill_daily:
             if daily_hist.get("change_1d") is not None:
                 fx["daily_change"] = round(float(daily_hist["change_1d"]), 2)
+                fx["daily_change_basis"] = "trend_history"
+                if daily_hist.get("base_1d_date"):
+                    fx["daily_change_base_date"] = daily_hist["base_1d_date"]
                 stats["forex"] += 1
                 used_hist_1d = True
             else:

@@ -500,6 +500,362 @@ def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
     assert merged["change_120d"] == pytest.approx(-3.32)
 
 
+@pytest.mark.parametrize(
+    ("entry", "expected"),
+    [
+        ({"daily_change": None}, True),
+        ({"daily_change": 0.03}, False),
+        ({"daily_change": 0.0}, True),
+        ({"daily_change": 0.0, "note": "reason=no_previous_value"}, True),
+        ({"daily_change": 0.0, "source": "TuShare fx_daily(USDCNY)"}, True),
+        ({"daily_change": 0.0, "note": "deepseek_no_value daily_change"}, True),
+        ({"daily_change": 0.0, "note": "missing_previous_value daily_change"}, True),
+        ({"daily_change": 0.0, "note": "reason=no_previous_value daily_change"}, True),
+        ({"daily_change": 0.0, "daily_change_basis": "reason=no_previous_value"}, True),
+        ({"daily_change": 0.0, "daily_change_source": "deepseek_no_value"}, True),
+        ({"daily_change": 0.0, "daily_change_basis": "trend_history"}, False),
+        ({"daily_change": 0.0, "daily_change_source": "trend_history"}, False),
+        ({"daily_change": 0.0, "daily_change_source_url": "https://example.com/fx"}, False),
+        ({"daily_change": 0.0, "daily_change_base_date": "2026-06-01"}, False),
+        ({"daily_change": 0.0, "daily_change_base_price": 6.82}, False),
+        ({"daily_change": 0.0, "note": "direct_daily_series computed zero"}, False),
+        ({"daily_change": 0.0, "note": "change_1d from trusted source"}, False),
+    ],
+)
+def test_should_backfill_forex_daily_change_handles_evidence_and_failure_text(entry, expected):
+    assert injector._should_backfill_forex_daily_change(entry) is expected
+
+
+def test_backfill_trend_changes_replaces_untrusted_zero_forex_daily_change(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 0.0,
+                "trend": "pending",
+                "source": "structured",
+                "note": "structured_provider:official_china",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": -4.18,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.024938753355723306,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 2
+    assert fx["daily_change"] == pytest.approx(0.02)
+    assert fx["daily_change_basis"] == "trend_history"
+    assert fx["daily_change_base_date"] == "2026-06-01"
+    assert fx["change_120d"] == pytest.approx(-4.18)
+
+
+def test_backfill_trend_changes_daily_change_ignores_120d_failure_note(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": None,
+                "trend": "pending",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": None,
+            "reason_5d": None,
+            "reason_120d": "trend_history_insufficient",
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.0249,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 1
+    assert fx["change_120d"] is None
+    assert fx["daily_change"] == pytest.approx(0.02)
+    assert fx["daily_change_basis"] == "trend_history"
+    assert fx["daily_change_base_date"] == "2026-06-01"
+    assert "reason=trend_history_insufficient" in fx["note"]
+    assert {
+        "category": "forex",
+        "key": "USDCNY",
+        "field": "change_120d",
+        "reason": "trend_history_insufficient",
+    } in market_data["metadata"]["trend_backfill_issues"]
+
+
+def test_backfill_trend_changes_daily_change_ignores_existing_failure_note(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.23,
+                "trend": "pending",
+                "source": "structured",
+                "note": "reason=trend_history_insufficient",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": None,
+            "reason_5d": None,
+            "reason_120d": "trend_history_insufficient",
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.0249,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 1
+    assert fx["change_120d"] == pytest.approx(1.23)
+    assert fx["daily_change"] == pytest.approx(0.02)
+    assert fx["daily_change_basis"] == "trend_history"
+    assert fx["daily_change_base_date"] == "2026-06-01"
+
+
+def test_backfill_trend_changes_daily_change_ignores_fx_daily_quote_source(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.23,
+                "trend": "pending",
+                "source": "TuShare fx_daily(USDCNY)",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": None,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.0249,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 1
+    assert fx["change_120d"] == pytest.approx(1.23)
+    assert fx["daily_change"] == pytest.approx(0.02)
+    assert fx["daily_change_basis"] == "trend_history"
+    assert fx["daily_change_base_date"] == "2026-06-01"
+
+
+def test_backfill_trend_changes_daily_change_ignores_no_previous_value_note(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.23,
+                "trend": "pending",
+                "source": "structured",
+                "note": "reason=no_previous_value",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": None,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.0249,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 1
+    assert fx["change_120d"] == pytest.approx(1.23)
+    assert fx["daily_change"] == pytest.approx(0.02)
+    assert fx["daily_change_basis"] == "trend_history"
+    assert fx["daily_change_base_date"] == "2026-06-01"
+
+
+def test_backfill_trend_changes_preserves_explicit_zero_forex_daily_change(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "daily_change_basis": "direct_daily_series",
+                "daily_change_base_date": "2026-06-02",
+                "change_120d": None,
+                "trend": "flat",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": -4.18,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.03,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 1
+    assert fx["daily_change"] == pytest.approx(0.0)
+    assert fx["daily_change_basis"] == "direct_daily_series"
+    assert fx["daily_change_base_date"] == "2026-06-02"
+    assert fx["change_120d"] == pytest.approx(-4.18)
+
+
 def test_backfill_trend_changes_clears_no_previous_note_when_monetary_filled(monkeypatch):
     market_data = {
         "metadata": {"date": "2026-02-09"},
