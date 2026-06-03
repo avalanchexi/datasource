@@ -3360,51 +3360,229 @@ def _should_backfill_numeric(value: Any) -> bool:
 
 FOREX_DAILY_CHANGE_SOURCE_MARKERS = (
     "direct_daily_series",
+    "direct_window",
+    "trend_history_direct_window",
+    "trend_history_full_window",
     "change_1d",
+    "change_rate",
+    "trend_history",
+)
+
+FOREX_DAILY_CHANGE_EVIDENCE_KEYS = (
+    "daily_change_basis",
+    "daily_change_source",
+    "daily_change_source_url",
+    "daily_change_window_evidence",
+    "daily_change_base_date",
+    "daily_change_base_price",
+    "base_1d_date",
+    "change_1d",
+    "change_1d_pct",
+    "reason_1d",
+    "previous_value",
+    "previous_rate",
+    "previous_price",
+)
+
+FOREX_120D_CHANGE_SOURCE_MARKERS = (
+    "direct_window",
+    "trend_history_direct_window",
+    "trend_history_full_window",
+    "change_rate",
+    "trend_history",
+)
+
+FOREX_120D_CHANGE_EVIDENCE_KEYS = (
+    "change_120d_basis",
+    "change_120d_source",
+    "change_120d_source_url",
+    "change_120d_window_evidence",
+    "change_120d_base_date",
+    "change_120d_base_price",
 )
 
 
 def _is_forex_daily_change_absence_text(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if normalized in {"", "n/a", "na", "-", "--", "unknown", "pending"}:
+        return True
     return bool(
-        re.search(r"\breason\s*=", text)
-        or re.search(r"\b(?:missing|no)[_\s-]", text)
+        re.search(r"\breason\s*=", normalized)
+        or re.search(r"\b(?:missing|no)[_\s-]", normalized)
         or any(
-            marker in text
+            marker in normalized
             for marker in (
                 "deepseek_no_value",
                 "missing_previous_value",
                 "missing_value",
                 "no_previous_value",
                 "no_value",
+                "failed",
+                "failure",
+                "error",
+                "invalid",
+                "unavailable",
+                "not_available",
+                "not-available",
+                "not available",
+                "缺失",
+                "失败",
             )
         )
     )
 
 
-def _has_forex_daily_change_evidence(entry: Dict[str, Any]) -> bool:
-    explicit_keys = (
-        "daily_change_basis",
-        "daily_change_source",
-        "daily_change_source_url",
-        "daily_change_base_date",
-        "daily_change_base_price",
+def _is_valid_forex_daily_change_base_date(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if _is_forex_daily_change_absence_text(text):
+        return False
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-\d{2}", text))
+
+
+def _is_valid_forex_daily_change_source_url(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if _is_forex_daily_change_absence_text(text):
+        return False
+    return bool(re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE))
+
+
+def _is_valid_forex_change_base_price(value: Any) -> bool:
+    if value is None:
+        return False
+    if _is_forex_daily_change_absence_text(str(value)):
+        return False
+    return _coerce_float(value) is not None
+
+
+def _has_forex_daily_change_computed_marker(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if _is_forex_daily_change_absence_text(text):
+        return False
+    tokens = set(re.split(r"[^a-z0-9_]+", text))
+    negative_prefixes = ("failed", "failure", "error", "invalid", "unavailable")
+    return any(
+        token == marker or (token.endswith(f"_{marker}") and not token.startswith(negative_prefixes))
+        for token in tokens
+        for marker in FOREX_DAILY_CHANGE_SOURCE_MARKERS
     )
-    for key in explicit_keys:
+
+
+def _has_forex_120d_change_computed_marker(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if _is_forex_daily_change_absence_text(text):
+        return False
+    tokens = set(re.split(r"[^a-z0-9_]+", text))
+    negative_prefixes = ("failed", "failure", "error", "invalid", "unavailable")
+    return any(
+        (
+            token == marker
+            or (token.endswith(f"_{marker}") and not token.startswith(negative_prefixes))
+        )
+        and not token.startswith("daily_")
+        for token in tokens
+        for marker in FOREX_120D_CHANGE_SOURCE_MARKERS
+    )
+
+
+def _has_forex_daily_change_evidence(entry: Dict[str, Any]) -> bool:
+    for key in FOREX_DAILY_CHANGE_EVIDENCE_KEYS:
         value = entry.get(key)
-        if value in (None, ""):
-            continue
-        value_text = str(value).strip().lower()
-        if value_text and not _is_forex_daily_change_absence_text(value_text):
-            return True
-    for field in ("source", "note", "manual_reason"):
-        evidence_text = str(entry.get(field) or "").lower()
-        for part in re.split(r"[,;|，；\n]+", evidence_text):
-            part = part.strip()
-            if not part or _is_forex_daily_change_absence_text(part):
-                continue
-            if any(marker in part for marker in FOREX_DAILY_CHANGE_SOURCE_MARKERS):
+        if key in {"daily_change_basis", "daily_change_source", "daily_change_window_evidence"}:
+            if _has_forex_daily_change_computed_marker(value):
                 return True
+            continue
+        if key == "daily_change_source_url":
+            if _is_valid_forex_daily_change_source_url(value):
+                return True
+            continue
+        if key in {"daily_change_base_date", "base_1d_date"}:
+            if _is_valid_forex_daily_change_base_date(value):
+                return True
+            continue
+        if key == "daily_change_base_price" and _is_valid_forex_change_base_price(value):
+            return True
     return False
+
+
+def _copy_valid_forex_daily_change_evidence(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+    for key in FOREX_DAILY_CHANGE_EVIDENCE_KEYS:
+        target.pop(key, None)
+
+    for key in ("daily_change_basis", "daily_change_source", "daily_change_window_evidence"):
+        value = source.get(key)
+        if _has_forex_daily_change_computed_marker(value):
+            target[key] = str(value).strip()
+
+    source_url = source.get("daily_change_source_url")
+    if _is_valid_forex_daily_change_source_url(source_url):
+        target["daily_change_source_url"] = str(source_url).strip()
+
+    base_date = source.get("daily_change_base_date")
+    if _is_valid_forex_daily_change_base_date(base_date):
+        target["daily_change_base_date"] = str(base_date).strip()
+
+    base_1d_date = source.get("base_1d_date")
+    if _is_valid_forex_daily_change_base_date(base_1d_date):
+        target["base_1d_date"] = str(base_1d_date).strip()
+
+    base_price = _coerce_float(source.get("daily_change_base_price"))
+    if base_price is not None and _is_valid_forex_change_base_price(source.get("daily_change_base_price")):
+        target["daily_change_base_price"] = base_price
+
+
+def _copy_valid_forex_120d_change_evidence(target: Dict[str, Any], source: Dict[str, Any]) -> None:
+    for key in FOREX_120D_CHANGE_EVIDENCE_KEYS:
+        target.pop(key, None)
+
+    for key in ("change_120d_basis", "change_120d_source", "change_120d_window_evidence"):
+        value = source.get(key)
+        if _has_forex_120d_change_computed_marker(value):
+            target[key] = str(value).strip()
+
+    source_url = source.get("change_120d_source_url")
+    if _is_valid_forex_daily_change_source_url(source_url):
+        target["change_120d_source_url"] = str(source_url).strip()
+
+    base_date = source.get("change_120d_base_date")
+    if _is_valid_forex_daily_change_base_date(base_date):
+        target["change_120d_base_date"] = str(base_date).strip()
+
+    base_price = _coerce_float(source.get("change_120d_base_price"))
+    if base_price is not None and _is_valid_forex_change_base_price(source.get("change_120d_base_price")):
+        target["change_120d_base_price"] = base_price
+
+
+def _has_forex_120d_change_evidence(entry: Dict[str, Any]) -> bool:
+    for key in FOREX_120D_CHANGE_EVIDENCE_KEYS:
+        value = entry.get(key)
+        if key in {"change_120d_basis", "change_120d_source", "change_120d_window_evidence"}:
+            if _has_forex_120d_change_computed_marker(value):
+                return True
+            continue
+        if key == "change_120d_source_url":
+            if _is_valid_forex_daily_change_source_url(value):
+                return True
+            continue
+        if key == "change_120d_base_date":
+            if _is_valid_forex_daily_change_base_date(value):
+                return True
+            continue
+        if key == "change_120d_base_price" and _is_valid_forex_change_base_price(value):
+            return True
+    return False
+
+
+def _is_zero_change_value(value: Any) -> bool:
+    numeric = _coerce_float(value)
+    return numeric is not None and abs(numeric) < 1e-12
 
 
 def _should_backfill_forex_daily_change(entry: Dict[str, Any]) -> bool:
@@ -3414,6 +3592,46 @@ def _should_backfill_forex_daily_change(entry: Dict[str, Any]) -> bool:
     if abs(value) >= 1e-9:
         return False
     return not _has_forex_daily_change_evidence(entry)
+
+
+def _should_backfill_forex_120d_change(entry: Dict[str, Any]) -> bool:
+    value = _coerce_float(entry.get("change_120d"))
+    if value is None:
+        return True
+    if abs(value) >= 1e-9:
+        return False
+    return not _has_forex_120d_change_evidence(entry)
+
+
+def _usable_forex_change_value(entry: Dict[str, Any], field: str) -> Optional[float]:
+    value = _coerce_float(entry.get(field))
+    if value is None:
+        return None
+    if field == "daily_change" and _should_backfill_forex_daily_change(entry):
+        return None
+    if field == "change_120d" and _should_backfill_forex_120d_change(entry):
+        return None
+    return value
+
+
+def _is_zero_derived_forex_trend(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return text in {
+        "flat",
+        "sideways",
+        "平稳",
+        "横盘震荡",
+        "骞崇ǔ",
+        "妯洏闇囪崱",
+    }
+
+
+def _usable_forex_raw_trend(raw_trend: Any, daily_change: Optional[float], change_120d: Optional[float]) -> Any:
+    if (daily_change is None or change_120d is None) and _is_zero_derived_forex_trend(raw_trend):
+        return None
+    return raw_trend
 
 
 def _append_note(entry: Dict[str, Any], message: str) -> None:
@@ -3606,27 +3824,44 @@ def _backfill_trend_changes(
         daily_hist = _calc_daily_change_from_trend_history("forex", symbol, current, base_dir=base_dir, reference_date=reference_date)
         used_hist_120d = False
         used_hist_1d = False
+        existing_fx_evidence = dict(fx)
+        _copy_valid_forex_daily_change_evidence(fx, existing_fx_evidence)
+        _copy_valid_forex_120d_change_evidence(fx, existing_fx_evidence)
         should_backfill_daily = _should_backfill_forex_daily_change(fx)
-        if _should_backfill_numeric(fx.get("change_120d")):
+        should_backfill_120d = _should_backfill_forex_120d_change(fx)
+        if should_backfill_120d:
             if hist.get("change_120d") is not None:
                 fx["change_120d"] = round(float(hist["change_120d"]), 2)
+                _copy_valid_forex_120d_change_evidence(
+                    fx,
+                    {
+                        "change_120d_basis": "trend_history",
+                        "change_120d_base_date": hist.get("base_120d_date"),
+                    },
+                )
                 stats["forex"] += 1
                 used_hist_120d = True
             else:
                 fx["change_120d"] = None
+                _copy_valid_forex_120d_change_evidence(fx, {})
                 reason = hist.get("reason_120d") or "trend_history_missing"
                 _record_backfill_issue(metadata, "forex", symbol, "change_120d", reason)
                 _append_note(fx, f"reason={reason}")
         if should_backfill_daily:
             if daily_hist.get("change_1d") is not None:
                 fx["daily_change"] = round(float(daily_hist["change_1d"]), 2)
-                fx["daily_change_basis"] = "trend_history"
-                if daily_hist.get("base_1d_date"):
-                    fx["daily_change_base_date"] = daily_hist["base_1d_date"]
+                _copy_valid_forex_daily_change_evidence(
+                    fx,
+                    {
+                        "daily_change_basis": "trend_history",
+                        "daily_change_base_date": daily_hist.get("base_1d_date"),
+                    },
+                )
                 stats["forex"] += 1
                 used_hist_1d = True
             else:
                 fx["daily_change"] = None
+                _copy_valid_forex_daily_change_evidence(fx, {})
                 reason = daily_hist.get("reason_1d") or "trend_history_missing"
                 _record_backfill_issue(metadata, "forex", symbol, "daily_change", reason)
                 _append_note(fx, f"reason={reason}")
@@ -3641,13 +3876,19 @@ def _backfill_trend_changes(
             _merge_trend_confidence(fx, confidence)
         if confidence_reason:
             _append_note(fx, confidence_reason)
-        if fx.get("trend") in (None, "未知", "待WebSearch补充", "待 WebSearch"):
+        raw_trend = fx.get("trend")
+        trend_daily_change = _usable_forex_change_value(fx, "daily_change")
+        trend_120d_change = _usable_forex_change_value(fx, "change_120d")
+        usable_raw_trend = _usable_forex_raw_trend(raw_trend, trend_daily_change, trend_120d_change)
+        if usable_raw_trend in (None, "未知", "待WebSearch补充", "待 WebSearch"):
             fx["trend"] = _infer_asset_trend(
                 None,
-                fx.get("daily_change"),
-                fx.get("change_120d"),
+                trend_daily_change,
+                trend_120d_change,
                 "forex",
             )
+        else:
+            fx["trend"] = usable_raw_trend
 
     for comm in market_data.get("commodities", []) or []:
         symbol = comm.get("symbol")
@@ -4274,6 +4515,10 @@ def _merge_forex_entry(
     # 从 trend_history 计算变化值（daily_change 取前一交易日变化）
     current_rate = merged.get('current_rate')
     symbol = merged.get('pair')
+    payload_has_daily_change = "daily_change" in payload
+    payload_daily_change = _coerce_percent(payload.get('daily_change'))
+    payload_has_120d_change = "change_120d" in payload
+    payload_120d_change = _coerce_percent(payload.get('change_120d'))
     used_hist_1d = False
     used_hist_120d = False
     if current_rate and symbol and trend_history_base_dir is not None:
@@ -4289,22 +4534,40 @@ def _merge_forex_entry(
             current_rate,
             base_dir=trend_history_base_dir,
         )
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        merged['daily_change'] = payload_daily_change
         if merged['daily_change'] is None:
             hist_1d = _coerce_float(daily_hist.get('change_1d'))
             if hist_1d is not None:
                 merged['daily_change'] = hist_1d
+                _copy_valid_forex_daily_change_evidence(
+                    merged,
+                    {
+                        "daily_change_basis": "trend_history",
+                        "daily_change_base_date": daily_hist.get("base_1d_date"),
+                    },
+                )
                 used_hist_1d = True
             else:
                 merged['daily_change'] = orig.get('daily_change')
-        merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
+                _copy_valid_forex_daily_change_evidence(merged, orig)
+        merged['change_120d'] = payload_120d_change
         if merged['change_120d'] is None:
             hist_120d = _coerce_float(hist_changes.get('change_120d'))
             if hist_120d is not None:
                 merged['change_120d'] = hist_120d
+                _copy_valid_forex_120d_change_evidence(
+                    merged,
+                    {
+                        "change_120d_basis": "trend_history",
+                        "change_120d_base_date": hist_changes.get("base_120d_date"),
+                    },
+                )
                 used_hist_120d = True
             else:
                 merged['change_120d'] = orig.get('change_120d')
+                _copy_valid_forex_120d_change_evidence(merged, orig)
+        else:
+            _copy_valid_forex_120d_change_evidence(merged, payload)
         confidence, confidence_reason = _derive_trend_confidence(
             hist_changes,
             used_5d=used_hist_1d,
@@ -4318,12 +4581,20 @@ def _merge_forex_entry(
             _merge_trend_confidence(merged, "low")
             _append_note(merged, "trend_history_base_estimated")
     else:
-        merged['daily_change'] = _coerce_percent(payload.get('daily_change'))
+        merged['daily_change'] = payload_daily_change
         if merged['daily_change'] is None:
             merged['daily_change'] = orig.get('daily_change')
-        merged['change_120d'] = _coerce_percent(payload.get('change_120d'))
+            _copy_valid_forex_daily_change_evidence(merged, orig)
+        merged['change_120d'] = payload_120d_change
         if merged['change_120d'] is None:
             merged['change_120d'] = orig.get('change_120d')
+            _copy_valid_forex_120d_change_evidence(merged, orig)
+        else:
+            _copy_valid_forex_120d_change_evidence(merged, payload)
+    if payload_has_daily_change and not used_hist_1d:
+        _copy_valid_forex_daily_change_evidence(merged, payload)
+    if payload_has_120d_change and not used_hist_120d:
+        _copy_valid_forex_120d_change_evidence(merged, payload)
     _copy_source_url(merged, payload)
     _copy_payload_metadata_fields(
         merged,
@@ -4333,7 +4604,14 @@ def _merge_forex_entry(
 
     # 自动推断外汇趋势（基于涨跌幅）
     raw_trend = payload.get('trend', orig.get('trend'))
-    merged['trend'] = _infer_asset_trend(raw_trend, merged.get('daily_change'), merged.get('change_120d'), "forex")
+    trend_daily_change = _usable_forex_change_value(merged, "daily_change")
+    trend_120d_change = _usable_forex_change_value(merged, "change_120d")
+    merged['trend'] = _infer_asset_trend(
+        _usable_forex_raw_trend(raw_trend, trend_daily_change, trend_120d_change),
+        trend_daily_change,
+        trend_120d_change,
+        "forex",
+    )
     merged['source'] = _format_source_label(payload.get('source'))
     merged['note'] = payload.get('note', orig.get('note'))
     if is_manual and 'is_estimated' not in payload and _has_valid_value(merged.get('current_rate')):
@@ -4354,8 +4632,12 @@ def _build_forex_entry(
     current_rate = _coerce_float(payload.get('current_rate'))
 
     # 从 trend_history 计算变化值（daily_change 取前一交易日变化）
-    daily_change = _coerce_percent(payload.get('daily_change'))
-    change_120d = _coerce_percent(payload.get('change_120d'))
+    payload_daily_change = _coerce_percent(payload.get('daily_change'))
+    daily_change = payload_daily_change
+    payload_120d_change = _coerce_percent(payload.get('change_120d'))
+    change_120d = payload_120d_change
+    trend_history_daily_evidence: Optional[Dict[str, Any]] = None
+    trend_history_120d_evidence: Optional[Dict[str, Any]] = None
     if current_rate and pair and trend_history_base_dir is not None:
         hist_changes = _calc_change_from_trend_history(
             "forex",
@@ -4370,9 +4652,21 @@ def _build_forex_entry(
             base_dir=trend_history_base_dir,
         )
         if daily_change is None:
-            daily_change = daily_hist.get('change_1d')
+            hist_daily_change = _coerce_float(daily_hist.get('change_1d'))
+            if hist_daily_change is not None:
+                daily_change = hist_daily_change
+                trend_history_daily_evidence = {
+                    "daily_change_basis": "trend_history",
+                    "daily_change_base_date": daily_hist.get("base_1d_date"),
+                }
         if change_120d is None:
-            change_120d = hist_changes.get('change_120d')
+            hist_120d_change = _coerce_float(hist_changes.get('change_120d'))
+            if hist_120d_change is not None:
+                change_120d = hist_120d_change
+                trend_history_120d_evidence = {
+                    "change_120d_basis": "trend_history",
+                    "change_120d_base_date": hist_changes.get("base_120d_date"),
+                }
 
     entry = {
         "pair": pair,
@@ -4380,15 +4674,31 @@ def _build_forex_entry(
         "current_rate": current_rate,
         "daily_change": daily_change,
         "change_120d": change_120d,
-        "trend": _infer_asset_trend(payload.get('trend'), daily_change, change_120d, "forex"),
         "source": _format_source_label(payload.get('source')),
         "note": payload.get("note"),
     }
+    if payload_daily_change is not None:
+        _copy_valid_forex_daily_change_evidence(entry, payload)
+    elif trend_history_daily_evidence is not None:
+        _copy_valid_forex_daily_change_evidence(entry, trend_history_daily_evidence)
+    if payload_120d_change is not None:
+        _copy_valid_forex_120d_change_evidence(entry, payload)
+    elif trend_history_120d_evidence is not None:
+        _copy_valid_forex_120d_change_evidence(entry, trend_history_120d_evidence)
     _copy_source_url(entry, payload)
     _copy_payload_metadata_fields(
         entry,
         payload,
         ("is_estimated", "estimation_method", "metric_basis", "confidence"),
+    )
+    trend_daily_change = _usable_forex_change_value(entry, "daily_change")
+    trend_120d_change = _usable_forex_change_value(entry, "change_120d")
+    raw_trend = _usable_forex_raw_trend(payload.get("trend"), trend_daily_change, trend_120d_change)
+    entry["trend"] = _infer_asset_trend(
+        raw_trend,
+        trend_daily_change,
+        trend_120d_change,
+        "forex",
     )
     if is_manual:
         _apply_manual_official_estimation_rule("forex", pair, payload, entry)

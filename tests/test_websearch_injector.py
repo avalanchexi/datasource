@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scripts.stage2_5_injector as injector
+from datasource.generators import simple_report
 from datasource.models.market_data_contract import CommodityData
 
 
@@ -500,6 +501,613 @@ def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
     assert merged["change_120d"] == pytest.approx(-3.32)
 
 
+def test_merge_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch):
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": None,
+        "reason_1d": "no_previous_value",
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {"pair": "USDCNY", "current_rate": "6.8184", "source": "manual"}
+
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_1d": 0.0,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-02",
+        },
+    )
+
+    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert merged["daily_change_basis"] == "trend_history"
+    assert merged["daily_change_base_date"] == "2026-06-02"
+    assert "reason_1d" not in merged
+    assert injector._should_backfill_forex_daily_change(merged) is False
+
+
+def test_merge_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY在岸",
+        "current_rate": 6.8184,
+        "daily_change": 0.12,
+        "change_120d": 0.0,
+        "change_120d_basis": "structured_provider",
+        "change_120d_base_date": "2026-01-01",
+        "trend": "待获取",
+        "source": "占位",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "change_120d_basis": "structured_provider",
+        "change_120d_base_date": "2026-01-15",
+        "source": "TradingEconomics",
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": 0.0,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+            "base_120d_date": "2026-02-01",
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": None,
+            "reason_1d": "trend_history_missing",
+            "base_1d_estimated": False,
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert merged["change_120d_basis"] == "trend_history"
+    assert merged["change_120d_base_date"] == "2026-02-01"
+
+
+def test_merge_forex_entry_preserves_trend_history_evidence_when_payload_change_missing(monkeypatch):
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "daily_change": "N/A",
+        "daily_change_basis": "failed_trend_history",
+        "change_120d": "N/A",
+        "change_120d_basis": "failed_trend_history",
+        "source": "manual",
+    }
+
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_1d": 0.0,
+            "reason_1d": None,
+            "base_1d_date": "2026-06-02",
+        },
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_120d": 0.0,
+            "reason_120d": None,
+            "base_120d_date": "2026-02-01",
+        },
+    )
+
+    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert merged["daily_change_basis"] == "trend_history"
+    assert merged["daily_change_base_date"] == "2026-06-02"
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert merged["change_120d_basis"] == "trend_history"
+    assert merged["change_120d_base_date"] == "2026-02-01"
+
+
+def test_merge_forex_entry_clears_stale_120d_evidence_for_payload_zero():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.12,
+        "change_120d": 1.25,
+        "change_120d_basis": "trend_history",
+        "change_120d_base_date": "2026-02-01",
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "change_120d": 0.0,
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert "change_120d_basis" not in merged
+    assert "change_120d_base_date" not in merged
+
+
+def test_merge_forex_entry_preserves_valid_payload_120d_zero_evidence():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.12,
+        "change_120d": 1.25,
+        "change_120d_basis": "structured_provider",
+        "change_120d_base_date": "2026-01-01",
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "change_120d": 0.0,
+        "change_120d_basis": "trend_history",
+        "change_120d_base_date": "2026-02-01",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert merged["change_120d_basis"] == "trend_history"
+    assert merged["change_120d_base_date"] == "2026-02-01"
+
+
+def test_merge_forex_entry_preserves_payload_daily_change_evidence():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "daily_change": 0.0,
+        "daily_change_basis": "direct_daily_series",
+        "daily_change_base_date": "2026-06-02",
+        "daily_change_source_url": "https://example.com/fx",
+        "daily_change_base_price": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert merged["daily_change_basis"] == "direct_daily_series"
+    assert merged["daily_change_base_date"] == "2026-06-02"
+    assert merged["daily_change_source_url"] == "https://example.com/fx"
+    assert merged["daily_change_base_price"] == pytest.approx(6.8184)
+    assert injector._should_backfill_forex_daily_change(merged) is False
+
+
+def test_merge_forex_entry_drops_stale_daily_evidence_when_payload_daily_evidence_invalid():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "daily_change_basis": "direct_daily_series",
+        "daily_change_base_date": "2026-06-01",
+        "base_1d_date": "2026-06-01",
+        "change_1d": 0.0,
+        "change_1d_pct": 0.0,
+        "previous_value": 6.8,
+        "previous_rate": 6.8,
+        "previous_price": 6.8,
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "daily_change": 0.0,
+        "daily_change_base_date": "N/A",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert "daily_change_basis" not in merged
+    assert "daily_change_base_date" not in merged
+    assert "base_1d_date" not in merged
+    assert "change_1d" not in merged
+    assert "change_1d_pct" not in merged
+    assert "previous_value" not in merged
+    assert "previous_rate" not in merged
+    assert "previous_price" not in merged
+    assert injector._should_backfill_forex_daily_change(merged) is True
+
+
+def test_merge_forex_entry_clears_stale_daily_evidence_for_explicit_missing_payload_daily_change():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.0,
+        "daily_change_basis": "trend_history",
+        "daily_change_base_date": "2026-06-01",
+        "base_1d_date": "2026-06-01",
+        "reason_1d": "no_previous_value",
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "daily_change": "N/A",
+        "daily_change_basis": "failed_trend_history",
+        "daily_change_base_date": "N/A",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert "daily_change_basis" not in merged
+    assert "daily_change_base_date" not in merged
+    assert "base_1d_date" not in merged
+    assert "reason_1d" not in merged
+    assert injector._should_backfill_forex_daily_change(merged) is True
+
+
+def test_merge_forex_entry_cleans_invalid_orig_daily_evidence_when_payload_daily_absent():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.0,
+        "daily_change_basis": "not_available_trend_history",
+        "daily_change_window_evidence": "failed_trend_history",
+        "daily_change_base_date": "N/A",
+        "reason_1d": "reason=no_previous_value",
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert "daily_change_basis" not in merged
+    assert "daily_change_window_evidence" not in merged
+    assert "daily_change_base_date" not in merged
+    assert "reason_1d" not in merged
+    assert injector._should_backfill_forex_daily_change(merged) is True
+
+
+def test_merge_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "daily_change": 0.0,
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert "daily_change_basis" not in merged
+    assert merged["trend"] not in {"平稳", "横盘震荡", "骞崇ǔ", "妯洏闇囪崱"}
+
+
+@pytest.mark.parametrize("trend", ["flat", "sideways"])
+def test_merge_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zero(trend):
+    merged = injector._merge_forex_entry(
+        {"pair": "USDCNY", "current_rate": 6.8184},
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "trend": trend,
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["trend"] != trend
+
+
+def test_merge_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
+    merged = injector._merge_forex_entry(
+        {"pair": "USDCNY", "current_rate": 6.8184},
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "change_120d": 1.2,
+            "change_120d_basis": "trend_history",
+            "change_120d_base_date": "2026-02-01",
+            "trend": "flat",
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(1.2)
+    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert merged["trend"] != "flat"
+
+
+def test_merge_forex_entry_cleans_invalid_orig_evidence_for_nonzero_changes_when_payload_absent():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "daily_change_basis": "failed_trend_history",
+        "daily_change_base_date": "N/A",
+        "change_120d": 1.2,
+        "change_120d_basis": "invalid_trend_history",
+        "change_120d_base_date": "N/A",
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.25)
+    assert merged["change_120d"] == pytest.approx(1.2)
+    assert "daily_change_basis" not in merged
+    assert "daily_change_base_date" not in merged
+    assert "change_120d_basis" not in merged
+    assert "change_120d_base_date" not in merged
+
+
+def test_merge_forex_entry_preserves_valid_orig_daily_evidence_when_payload_daily_absent():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.0,
+        "daily_change_basis": "direct_daily_series",
+        "daily_change_base_date": "2026-06-02",
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert merged["daily_change_basis"] == "direct_daily_series"
+    assert merged["daily_change_base_date"] == "2026-06-02"
+    assert injector._should_backfill_forex_daily_change(merged) is False
+
+
+def test_merge_forex_entry_preserves_valid_orig_base_1d_date_when_payload_daily_absent():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.0,
+        "base_1d_date": "2026-06-02",
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert merged["base_1d_date"] == "2026-06-02"
+    assert injector._should_backfill_forex_daily_change(merged) is False
+
+
+def test_merge_forex_entry_cleans_invalid_orig_120d_evidence_when_payload_120d_absent():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "change_120d": 0.0,
+        "change_120d_basis": "not-available_trend_history",
+        "change_120d_base_date": "N/A",
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert "change_120d_basis" not in merged
+    assert "change_120d_base_date" not in merged
+
+
+def test_merge_forex_entry_preserves_valid_orig_120d_evidence_when_payload_120d_absent():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "change_120d": 0.0,
+        "change_120d_basis": "trend_history",
+        "change_120d_base_date": "2026-02-01",
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert merged["change_120d_basis"] == "trend_history"
+    assert merged["change_120d_base_date"] == "2026-02-01"
+
+
+def test_merge_forex_entry_clears_valid_orig_120d_evidence_for_explicit_missing_payload_120d():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.25,
+        "change_120d": 0.0,
+        "change_120d_basis": "trend_history",
+        "change_120d_base_date": "2026-02-01",
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "change_120d": "N/A",
+        "change_120d_basis": "failed_trend_history",
+        "change_120d_base_date": "N/A",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(0.0)
+    assert "change_120d_basis" not in merged
+    assert "change_120d_base_date" not in merged
+
+
 @pytest.mark.parametrize(
     ("entry", "expected"),
     [
@@ -515,15 +1123,97 @@ def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
         ({"daily_change": 0.0, "daily_change_source": "deepseek_no_value"}, True),
         ({"daily_change": 0.0, "daily_change_basis": "trend_history"}, False),
         ({"daily_change": 0.0, "daily_change_source": "trend_history"}, False),
+        ({"daily_change": 0.0, "daily_change_window_evidence": "direct_daily_series"}, False),
+        ({"daily_change": 0.0, "daily_change_window_evidence": "direct_window"}, False),
+        ({"daily_change": 0.0, "daily_change_window_evidence": "failed_trend_history"}, True),
+        ({"daily_change": 0.0, "daily_change_source": "change_1d"}, False),
         ({"daily_change": 0.0, "daily_change_source_url": "https://example.com/fx"}, False),
+        ({"daily_change": 0.0, "daily_change_source_url": "http://example.com/fx"}, False),
+        ({"daily_change": 0.0, "daily_change_source_url": "N/A"}, True),
         ({"daily_change": 0.0, "daily_change_base_date": "2026-06-01"}, False),
+        ({"daily_change": 0.0, "daily_change_base_date": "20260601"}, False),
+        ({"daily_change": 0.0, "daily_change_base_date": "2026-06"}, False),
+        ({"daily_change": 0.0, "daily_change_base_date": "N/A"}, True),
         ({"daily_change": 0.0, "daily_change_base_price": 6.82}, False),
-        ({"daily_change": 0.0, "note": "direct_daily_series computed zero"}, False),
-        ({"daily_change": 0.0, "note": "change_1d from trusted source"}, False),
+        ({"daily_change": 0.0, "daily_change_base_price": "failed 6.82"}, True),
+        ({"daily_change": 0.0, "daily_change_base_price": "unknown"}, True),
+        ({"daily_change": 0.0, "note": "direct_daily_series computed zero"}, True),
+        ({"daily_change": 0.0, "source": "change_1d from provider"}, True),
+        (
+            {
+                "daily_change": 0.0,
+                "note": "direct_daily_series computed zero",
+                "daily_change_basis": "direct_daily_series",
+            },
+            False,
+        ),
+        (
+            {
+                "daily_change": 0.0,
+                "source": "change_1d from provider",
+                "daily_change_base_date": "2026-06-02",
+            },
+            False,
+        ),
+        ({"daily_change": 0.0, "daily_change_basis": "direct_daily_series"}, False),
+        ({"daily_change": 0.0, "daily_change_basis": "trend_history"}, False),
+        ({"daily_change": 0.0, "daily_change_basis": "change_1d"}, False),
+        ({"daily_change": 0.0, "daily_change_source": "ChinaMoney"}, True),
+        ({"daily_change": 0.0, "daily_change_source": "structured_provider"}, True),
     ],
 )
 def test_should_backfill_forex_daily_change_handles_evidence_and_failure_text(entry, expected):
     assert injector._should_backfill_forex_daily_change(entry) is expected
+
+
+def test_forex_change_computed_markers_reject_not_available_variants():
+    assert injector._has_forex_daily_change_computed_marker("trend_history") is True
+    assert injector._has_forex_daily_change_computed_marker("direct_daily_series") is True
+    assert injector._has_forex_daily_change_computed_marker("not-available_trend_history") is False
+    assert injector._has_forex_daily_change_computed_marker("not_available_trend_history") is False
+    assert injector._has_forex_120d_change_computed_marker("trend_history") is True
+    assert injector._has_forex_120d_change_computed_marker("not-available_trend_history") is False
+    assert injector._has_forex_120d_change_computed_marker("not_available_trend_history") is False
+
+
+def test_forex_120d_change_evidence_rejects_failed_base_price_text():
+    assert injector._has_forex_120d_change_evidence({"change_120d_base_price": 6.82}) is True
+    assert injector._has_forex_120d_change_evidence({"change_120d_base_price": "failed 6.82"}) is False
+
+
+def test_forex_120d_change_evidence_rejects_daily_change_rate_marker():
+    assert injector._has_forex_120d_change_evidence({"change_120d_basis": "daily_change_rate"}) is False
+
+
+def test_merge_forex_entry_rejects_not_available_payload_daily_evidence():
+    existing = {
+        "pair": "USDCNY",
+        "name": "USD/CNY onshore",
+        "current_rate": 6.8184,
+        "daily_change": 0.0,
+        "change_120d": -4.18,
+        "trend": "pending",
+        "source": "placeholder",
+    }
+    payload = {
+        "pair": "USDCNY",
+        "current_rate": "6.8184",
+        "daily_change": 0.0,
+        "daily_change_basis": "not-available_trend_history",
+        "daily_change_base_date": "N/A",
+        "source": "manual",
+    }
+
+    merged = injector._merge_forex_entry(
+        existing,
+        payload,
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["daily_change"] == pytest.approx(0.0)
+    assert "daily_change_basis" not in merged
+    assert injector._should_backfill_forex_daily_change(merged) is True
 
 
 def test_backfill_trend_changes_replaces_untrusted_zero_forex_daily_change(monkeypatch):
@@ -578,6 +1268,227 @@ def test_backfill_trend_changes_replaces_untrusted_zero_forex_daily_change(monke
     assert fx["daily_change_basis"] == "trend_history"
     assert fx["daily_change_base_date"] == "2026-06-01"
     assert fx["change_120d"] == pytest.approx(-4.18)
+
+
+def test_backfill_trend_changes_drops_raw_flat_when_daily_unusable_but_120d_usable(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.2,
+                "change_120d_basis": "trend_history",
+                "change_120d_base_date": "2026-02-01",
+                "trend": "flat",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": 1.2,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": None,
+            "reason_1d": "trend_history_missing",
+            "base_1d_estimated": False,
+            "base_1d_date": None,
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 0
+    assert fx["daily_change"] is None
+    assert fx["change_120d"] == pytest.approx(1.2)
+    assert fx["trend"] != "flat"
+
+
+def test_backfill_trend_changes_stamps_forex_120d_trend_history_evidence(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "daily_change_basis": "direct_daily_series",
+                "daily_change_base_date": "2026-06-02",
+                "change_120d": 0.0,
+                "change_120d_basis": "structured_provider",
+                "change_120d_base_date": "N/A",
+                "change_120d_source": "no_value",
+                "change_120d_source_url": "N/A",
+                "change_120d_window_evidence": "no_value",
+                "change_120d_base_price": "unknown",
+                "trend": "pending",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": 0.0,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+            "base_120d_date": "2026-02-01",
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": 0.03,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-01",
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 1
+    assert fx["daily_change"] == pytest.approx(0.0)
+    assert fx["change_120d"] == pytest.approx(0.0)
+    assert fx["change_120d_basis"] == "trend_history"
+    assert fx["change_120d_base_date"] == "2026-02-01"
+    assert "change_120d_source" not in fx
+    assert "change_120d_source_url" not in fx
+    assert "change_120d_window_evidence" not in fx
+    assert "change_120d_base_price" not in fx
+    cell, unavailable = simple_report._format_fx_change_cell(
+        fx,
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+    assert cell == "+0.00%"
+    assert unavailable is False
+
+
+def test_backfill_trend_changes_preserves_valid_forex_120d_zero_when_history_missing(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.25,
+                "change_120d": 0.0,
+                "change_120d_basis": "direct_window",
+                "change_120d_base_date": "2026-02-01",
+                "trend": "pending",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
+    )
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 0
+    assert fx["change_120d"] == pytest.approx(0.0)
+    assert fx["change_120d_basis"] == "direct_window"
+    assert fx["change_120d_base_date"] == "2026-02-01"
+
+
+def test_backfill_trend_changes_clears_failed_forex_evidence_when_history_missing(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "daily_change_basis": "failed_trend_history",
+                "daily_change_base_date": "N/A",
+                "change_120d": 0.0,
+                "change_120d_basis": "not_available_trend_history",
+                "change_120d_base_date": "N/A",
+                "trend": "pending",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
+    )
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 0
+    assert fx["daily_change"] is None
+    assert fx["change_120d"] is None
+    assert "daily_change_basis" not in fx
+    assert "daily_change_base_date" not in fx
+    assert "change_120d_basis" not in fx
+    assert "change_120d_base_date" not in fx
 
 
 def test_backfill_trend_changes_daily_change_ignores_120d_failure_note(monkeypatch):
@@ -3879,3 +4790,164 @@ def test_build_forex_entry_keeps_unknown_changes_as_none(monkeypatch):
 
     assert entry["daily_change"] is None
     assert entry["change_120d"] is None
+
+
+def test_build_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_120d": 0.0,
+            "reason_120d": None,
+            "base_120d_date": "2026-02-01",
+        },
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
+    )
+
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "7.1",
+            "change_120d_basis": "structured_provider",
+            "change_120d_base_date": "2026-01-01",
+            "source": "manual https://example.com/fx",
+        }
+    )
+
+    assert entry["change_120d"] == pytest.approx(0.0)
+    assert entry["change_120d_basis"] == "trend_history"
+    assert entry["change_120d_base_date"] == "2026-02-01"
+
+
+def test_build_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch):
+    monkeypatch.setattr(
+        injector,
+        "_calc_change_from_trend_history",
+        lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
+    )
+    monkeypatch.setattr(
+        injector,
+        "_calc_daily_change_from_trend_history",
+        lambda *args, **kwargs: {
+            "change_1d": 0.0,
+            "reason_1d": None,
+            "base_1d_estimated": False,
+            "base_1d_date": "2026-06-02",
+        },
+    )
+
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "reason_1d": "no_previous_value",
+            "source": "manual",
+        },
+        is_manual=True,
+    )
+
+    assert entry["daily_change"] == pytest.approx(0.0)
+    assert entry["daily_change_basis"] == "trend_history"
+    assert entry["daily_change_base_date"] == "2026-06-02"
+    assert "reason_1d" not in entry
+    assert injector._should_backfill_forex_daily_change(entry) is False
+
+
+def test_build_forex_entry_preserves_payload_daily_change_evidence():
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "daily_change_basis": "direct_daily_series",
+            "daily_change_base_date": "2026-06-02",
+            "daily_change_source_url": "https://example.com/fx",
+            "daily_change_base_price": "6.8184",
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert entry["daily_change"] == pytest.approx(0.0)
+    assert entry["daily_change_basis"] == "direct_daily_series"
+    assert entry["daily_change_base_date"] == "2026-06-02"
+    assert entry["daily_change_source_url"] == "https://example.com/fx"
+    assert entry["daily_change_base_price"] == pytest.approx(6.8184)
+    assert injector._should_backfill_forex_daily_change(entry) is False
+
+
+def test_build_forex_entry_ignores_invalid_payload_daily_base_date():
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "daily_change_base_date": "N/A",
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert "daily_change_base_date" not in entry
+    assert injector._should_backfill_forex_daily_change(entry) is True
+
+
+def test_build_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert entry["daily_change"] == pytest.approx(0.0)
+    assert "daily_change_basis" not in entry
+    assert entry["trend"] not in {"平稳", "横盘震荡", "骞崇ǔ", "妯洏闇囪崱"}
+
+
+@pytest.mark.parametrize("trend", ["flat", "sideways"])
+def test_build_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zero(trend):
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "trend": trend,
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert entry["trend"] != trend
+
+
+def test_build_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "change_120d": 1.2,
+            "change_120d_basis": "trend_history",
+            "change_120d_base_date": "2026-02-01",
+            "trend": "flat",
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert entry["change_120d"] == pytest.approx(1.2)
+    assert injector._should_backfill_forex_daily_change(entry) is True
+    assert entry["trend"] != "flat"

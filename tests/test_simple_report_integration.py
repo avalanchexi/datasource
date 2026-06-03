@@ -26,6 +26,75 @@ def _base_market():
     }
 
 
+def test_asset_summary_omits_unreliable_zero_forex_change():
+    summary = simple_report._build_asset_summary(
+        [],
+        [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY",
+                "current_rate": 6.8184,
+                "change_120d": 0.0,
+                "trend": "pending",
+                "source": "structured",
+            }
+        ],
+        [],
+        {},
+    )
+
+    assert "USD/CNY" not in summary
+    assert "+0.0%" not in summary
+    assert "+0.00%" not in summary
+
+
+@pytest.mark.parametrize("trend", ["横盘震荡", "flat", "sideways"])
+def test_asset_summary_omits_zero_derived_forex_trend_without_usable_change(trend):
+    summary = simple_report._build_asset_summary(
+        [],
+        [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "trend": trend,
+                "source": "structured",
+            }
+        ],
+        [],
+        {},
+    )
+
+    assert "USD/CNY" not in summary
+    assert trend not in summary
+
+
+def test_asset_summary_omits_zero_derived_forex_trend_when_one_change_unusable():
+    summary = simple_report._build_asset_summary(
+        [],
+        [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.2,
+                "change_120d_basis": "trend_history",
+                "change_120d_base_date": "2026-02-01",
+                "trend": "flat",
+                "source": "structured",
+            }
+        ],
+        [],
+        {},
+    )
+
+    assert "USD/CNY" in summary
+    assert "+1.2%" in summary
+    assert "flat" not in summary
+
+
 def test_sample_a_generate(tmp_path: Path):
     market = _base_market()
     pring = {
@@ -565,6 +634,733 @@ def test_report_preserves_tushare_usdollar_proxy_label(tmp_path: Path):
     text = out.read_text(encoding="utf-8")
 
     assert "| 美元指数（TuShare USDOLLAR.FXCM proxy） | 105.2300 | +0.12% | +1.34% | 上行 |" in text
+
+
+def test_report_hides_unreliable_zero_forex_daily_change(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "change_120d": -4.18,
+            "trend": "待获取",
+            "source": "structured",
+            "note": "structured_provider:official_china",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | 待补变化 |" in text
+
+
+def test_report_keeps_evidenced_zero_forex_daily_change(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "daily_change_basis": "direct_daily_series",
+            "daily_change_base_date": "2026-06-02",
+            "change_120d": -4.18,
+            "trend": "横盘震荡",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | +0.00% | -4.18% | 横盘震荡 |" in text
+
+
+def test_fx_daily_zero_valid_evidence_overrides_stale_reason_1d():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "daily_change": 0.0,
+            "daily_change_basis": "trend_history",
+            "reason_1d": "no_previous_value",
+        },
+        "daily_change",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "+0.00%"
+    assert unavailable is False
+
+
+def test_fx_daily_zero_rejects_failed_trend_history_basis():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "daily_change": 0.0,
+            "daily_change_basis": "failed_trend_history",
+        },
+        "daily_change",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+@pytest.mark.parametrize("field", ["change_1d", "change_1d_pct"])
+def test_fx_daily_zero_rejects_bare_change_1d_numeric_evidence(field):
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "daily_change": 0.0,
+            field: 0.0,
+        },
+        "daily_change",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_fx_daily_zero_accepts_base_1d_date_evidence():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "daily_change": 0.0,
+            "base_1d_date": "2026-06-02",
+        },
+        "daily_change",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "+0.00%"
+    assert unavailable is False
+
+
+def test_fx_daily_zero_rejects_source_url_with_reason_marker():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "daily_change": 0.0,
+            "daily_change_source_url": "https://example.com/fx?reason=trend_history",
+        },
+        "daily_change",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+@pytest.mark.parametrize("trend", ["flat", "sideways"])
+def test_fx_trend_replaces_raw_flat_when_change_unavailable(trend):
+    assert (
+        simple_report._format_fx_trend(
+            {"trend": trend},
+            current_rate=6.8184,
+            change_unavailable=True,
+        )
+        == simple_report.FX_CHANGE_UNAVAILABLE_TEXT
+    )
+
+
+@pytest.mark.parametrize(
+    "basis",
+    ["not-available_trend_history", "not_available_trend_history"],
+)
+def test_fx_daily_zero_rejects_not_available_trend_history_basis(basis):
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "daily_change": 0.0,
+            "daily_change_basis": basis,
+        },
+        "daily_change",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_fx_120d_zero_valid_evidence_overrides_stale_source_marker():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_basis": "trend_history",
+            "change_120d_source": "no_value",
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "+0.00%"
+    assert unavailable is False
+
+
+def test_fx_120d_zero_accepts_direct_window_evidence():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_window_evidence": "direct_window",
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "+0.00%"
+    assert unavailable is False
+
+
+@pytest.mark.parametrize("marker", ["change_1d", "direct_daily_series"])
+def test_fx_120d_zero_rejects_daily_only_evidence_markers(marker):
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_window_evidence": marker,
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_fx_120d_zero_rejects_daily_change_rate_marker():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_basis": "daily_change_rate",
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_fx_120d_zero_rejects_invalid_trend_history_basis():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_basis": "invalid_trend_history",
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_fx_120d_zero_rejects_reason_equals_trend_history_basis():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_basis": "reason=trend_history",
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_fx_120d_zero_rejects_source_url_with_reason_marker():
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_source_url": "https://example.com/fx?reason=trend_history",
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+@pytest.mark.parametrize(
+    "basis",
+    ["not-available_trend_history", "not_available_trend_history"],
+)
+def test_fx_120d_zero_rejects_not_available_trend_history_basis(basis):
+    cell, unavailable = simple_report._format_fx_change_cell(
+        {
+            "change_120d": 0.0,
+            "change_120d_basis": basis,
+        },
+        "change_120d",
+        digits=2,
+        suffix="%",
+    )
+
+    assert cell == "N/A"
+    assert unavailable is True
+
+
+def test_report_rejects_invalid_daily_base_date_for_forex_zero(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "daily_change_base_date": "N/A",
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | 待补变化 |" in text
+
+
+def test_report_rejects_invalid_120d_base_date_for_forex_zero(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.12,
+            "change_120d": 0.0,
+            "change_120d_base_date": "N/A",
+            "trend": "pending",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | +0.12% | N/A | 待补变化 |" in text
+
+
+def test_report_keeps_valid_base_date_only_forex_zero_changes(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "daily_change_base_date": "2026-06-02",
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "structured",
+        },
+        {
+            "pair": "USDCNH",
+            "name": "USD/CNH离岸",
+            "current_rate": 6.8211,
+            "daily_change": 0.12,
+            "change_120d": 0.0,
+            "change_120d_base_date": "2026-02-01",
+            "trend": "pending",
+            "source": "structured",
+        },
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | +0.00% | -4.18% | 未知 |" in text
+    assert "| USD/CNH离岸 | 6.8211 | +0.12% | +0.00% | 未知 |" in text
+
+
+def test_report_rejects_failure_marker_in_forex_previous_value(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "previous_value": "no_value",
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | 待补变化 |" in text
+
+
+def test_report_rejects_provider_only_forex_daily_change_source(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "daily_change_source": "ChinaMoney",
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | 待补变化 |" in text
+
+
+def test_report_rejects_generic_source_exchange_rate_text_for_forex_zero(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "official exchange_rate source",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | 待补变化 |" in text
+
+
+def test_report_rejects_generic_note_exchange_rate_text_for_forex_zero(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "structured",
+            "note": "exchange_rate provider",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | 待补变化 |" in text
+
+
+def test_report_rejects_entry_level_trend_confidence_for_forex_120d_zero(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.12,
+            "change_120d": 0.0,
+            "trend_history_confidence": "medium",
+            "trend": "pending",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | +0.12% | N/A | 待补变化 |" in text
+
+
+def test_report_keeps_120d_field_specific_evidence_for_forex_zero(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.12,
+            "change_120d": 0.0,
+            "change_120d_basis": "trend_history",
+            "change_120d_base_date": "2026-02-01",
+            "trend": "横盘震荡",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | +0.12% | +0.00% | 横盘震荡 |" in text
+
+
+def test_report_field_specific_daily_evidence_survives_generic_missing_note(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "daily_change_basis": "trend_history",
+            "change_120d": -4.18,
+            "trend": "pending",
+            "source": "structured",
+            "note": "reason=no_previous_value",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | +0.00% | -4.18% | 未知 |" in text
+
+
+def test_report_keeps_hyphenated_non_pending_forex_trend(tmp_path: Path):
+    market = _base_market()
+    market["forex"] = [
+        {
+            "pair": "USDCNY",
+            "name": "USD/CNY在岸",
+            "current_rate": 6.8184,
+            "daily_change": 0.0,
+            "change_120d": -4.18,
+            "trend": "range-bound",
+            "source": "structured",
+        }
+    ]
+    pring = {
+        "final_stage": "stage 4",
+        "confidence": 0.71,
+        "recommendation": "neutral",
+        "layer_1_inventory_cycle": {},
+        "layer_2_monetary_cycle": {},
+        "layer_3_pring_final": {},
+        "metadata": {"analysis_method": "Pring V4.0", "min_completeness": 0.8},
+        "pending_websearch": [],
+        "fallback_used": False,
+    }
+    m = tmp_path / "m.json"
+    p = tmp_path / "p.json"
+    out = tmp_path / "o.md"
+    _write_json(m, market)
+    _write_json(p, pring)
+
+    generate_report(m, p, out)
+
+    text = out.read_text(encoding="utf-8")
+    assert "| USD/CNY在岸 | 6.8184 | N/A | -4.18% | range-bound |" in text
 
 
 def test_report_backfills_stock_indices_from_macro_compat(tmp_path: Path):

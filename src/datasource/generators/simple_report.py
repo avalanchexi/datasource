@@ -28,6 +28,7 @@ except Exception:  # pragma: no cover - 环境缺省时延迟导入
 
 NA_TEXT = "N/A（待 WebSearch）"
 ANOMALY_TEXT = "\u2014\uff08\u5f02\u5e38\uff09"
+FX_CHANGE_UNAVAILABLE_TEXT = "待补变化"
 DEFAULT_ASSET_CONCLUSION = "资金流转正，汇率偏稳，债券小幅下行，商品分化。"
 MAX_CONCLUSION_CHARS = 50
 QUALITY_REASONS = {
@@ -60,6 +61,90 @@ NON_MACRO_KEYS = {
 DAILY_MACRO_KEYS = {"bdi"}
 DAILY_POLICY_KEYS = {"dr007"}
 EVENTS_DIR = Path("data/trend_history/min/events")
+FX_ZERO_CHANGE_MISSING_MARKERS = (
+    "reason=no_previous_value",
+    "no_previous_value",
+    "deepseek_no_value",
+    "no_deepseek_key",
+    "missing_previous_value",
+    "missing previous",
+    "manual_required",
+    "source_latest_only",
+    "latest only",
+    "latest_only",
+    "manual_incomplete",
+    "manual incomplete",
+    "no_value",
+    "no value",
+    "no previous",
+    "pending",
+    "unknown",
+    "failed",
+    "failure",
+    "error",
+    "invalid",
+    "unavailable",
+    "not_available",
+    "not-available",
+    "not available",
+    "缺失",
+    "失败",
+)
+FX_ABSENCE_SENTINELS = (
+    "n/a",
+    "na",
+    "-",
+    "--",
+    "unknown",
+    "pending",
+)
+FX_DAILY_CHANGE_SOURCE_MARKERS = (
+    "direct_daily_series",
+    "direct_window",
+    "trend_history_direct_window",
+    "trend_history_full_window",
+    "change_1d",
+    "change_rate",
+    "trend_history",
+)
+FX_120D_CHANGE_SOURCE_MARKERS = (
+    "direct_window",
+    "trend_history_direct_window",
+    "trend_history_full_window",
+    "change_rate",
+    "trend_history",
+)
+FX_PREVIOUS_CHANGE_CONTEXT_MARKERS = (
+    "previous_value",
+    "previous_rate",
+    "previous_price",
+    "manual_previous_value",
+    "manual_previous_price",
+)
+FX_GENERIC_CHANGE_CONTEXT_KEYS = (
+    "note",
+    "source",
+    "manual_reason",
+    "quality_reason",
+    "reason",
+    "retrieval_status",
+)
+FX_PENDING_TREND_PHRASES = (
+    "待获取",
+    "待 WebSearch",
+    "待websearch",
+    "待补",
+    "未知",
+    "无数据",
+    "pending",
+    "unknown",
+)
+FX_PENDING_TREND_SENTINELS = (
+    "n/a",
+    "na",
+    "--",
+    "-",
+)
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -221,6 +306,251 @@ def _fmt_change_cell(value: Any, *, digits: int, suffix: str, low_confidence: bo
     return f"{num:+.{digits}f}{suffix}"
 
 
+def _text_contains_marker(value: Any, markers: tuple[str, ...]) -> bool:
+    text = str(value or "").strip().lower()
+    return bool(text) and any(marker in text for marker in markers)
+
+
+def _is_fx_absence_sentinel(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    return bool(text) and text in FX_ABSENCE_SENTINELS
+
+
+def _is_valid_fx_base_date(value: Any) -> bool:
+    if value is None or _is_fx_absence_sentinel(value):
+        return False
+    text = str(value).strip()
+    if not text or _text_contains_marker(text, FX_ZERO_CHANGE_MISSING_MARKERS):
+        return False
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-\d{2}", text))
+
+
+def _is_valid_fx_source_url(value: Any) -> bool:
+    if value is None or _is_fx_absence_sentinel(value):
+        return False
+    text = str(value).strip()
+    if not text or _text_contains_marker(text, FX_ZERO_CHANGE_MISSING_MARKERS):
+        return False
+    if re.search(r"\breason\s*=", text.lower()):
+        return False
+    return bool(re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE))
+
+
+def _text_contains_fx_token_marker(
+    value: Any,
+    markers: tuple[str, ...],
+    *,
+    disallowed_token_prefixes: tuple[str, ...] = (),
+) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    if re.search(r"\breason\s*=", text):
+        return False
+    tokens = set(re.split(r"[^a-z0-9_]+", text))
+    negative_prefixes = ("failed", "failure", "error", "invalid", "unavailable")
+    return any(
+        (
+            token == marker
+            or (token.endswith(f"_{marker}") and not token.startswith(negative_prefixes))
+        )
+        and not token.startswith(disallowed_token_prefixes)
+        for token in tokens
+        for marker in markers
+    )
+
+
+def _fx_change_field_keys(field: str) -> list[str]:
+    keys = [
+        f"{field}_source",
+        f"{field}_source_url",
+        f"{field}_window_evidence",
+        f"{field}_basis",
+        f"{field}_base_date",
+        f"{field}_base_price",
+    ]
+    if field == "daily_change":
+        keys.extend(
+            [
+                "daily_change_source",
+                "daily_change_source_url",
+                "daily_change_basis",
+                "daily_change_base_date",
+                "daily_change_base_price",
+                "base_1d_date",
+                "previous_value",
+                "previous_rate",
+                "previous_price",
+                "change_1d",
+                "change_1d_pct",
+                "reason_1d",
+            ]
+        )
+    if field == "change_120d":
+        keys.append("change_120d_basis")
+    return keys
+
+
+def _has_fx_missing_marker(entry: dict, field: str, *, include_generic: bool = False) -> bool:
+    keys = _fx_change_field_keys(field)
+    if include_generic:
+        keys.extend(FX_GENERIC_CHANGE_CONTEXT_KEYS)
+    return any(
+        _is_fx_absence_sentinel(entry.get(key))
+        or _text_contains_marker(entry.get(key), FX_ZERO_CHANGE_MISSING_MARKERS)
+        for key in keys
+    )
+
+
+def _has_valid_fx_numeric_evidence(entry: dict, key: str) -> bool:
+    value = entry.get(key)
+    if value in (None, ""):
+        return False
+    if _text_contains_marker(value, FX_ZERO_CHANGE_MISSING_MARKERS):
+        return False
+    return _to_float(value) is not None
+
+
+def _fx_source_markers_for_field(field: str) -> tuple[str, ...]:
+    if field == "daily_change":
+        return FX_DAILY_CHANGE_SOURCE_MARKERS
+    if field == "change_120d":
+        return FX_120D_CHANGE_SOURCE_MARKERS
+    return FX_120D_CHANGE_SOURCE_MARKERS
+
+
+def _has_fx_computed_marker(value: Any, field: str) -> bool:
+    if _text_contains_marker(value, FX_ZERO_CHANGE_MISSING_MARKERS):
+        return False
+    disallowed_prefixes = ("daily_",) if field == "change_120d" else ()
+    return _text_contains_fx_token_marker(
+        value,
+        _fx_source_markers_for_field(field),
+        disallowed_token_prefixes=disallowed_prefixes,
+    )
+
+
+def _has_field_specific_fx_source(entry: dict, field: str) -> bool:
+    field_keys = [
+        f"{field}_source",
+        f"{field}_source_url",
+        f"{field}_window_evidence",
+        f"{field}_basis",
+        f"{field}_base_date",
+        f"{field}_base_price",
+    ]
+    if field == "daily_change":
+        field_keys.extend(
+            [
+                "daily_change_source",
+                "daily_change_source_url",
+                "daily_change_basis",
+                "daily_change_base_date",
+                "daily_change_base_price",
+                "base_1d_date",
+            ]
+        )
+
+    for key in field_keys:
+        value = entry.get(key)
+        if value in (None, ""):
+            continue
+        if _text_contains_marker(value, FX_ZERO_CHANGE_MISSING_MARKERS):
+            continue
+        text = str(value).strip().lower()
+        if key.endswith("_source_url") and _is_valid_fx_source_url(value):
+            return True
+        if key.endswith("_base_price") and _to_float(value) is not None:
+            return True
+        if key.endswith("_base_date") or key == "base_1d_date":
+            if _is_valid_fx_base_date(value):
+                return True
+            continue
+        if _has_fx_computed_marker(value, field):
+            return True
+    if field == "daily_change" and any(
+        _has_valid_fx_numeric_evidence(entry, key)
+        for key in ("previous_value", "previous_rate", "previous_price")
+    ):
+        context_keys = [
+            "daily_change_source_url",
+            "daily_change_basis",
+            "daily_change_window_evidence",
+            "daily_change_base_date",
+            "daily_change_base_price",
+            "base_1d_date",
+        ]
+        return any(
+            entry.get(key) not in (None, "")
+            and not _text_contains_marker(entry.get(key), FX_ZERO_CHANGE_MISSING_MARKERS)
+            and (
+                _is_valid_fx_source_url(entry.get(key))
+                or ((key.endswith("_base_date") or key == "base_1d_date") and _is_valid_fx_base_date(entry.get(key)))
+                or (key.endswith("_base_price") and _has_valid_fx_numeric_evidence(entry, key))
+                or _has_fx_computed_marker(entry.get(key), field)
+                or _text_contains_fx_token_marker(entry.get(key), FX_PREVIOUS_CHANGE_CONTEXT_MARKERS)
+            )
+            for key in context_keys
+        )
+    return False
+
+
+def _has_fx_change_source(entry: dict, field: str) -> bool:
+    if _has_field_specific_fx_source(entry, field):
+        return True
+    if _has_fx_missing_marker(entry, field, include_generic=True):
+        return False
+    return False
+
+
+def _is_unreliable_zero_fx_change(entry: dict, field: str) -> bool:
+    value = _to_float(entry.get(field))
+    if value is None or abs(value) > 1e-9:
+        return False
+    return not _has_fx_change_source(entry, field)
+
+
+def _format_fx_change_cell(
+    entry: dict,
+    field: str,
+    *,
+    digits: int,
+    suffix: str,
+    low_confidence: bool = False,
+) -> tuple[str, bool]:
+    value = _to_float(entry.get(field))
+    if value is None:
+        return "N/A", True
+    if _is_unreliable_zero_fx_change(entry, field):
+        return "N/A", True
+    return f"{value:+.{digits}f}{suffix}", False
+
+
+def _is_pending_fx_trend(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    lowered = text.lower()
+    if lowered in FX_PENDING_TREND_SENTINELS:
+        return True
+    return any(marker.lower() in lowered for marker in FX_PENDING_TREND_PHRASES)
+
+
+def _format_fx_trend(entry: dict, current_rate: Optional[float], change_unavailable: bool) -> str:
+    trend = entry.get("trend")
+    if change_unavailable and _is_zero_derived_fx_trend(trend):
+        trend = None
+    if trend and not _is_pending_fx_trend(trend):
+        return str(trend)
+    if change_unavailable:
+        return FX_CHANGE_UNAVAILABLE_TEXT
+    if current_rate is None:
+        return "待 WebSearch"
+    return "未知"
+
+
 def _pick_top(items: list, score_fn, limit: int = 3) -> list:
     scored = []
     for item in items:
@@ -232,6 +562,30 @@ def _pick_top(items: list, score_fn, limit: int = 3) -> list:
     if scored:
         return [item for _, item in scored[:limit]]
     return items[:limit]
+
+
+def _usable_fx_change_value(entry: dict, field: str) -> Optional[float]:
+    value = _to_float(entry.get(field))
+    if value is None:
+        return None
+    _, unavailable = _format_fx_change_cell(entry, field, digits=2, suffix="%")
+    if unavailable:
+        return None
+    return value
+
+
+def _is_zero_derived_fx_trend(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return False
+    return text in {
+        "平稳",
+        "横盘震荡",
+        "flat",
+        "sideways",
+        "骞崇ǔ",
+        "妯洏闇囪崱",
+    }
 
 
 def _build_asset_summary(
@@ -249,7 +603,10 @@ def _build_asset_summary(
         return _to_float(item.get("ytd_change") or item.get("change_120d") or item.get("daily_change"))
 
     def _forex_score(item: dict) -> Optional[float]:
-        return _to_float(item.get("change_120d") or item.get("daily_change"))
+        c120 = _usable_fx_change_value(item, "change_120d")
+        if c120 is not None:
+            return c120
+        return _usable_fx_change_value(item, "daily_change")
 
     def _bond_score(item: dict) -> Optional[float]:
         return _to_float(item.get("change_5d_bp") or item.get("change_120d_bp"))
@@ -288,18 +645,23 @@ def _build_asset_summary(
     fx_descs: list[str] = []
     for fx in _pick_top([f for f in forex_list if not _is_tushare(f)], _forex_score):
         name = fx.get("name") or fx.get("pair") or "外汇"
+        daily = _usable_fx_change_value(fx, "daily_change")
+        c120 = _usable_fx_change_value(fx, "change_120d")
+        raw_trend = fx.get("trend")
+        if _is_zero_derived_fx_trend(raw_trend) and (daily is None or c120 is None):
+            raw_trend = None
+        elif daily is None and c120 is None and _is_pending_fx_trend(raw_trend):
+            raw_trend = None
         trend = _infer_asset_trend(
             "forex",
-            fx.get("trend"),
-            daily_change=fx.get("daily_change"),
-            change_120d=fx.get("change_120d"),
+            raw_trend,
+            daily_change=daily,
+            change_120d=c120,
         )
         change_label = None
-        c120 = _to_float(fx.get("change_120d"))
         if c120 is not None:
             change_label = f"120日{_fmt_pct(c120)}"
         else:
-            daily = _to_float(fx.get("daily_change"))
             if daily is not None:
                 change_label = f"日{_fmt_pct(daily)}"
         parts_local = [p for p in (change_label, trend) if p]
@@ -1012,19 +1374,25 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         current_rate = _to_float(forex.get("current_rate"))
         current_rate_text = f"{current_rate:.4f}" if current_rate is not None else NA_TEXT
         low_confidence = _is_low_trend_confidence(forex)
-        daily_change = _fmt_change_cell(
-            forex.get("daily_change"),
+        daily_change, daily_change_unavailable = _format_fx_change_cell(
+            forex,
+            "daily_change",
             digits=2,
             suffix="%",
             low_confidence=low_confidence,
         )
-        change_120d = _fmt_change_cell(
-            forex.get("change_120d"),
+        change_120d, change_120d_unavailable = _format_fx_change_cell(
+            forex,
+            "change_120d",
             digits=2,
             suffix="%",
             low_confidence=low_confidence,
         )
-        trend = forex.get("trend") or ("待 WebSearch" if current_rate is None else "未知")
+        trend = _format_fx_trend(
+            forex,
+            current_rate,
+            daily_change_unavailable or change_120d_unavailable,
+        )
         report += f"| {forex.get('name') or forex.get('pair') or '外汇'} | {current_rate_text} | {daily_change} | {change_120d} | {trend} |\n"
 
     report += """
