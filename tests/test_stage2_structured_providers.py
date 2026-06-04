@@ -994,6 +994,41 @@ async def test_cdb_estimator_provider_uses_cn10y_proxy_plus_spread():
 
 
 @pytest.mark.asyncio
+async def test_cdb_estimator_provider_accepts_structured_metadata_spread():
+    provider = CDBEstimatorProvider()
+    market_payload = {
+        "metadata": {
+            "cn10y_cdb_spread": {
+                "bp": 7.4,
+                "source_url": "https://yield.chinabond.com.cn/cbweb-czb-web/czb/moreInfo?locale=cn_ZH&nameType=1",
+                "observed_date": "2026-06-02",
+                "note": "10Y CDB active bond yield about 1.774%; CN10Y 1.7036%",
+            }
+        },
+        "bonds": [
+            {
+                "symbol": "CN10Y",
+                "current_yield": 1.7036,
+                "change_5d_bp": -3.69,
+                "change_120d_bp": -19.86,
+                "date": "2026-06-02",
+                "source_url": "https://yield.chinabond.com.cn/cn10y",
+            }
+        ],
+    }
+
+    result = await provider.fetch({"indicator_key": "CN10Y_CDB"}, market_payload, "2026-06-03")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(1.7776)
+    assert extraction["source_url"] == "https://yield.chinabond.com.cn/cbweb-czb-web/czb/moreInfo?locale=cn_ZH&nameType=1"
+    assert extraction["diagnostics"]["spread_source"] == "metadata.cn10y_cdb_spread.bp"
+    assert extraction["diagnostics"]["spread_source_url"] == "https://yield.chinabond.com.cn/cbweb-czb-web/czb/moreInfo?locale=cn_ZH&nameType=1"
+    assert extraction["diagnostics"]["spread_observed_date"] == "2026-06-02"
+    assert "structured_metadata_spread" in extraction["note"]
+
+
+@pytest.mark.asyncio
 async def test_cdb_estimator_provider_fails_without_explicit_spread():
     provider = build_cdb_estimator_provider()
     market_payload = {
@@ -1013,6 +1048,7 @@ async def test_cdb_estimator_provider_fails_without_explicit_spread():
 
     assert exc_info.value.reason == "missing_cdb_spread"
     assert "task.cdb_spread_bp" in exc_info.value.diagnostics["required_spread_fields"]
+    assert "metadata.cn10y_cdb_spread.bp" in exc_info.value.diagnostics["required_spread_fields"]
 
 
 @pytest.mark.asyncio
