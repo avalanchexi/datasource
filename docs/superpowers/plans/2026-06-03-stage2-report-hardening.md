@@ -16,8 +16,18 @@ This plan intentionally does not build new full external data providers for ETF 
 
 - If trend history has prior forex values, Stage2.5 must replace placeholder `daily_change=0.0` with a real previous-session percentage.
 - If a forex zero change lacks evidence, Stage4 must not render it as a valid `+0.00%`.
+- If one forex comparison field is usable and another comparison field is not usable, zero-derived raw trends such as `flat`/`sideways` must not survive into report asset summaries or Stage2.5 merged data.
 - If CN10Y_CDB is estimated, Stage2 must support explicit spread provenance as structured metadata, not only a bare flat number.
 - If Stage2 leaves `manual_required`, the summary log must say which layer failed for each key.
+
+## Execution Optimization Notes
+
+Task 2 has a known review-loop risk: the first implementation can pass forex table-rendering tests while still leaking zero-derived `flat`/`sideways` trends through secondary paths. Close that gap before starting Task 3.
+
+- Do not start Task 3 until Task 2R below is green and the Task 2 commit has been amended.
+- Run narrow RED/GREEN tests first. Do not run the full focused suite until the specific mixed-change tests pass.
+- Re-run spec review only after the mixed-change tests and the two Task2 files are cleanly amended. This avoids spending review cycles on known incomplete work.
+- Keep Task 2R scoped to the existing Task2 files plus the Stage2.5 trend-cleanup helper path. Do not change CN10Y_CDB or Stage2 diagnostics in this task.
 
 ## File Structure
 
@@ -27,6 +37,7 @@ This plan intentionally does not build new full external data providers for ETF 
 
 - Modify: `src/datasource/generators/simple_report.py`
   - Responsibility: render market data into the final Markdown report.
+  - Ensure asset summaries drop zero-derived raw forex trends whenever either comparison value is unavailable.
   - Add a defensive formatter for forex change cells so unreliable zeroes render as `N/A` and pending trends render as `待补变化`.
 
 - Modify: `src/datasource/providers/stage2_structured/cdb_estimator.py`
@@ -559,6 +570,276 @@ git commit -m "fix: hide unevidenced forex zero changes"
 ```
 
 Expected: commit succeeds with only report renderer and report tests staged.
+
+---
+
+### Task 2R: Close Mixed Forex Trend Review Gap
+
+**Context:** This is a review-gap task for the already committed Task 2. It handles the case where one forex comparison field is usable and another is unavailable. In that mixed state, raw zero-derived trends such as `flat` and `sideways` must not be trusted.
+
+**Files:**
+- Modify: `src/datasource/generators/simple_report.py:567-665`
+- Modify: `scripts/stage2_5_injector.py:3606-3885`
+- Test: `tests/test_simple_report_integration.py`
+- Test: `tests/test_websearch_injector.py`
+
+- [ ] **Step 1: Write the failing asset-summary mixed-change test**
+
+Append this test after `test_asset_summary_omits_zero_derived_forex_trend_without_usable_change` in `tests/test_simple_report_integration.py`:
+
+```python
+def test_asset_summary_omits_zero_derived_forex_trend_when_one_change_unusable():
+    summary = simple_report._build_asset_summary(
+        [],
+        [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.2,
+                "change_120d_basis": "trend_history",
+                "change_120d_base_date": "2026-02-01",
+                "trend": "flat",
+                "source": "structured",
+            }
+        ],
+        [],
+        {},
+    )
+
+    assert "USD/CNY" in summary
+    assert "+1.2%" in summary
+    assert "flat" not in summary
+```
+
+- [ ] **Step 2: Write the failing Stage2.5 merge/build mixed-change tests**
+
+Append these tests after `test_merge_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zero` and `test_build_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zero` in `tests/test_websearch_injector.py`:
+
+```python
+def test_merge_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
+    merged = injector._merge_forex_entry(
+        {"pair": "USDCNY", "current_rate": 6.8184},
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "change_120d": 1.2,
+            "change_120d_basis": "trend_history",
+            "change_120d_base_date": "2026-02-01",
+            "trend": "flat",
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert merged["change_120d"] == pytest.approx(1.2)
+    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert merged["trend"] != "flat"
+
+
+def test_build_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
+    entry = injector._build_forex_entry(
+        {
+            "pair": "USDCNY",
+            "current_rate": "6.8184",
+            "daily_change": 0.0,
+            "change_120d": 1.2,
+            "change_120d_basis": "trend_history",
+            "change_120d_base_date": "2026-02-01",
+            "trend": "flat",
+            "source": "manual",
+        },
+        is_manual=True,
+        trend_history_base_dir=None,
+    )
+
+    assert entry["change_120d"] == pytest.approx(1.2)
+    assert injector._should_backfill_forex_daily_change(entry) is True
+    assert entry["trend"] != "flat"
+```
+
+- [ ] **Step 3: Write the failing Stage2.5 backfill mixed-change test**
+
+Append this test after `test_backfill_trend_changes_preserves_explicit_zero_forex_daily_change` in `tests/test_websearch_injector.py`:
+
+```python
+def test_backfill_trend_changes_drops_raw_flat_when_daily_unusable_but_120d_usable(monkeypatch):
+    market_data = {
+        "metadata": {"date": "2026-06-03"},
+        "bonds": [],
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY onshore",
+                "current_rate": 6.8184,
+                "daily_change": 0.0,
+                "change_120d": 1.2,
+                "change_120d_basis": "trend_history",
+                "change_120d_base_date": "2026-02-01",
+                "trend": "flat",
+                "source": "structured",
+            }
+        ],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+        "macro_indicators": {},
+        "monetary_policy": {},
+    }
+
+    def _fake_hist(*args, **kwargs):
+        return {
+            "change_5d": None,
+            "change_120d": 1.2,
+            "reason_5d": None,
+            "reason_120d": None,
+            "base_5d_estimated": False,
+            "base_120d_estimated": False,
+        }
+
+    def _fake_daily_hist(*args, **kwargs):
+        return {
+            "change_1d": None,
+            "reason_1d": "trend_history_missing",
+            "base_1d_estimated": False,
+            "base_1d_date": None,
+        }
+
+    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+
+    stats = injector._backfill_trend_changes(market_data)
+
+    fx = market_data["forex"][0]
+    assert stats["forex"] == 0
+    assert fx["daily_change"] is None
+    assert fx["change_120d"] == pytest.approx(1.2)
+    assert fx["trend"] != "flat"
+```
+
+- [ ] **Step 4: Run the mixed-change tests and verify they fail**
+
+Run:
+
+```bash
+bash -lc "source .venv/bin/activate && PYTHONPATH=src pytest -q tests/test_simple_report_integration.py::test_asset_summary_omits_zero_derived_forex_trend_when_one_change_unusable tests/test_websearch_injector.py::test_merge_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable tests/test_websearch_injector.py::test_build_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable tests/test_websearch_injector.py::test_backfill_trend_changes_drops_raw_flat_when_daily_unusable_but_120d_usable"
+```
+
+Expected: at least one test fails because `flat` is still preserved when either `daily_change` or `change_120d` is unavailable.
+
+- [ ] **Step 5: Make raw zero-derived trend unusable when either comparison value is unavailable**
+
+In `scripts/stage2_5_injector.py`, replace `_usable_forex_raw_trend()` with:
+
+```python
+def _usable_forex_raw_trend(raw_trend: Any, daily_change: Optional[float], change_120d: Optional[float]) -> Any:
+    if (daily_change is None or change_120d is None) and _is_zero_derived_forex_trend(raw_trend):
+        return None
+    return raw_trend
+```
+
+- [ ] **Step 6: Recompute Stage2.5 forex trend from usable values after backfill**
+
+In `scripts/stage2_5_injector.py`, replace the final forex trend block inside `_backfill_trend_changes()`:
+
+```python
+        if fx.get("trend") in (None, "鏈煡", "寰匴ebSearch琛ュ厖", "寰?WebSearch"):
+            fx["trend"] = _infer_asset_trend(
+                None,
+                fx.get("daily_change"),
+                fx.get("change_120d"),
+                "forex",
+            )
+```
+
+with:
+
+```python
+        trend_daily_change = _usable_forex_change_value(fx, "daily_change")
+        trend_120d_change = _usable_forex_change_value(fx, "change_120d")
+        raw_trend = _usable_forex_raw_trend(
+            fx.get("trend"),
+            trend_daily_change,
+            trend_120d_change,
+        )
+        if raw_trend is None or fx.get("trend") in (None, "鏈煡", "寰匴ebSearch琛ュ厖", "寰?WebSearch"):
+            fx["trend"] = _infer_asset_trend(
+                None,
+                trend_daily_change,
+                trend_120d_change,
+                "forex",
+            )
+        else:
+            fx["trend"] = raw_trend
+```
+
+- [ ] **Step 7: Drop raw zero-derived trend from report asset summaries when either comparison value is unavailable**
+
+In `src/datasource/generators/simple_report.py`, replace this block in `_build_asset_summary()`:
+
+```python
+        raw_trend = fx.get("trend")
+        if daily is None and c120 is None and (_is_pending_fx_trend(raw_trend) or _is_zero_derived_fx_trend(raw_trend)):
+            raw_trend = None
+```
+
+with:
+
+```python
+        raw_trend = fx.get("trend")
+        if _is_zero_derived_fx_trend(raw_trend) and (daily is None or c120 is None):
+            raw_trend = None
+        elif daily is None and c120 is None and _is_pending_fx_trend(raw_trend):
+            raw_trend = None
+```
+
+- [ ] **Step 8: Run the mixed-change tests and verify they pass**
+
+Run:
+
+```bash
+bash -lc "source .venv/bin/activate && PYTHONPATH=src pytest -q tests/test_simple_report_integration.py::test_asset_summary_omits_zero_derived_forex_trend_when_one_change_unusable tests/test_websearch_injector.py::test_merge_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable tests/test_websearch_injector.py::test_build_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable tests/test_websearch_injector.py::test_backfill_trend_changes_drops_raw_flat_when_daily_unusable_but_120d_usable"
+```
+
+Expected: all four tests pass.
+
+- [ ] **Step 9: Run the Task2 focused regression subset**
+
+Run:
+
+```bash
+bash -lc "source .venv/bin/activate && PYTHONPATH=src pytest -q tests/test_websearch_injector.py tests/test_simple_report_integration.py"
+```
+
+Expected: all tests pass. Existing deprecation warnings are acceptable.
+
+- [ ] **Step 10: Amend the Task 2 commit**
+
+Run:
+
+```bash
+git add scripts/stage2_5_injector.py src/datasource/generators/simple_report.py tests/test_websearch_injector.py tests/test_simple_report_integration.py
+git commit --amend --no-edit
+```
+
+Expected: the latest commit remains `fix: hide unevidenced forex zero changes`, now including Task 2R.
+
+- [ ] **Step 11: Re-run Task2 review gate**
+
+Dispatch the spec reviewer only after Step 10 succeeds. The reviewer prompt must ask specifically whether:
+
+```text
+Task2R closes the mixed forex trend gap:
+- asset_summary does not include raw flat/sideways when either forex comparison value is unavailable;
+- _merge_forex_entry and _build_forex_entry do not preserve raw flat/sideways in the same mixed state;
+- _backfill_trend_changes recomputes forex trend from usable comparison values after evidence cleanup;
+- no CN10Y_CDB or Stage2 manual diagnostics behavior was changed.
+```
+
+Expected: spec review reports no remaining Task2 gap. If it finds a concrete failing case, add one RED test for that case before changing implementation.
 
 ---
 
