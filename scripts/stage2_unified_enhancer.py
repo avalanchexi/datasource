@@ -2673,6 +2673,67 @@ def _build_retrieval_diagnostics(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _manual_failure_layer(row: Dict[str, Any]) -> str:
+    structured_reason = _nested_row_value(row, "structured_provider_fallback_reason")
+    manual_reason = str(_nested_row_value(row, "manual_reason") or "")
+    usable_count = int(_nested_row_value(row, "usable_count_before_extract") or 0)
+    write_back_success = bool(_nested_row_value(row, "write_back_success"))
+
+    if (
+        structured_reason == "policy_gate_blocked"
+        or "fund_flow_window_missing" in manual_reason
+        or "estimated_not_allowed" in manual_reason
+    ):
+        return "policy_gate"
+    if structured_reason:
+        return "structured_provider"
+    if usable_count <= 0:
+        return "retrieval"
+    if write_back_success is False and _nested_row_value(row, "result_type") == "manual_required":
+        return "extraction"
+    return "extraction"
+
+
+def _build_manual_required_details(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    details: List[Dict[str, Any]] = []
+    seen_keys: set[str] = set()
+    for row in rows:
+        if not bool(_nested_row_value(row, "manual_required")):
+            continue
+        key = (
+            _nested_row_value(row, "indicator_key")
+            or _nested_row_value(row, "task.indicator_key")
+            or _nested_row_value(row, "task_indicator_key")
+            or "unknown"
+        )
+        key_text = str(key)
+        if key_text in seen_keys:
+            continue
+        seen_keys.add(key_text)
+        details.append(
+            {
+                "key": key_text,
+                "failure_layer": _manual_failure_layer(row),
+                "reason": str(
+                    _nested_row_value(row, "manual_reason")
+                    or _nested_row_value(row, "extraction.manual_reason")
+                    or _nested_row_value(row, "extraction_skipped_reason")
+                    or _nested_row_value(row, "extract_skipped_reason")
+                    or "manual_required"
+                ),
+                "structured_provider_fallback_reason": _nested_row_value(
+                    row,
+                    "structured_provider_fallback_reason",
+                ),
+                "usable_count_before_extract": int(
+                    _nested_row_value(row, "usable_count_before_extract") or 0
+                ),
+                "result_type": str(_nested_row_value(row, "result_type") or "manual_required"),
+            }
+        )
+    return details
+
+
 def _has_diagnostic_value(value: Any) -> bool:
     return value is not None and value != "" and value != [] and value != {}
 
@@ -2870,12 +2931,12 @@ def _build_stage2_summary_diagnostics(
     exec_stats: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     exec_stats = exec_stats or {}
-    retrieval_diagnostics = _build_retrieval_diagnostics(
-        _diagnostic_rows_for_summary(completed_tasks, failures, websearch_results)
-    )
+    diagnostic_rows = _diagnostic_rows_for_summary(completed_tasks, failures, websearch_results)
+    retrieval_diagnostics = _build_retrieval_diagnostics(diagnostic_rows)
     payload = {
         "retrieval_diagnostics": retrieval_diagnostics,
         "manual_reason_breakdown": retrieval_diagnostics.get("manual_reason_breakdown", {}),
+        "manual_required_details": _build_manual_required_details(diagnostic_rows),
         "deepseek_circuit_breaker_triggered": bool(
             exec_stats.get("deepseek_circuit_breaker_triggered", False)
         ),
@@ -6832,6 +6893,7 @@ async def main() -> int:
         "task_stale_refresh_failed": stale_refresh_failed,
         "retrieval_diagnostics": summary_diagnostics["retrieval_diagnostics"],
         "manual_reason_breakdown": summary_diagnostics["manual_reason_breakdown"],
+        "manual_required_details": summary_diagnostics["manual_required_details"],
         "manual_required": pending_manual,
         "output": str(output_path),
         "task_file": str(task_file),

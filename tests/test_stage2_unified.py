@@ -106,6 +106,63 @@ def test_retrieval_diagnostics_separates_search_extract_and_writeback():
     assert diagnostics["manual_reason_breakdown"]["strict_keyword_miss"] == 1
 
 
+def test_manual_required_details_classify_failure_layer():
+    rows = [
+        {
+            "indicator_key": "CN10Y_CDB",
+            "manual_required": True,
+            "manual_reason": "skipped_deepseek:strict_keyword_miss",
+            "structured_provider_fallback_reason": "missing_cdb_spread",
+            "usable_count_before_extract": 0,
+            "result_type": "manual_required",
+        },
+        {
+            "indicator_key": "reserve_ratio",
+            "manual_required": True,
+            "manual_reason": "Conflicting values; no_value",
+            "usable_count_before_extract": 2,
+            "result_type": "manual_required",
+        },
+        {
+            "indicator_key": "etf",
+            "manual_required": True,
+            "manual_reason": "fund_flow_window_missing",
+            "usable_count_before_extract": 1,
+            "structured_provider_fallback_reason": "policy_gate_blocked",
+            "result_type": "manual_required",
+        },
+    ]
+
+    details = stage2._build_manual_required_details(rows)
+
+    assert details == [
+        {
+            "key": "CN10Y_CDB",
+            "failure_layer": "structured_provider",
+            "reason": "skipped_deepseek:strict_keyword_miss",
+            "structured_provider_fallback_reason": "missing_cdb_spread",
+            "usable_count_before_extract": 0,
+            "result_type": "manual_required",
+        },
+        {
+            "key": "reserve_ratio",
+            "failure_layer": "extraction",
+            "reason": "Conflicting values; no_value",
+            "structured_provider_fallback_reason": None,
+            "usable_count_before_extract": 2,
+            "result_type": "manual_required",
+        },
+        {
+            "key": "etf",
+            "failure_layer": "policy_gate",
+            "reason": "fund_flow_window_missing",
+            "structured_provider_fallback_reason": "policy_gate_blocked",
+            "usable_count_before_extract": 1,
+            "result_type": "manual_required",
+        },
+    ]
+
+
 def test_summary_diagnostics_include_failures_without_duplicate_websearch_rows():
     completed = [
         {
@@ -161,6 +218,38 @@ def test_summary_diagnostics_include_failures_without_duplicate_websearch_rows()
     assert diagnostics["retrieval_task_count"] == 3
     assert diagnostics["manual_reason_breakdown"]["no_value"] == 1
     assert diagnostics["manual_reason_breakdown"]["network_error"] == 1
+
+
+def test_summary_diagnostics_include_manual_required_details():
+    failures = [
+        {
+            "task_id": "manual-cdb",
+            "indicator_key": "CN10Y_CDB",
+            "manual_required": True,
+            "manual_reason": "skipped_deepseek:strict_keyword_miss",
+            "structured_provider_fallback_reason": "missing_cdb_spread",
+            "usable_count_before_extract": 0,
+            "result_type": "manual_required",
+        }
+    ]
+
+    summary_fields = stage2._build_stage2_summary_diagnostics(
+        completed_tasks=[],
+        failures=failures,
+        websearch_results=[],
+        exec_stats={},
+    )
+
+    assert summary_fields["manual_required_details"] == [
+        {
+            "key": "CN10Y_CDB",
+            "failure_layer": "structured_provider",
+            "reason": "skipped_deepseek:strict_keyword_miss",
+            "structured_provider_fallback_reason": "missing_cdb_spread",
+            "usable_count_before_extract": 0,
+            "result_type": "manual_required",
+        }
+    ]
 
 
 def test_summary_diagnostics_persist_tavily_unavailable_reason():
