@@ -1820,17 +1820,44 @@ FOREX_COMPARE_FIELDS = ("daily_change", "change_120d")
 
 
 def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
-    if field in extraction and _safe_number(extraction.get(field)) is not None:
+    parsed_value = _safe_number(extraction.get(field)) if field in extraction else None
+    if parsed_value is not None and parsed_value != 0.0:
         return True
 
     evidence_text = " ".join(
         str(extraction.get(text_field) or "")
-        for text_field in ("metric_basis", "change_period", "note", "source", "estimation_method")
+        for text_field in ("metric_basis", "change_period", "window_evidence", "estimation_method", "note")
     ).lower()
     evidence_tokens = {
         "change_120d": ("120d", "120日", "120-day", "direct window"),
         "daily_change": ("daily", "日变化", "day change", "previous close"),
     }
+    negative_tokens = {
+        "change_120d": (
+            "missing 120d",
+            "no 120d",
+            "without 120d",
+            "missing 120-day",
+            "no 120-day",
+            "without 120-day",
+            "缺少120日",
+            "无120日",
+            "没有120日",
+        ),
+        "daily_change": (
+            "missing daily",
+            "no daily",
+            "without daily",
+            "missing day change",
+            "no day change",
+            "without day change",
+            "缺少日变化",
+            "无日变化",
+            "没有日变化",
+        ),
+    }
+    if any(token in evidence_text for token in negative_tokens.get(field, ())):
+        return False
     return any(token in evidence_text for token in evidence_tokens.get(field, ()))
 
 
