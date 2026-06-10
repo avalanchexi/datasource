@@ -5,7 +5,7 @@ from __future__ import annotations
 import html
 import re
 from datetime import datetime, timedelta
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Sequence, Tuple
 
 from datasource.providers.stage2_structured.base import (
     Stage2StructuredProvider,
@@ -19,8 +19,8 @@ from datasource.providers.stage2_structured.source_tiers import (
     classify_structured_source_tier,
 )
 
-
 FetchText = Callable[[str, Optional[Dict[str, Any]]], Awaitable[str]]
+QuoteParseResult = Tuple[float, Optional[str], str, str]
 
 
 QUOTE_PAGES: Dict[str, Dict[str, Any]] = {
@@ -84,10 +84,13 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
 
         text = self._normalize_text(raw_text)
         self._validate_page(key, text, config, url)
-        expected_close_date = self._expected_close_date(reference_date)
+        candidate_close_dates = self._candidate_close_dates(reference_date)
+        expected_close_date = (
+            candidate_close_dates[0] if candidate_close_dates else None
+        )
         parsed = self._parse_close_value(
             text,
-            expected_close_date,
+            candidate_close_dates,
             str(config.get("parse_strategy") or "date_row_first"),
         )
         if parsed is None:
@@ -99,9 +102,10 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
                 diagnostics={
                     "url": url,
                     "expected_close_date": expected_close_date,
+                    "candidate_close_dates": candidate_close_dates,
                 },
             )
-        value, as_of_date, evidence_text = parsed
+        value, as_of_date, evidence_text, as_of_date_basis = parsed
 
         return StructuredResult(
             provider=self.name,
@@ -117,6 +121,8 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
                 "label": config["label"],
                 "price_basis": config["price_basis"],
                 "expected_close_date": expected_close_date,
+                "candidate_close_dates": candidate_close_dates,
+                "as_of_date_basis": as_of_date_basis,
                 "evidence_text": evidence_text,
             },
         )
@@ -175,17 +181,30 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
             )
 
     @staticmethod
-    def _expected_close_date(reference_date: str) -> str:
+    def _candidate_close_dates(
+        reference_date: str, lookback_days: int = 10
+    ) -> List[str]:
         ref_date = datetime.strptime(reference_date, "%Y-%m-%d").date()
-        return (ref_date - timedelta(days=1)).isoformat()
+        candidates: List[str] = []
+        cursor = ref_date - timedelta(days=1)
+        while (ref_date - cursor).days <= lookback_days:
+            if cursor.weekday() < 5:
+                candidates.append(cursor.isoformat())
+            cursor -= timedelta(days=1)
+        return candidates
+
+    @staticmethod
+    def _expected_close_date(reference_date: str) -> str:
+        candidates = MarketQuotePageProvider._candidate_close_dates(reference_date)
+        return candidates[0]
 
     @classmethod
     def _parse_close_value(
         cls,
         text: str,
-        expected_close_date: str,
+        candidate_close_dates: Sequence[str],
         parse_strategy: str = "date_row_first",
-    ) -> Optional[Tuple[float, str, str]]:
+    ) -> Optional[QuoteParseResult]:
         parsers = {
             "date_row_first": (
                 cls._parse_date_row_close_value,
@@ -203,7 +222,7 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
             ),
         )
         for parser in parsers:
-            parsed = parser(text, expected_close_date)
+            parsed = parser(text, candidate_close_dates)
             if parsed is not None:
                 return parsed
         return None
@@ -212,45 +231,110 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
     def _parse_date_row_close_value(
         cls,
         text: str,
-        expected_close_date: str,
-    ) -> Optional[Tuple[float, str, str]]:
-        date_label = cls._date_label(expected_close_date)
-        date_pattern = re.escape(date_label).replace(r"\ ", r"\s+")
-        date_match = re.search(
-            r"({0})(?P<tail>.{{0,240}})".format(date_pattern),
-            text,
-            flags=re.IGNORECASE,
-        )
-        if date_match:
-            tail = date_match.group("tail")
-            value = cls._first_number(tail)
-            if value is not None:
-                evidence = "{0}{1}".format(date_match.group(1), tail[:80]).strip()
-                return value, expected_close_date, evidence
+        candidate_close_dates: Sequence[str],
+    ) -> Optional[QuoteParseResult]:
+        for close_date in candidate_close_dates:
+            date_label = cls._date_label(close_date)
+            date_pattern = re.escape(date_label).replace(r"\ ", r"\s+")
+            date_match = re.search(
+                r"({0})(?P<tail>.{{0,240}})".format(date_pattern),
+                text,
+                flags=re.IGNORECASE,
+            )
+            if date_match:
+                tail = date_match.group("tail")
+                value = cls._first_number(tail)
+                if value is not None:
+                    evidence = "{0}{1}".format(date_match.group(1), tail[:80]).strip()
+                    return value, close_date, evidence, "date_row"
         return None
 
     @classmethod
     def _parse_labelled_close_value(
         cls,
         text: str,
-        expected_close_date: str,
-    ) -> Optional[Tuple[float, str, str]]:
+        candidate_close_dates: Sequence[str],
+    ) -> Optional[QuoteParseResult]:
         close_match = re.search(
             r"\b(?:previous\s+close|close)\s+([0-9][0-9,]*(?:\.\d+)?)\b",
             text,
             flags=re.IGNORECASE,
         )
         if close_match:
-            evidence_start = max(0, close_match.start() - 40)
-            evidence_end = min(len(text), close_match.end() + 80)
+            evidence_start = max(0, close_match.start() - 80)
+            evidence_end = min(len(text), close_match.end() + 160)
             evidence = text[evidence_start:evidence_end].strip()
-            return cls._parse_number(close_match.group(1)), expected_close_date, evidence
+            explicit_date = cls._nearest_candidate_date(
+                text,
+                close_match.start(),
+                close_match.end(),
+                candidate_close_dates,
+            )
+            basis = (
+                "labelled_close_with_date"
+                if explicit_date
+                else "labelled_close_without_date"
+            )
+            return (
+                cls._parse_number(close_match.group(1)),
+                explicit_date,
+                evidence,
+                basis,
+            )
         return None
 
     @staticmethod
     def _date_label(iso_date: str) -> str:
         date_value = datetime.strptime(iso_date, "%Y-%m-%d").date()
         return date_value.strftime("%b %d, %Y")
+
+    @classmethod
+    def _nearest_candidate_date(
+        cls,
+        text: str,
+        match_start: int,
+        match_end: int,
+        candidate_close_dates: Sequence[str],
+    ) -> Optional[str]:
+        candidate_set = set(candidate_close_dates)
+        evidence_start = max(0, match_start - 160)
+        evidence_end = min(len(text), match_end + 240)
+        window = text[evidence_start:evidence_end]
+        close_center = (match_start + match_end) / 2.0
+        matches = []
+        for match in re.finditer(
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*"
+            r"\s+\d{1,2},\s+\d{4}\b",
+            window,
+            flags=re.IGNORECASE,
+        ):
+            parsed = cls._parse_us_date_label(match.group(0))
+            if parsed and parsed in candidate_set:
+                absolute_start = evidence_start + match.start()
+                absolute_end = evidence_start + match.end()
+                match_center = (absolute_start + absolute_end) / 2.0
+                is_after_close = absolute_start >= match_end
+                matches.append(
+                    (
+                        abs(match_center - close_center),
+                        not is_after_close,
+                        parsed,
+                    )
+                )
+        if not matches:
+            return None
+        matches.sort()
+        return matches[0][2]
+
+    @staticmethod
+    def _parse_us_date_label(value: str) -> Optional[str]:
+        text = " ".join(str(value or "").strip().split())
+        for fmt in ("%b %d, %Y", "%B %d, %Y"):
+            try:
+                return datetime.strptime(text, fmt).date().isoformat()
+            except ValueError:
+                continue
+        return None
 
     @classmethod
     def _first_number(cls, text: str) -> Optional[float]:

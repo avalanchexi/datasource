@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Mapping, Optional, Sequence
@@ -19,6 +20,7 @@ from datasource.providers.stage2_structured.source_tiers import (
 SOURCE_URL = "https://tushare.pro/document/2"
 EXCHANGES = ("SSE", "SZSE")
 WINDOW_DATES = 121
+ETF_COMPLETENESS_ROW_FLOOR_RATIO = 0.8
 
 
 class TuShareETFProvider(Stage2StructuredProvider):
@@ -61,10 +63,7 @@ class TuShareETFProvider(Stage2StructuredProvider):
             min_dates=WINDOW_DATES,
             candidate_dates=WINDOW_DATES + 10,
         )
-        totals_by_date: Dict[str, float] = {}
-        skipped_incomplete_trade_dates = []
-        incomplete_details_by_date: Dict[str, Dict[str, Any]] = {}
-        first_incomplete_details: Dict[str, Any] = {}
+        records_by_date: Dict[str, Dict[str, Sequence[Mapping[str, Any]]]] = {}
         row_count = 0
         for trade_date in trade_dates:
             records_by_exchange = {}
@@ -72,11 +71,35 @@ class TuShareETFProvider(Stage2StructuredProvider):
                 records = self._fetch_share_size_records(pro, trade_date, exchange)
                 row_count += len(records)
                 records_by_exchange[exchange] = records
-            total_wan = _date_total_from_records(records_by_exchange, trade_date)
+            records_by_date[trade_date] = records_by_exchange
+
+        max_rows_by_exchange = _max_usable_rows_by_exchange(records_by_date)
+        min_rows_by_exchange = _min_usable_rows_by_exchange(records_by_date)
+        diagnostics.update(
+            {
+                "row_count_floor_ratio": ETF_COMPLETENESS_ROW_FLOOR_RATIO,
+                "max_usable_rows_by_exchange": dict(max_rows_by_exchange),
+                "min_required_rows_by_exchange": dict(min_rows_by_exchange),
+            }
+        )
+
+        totals_by_date: Dict[str, float] = {}
+        skipped_incomplete_trade_dates = []
+        incomplete_details_by_date: Dict[str, Dict[str, Any]] = {}
+        first_incomplete_details: Dict[str, Any] = {}
+        for trade_date in trade_dates:
+            records_by_exchange = records_by_date[trade_date]
+            total_wan = _date_total_from_records(
+                records_by_exchange,
+                trade_date,
+                min_rows_by_exchange=min_rows_by_exchange,
+            )
             if total_wan is None:
                 skipped_incomplete_trade_dates.append(trade_date)
                 incomplete_details = _incomplete_date_diagnostics(
-                    records_by_exchange, trade_date
+                    records_by_exchange,
+                    trade_date,
+                    min_rows_by_exchange=min_rows_by_exchange,
                 )
                 incomplete_details_by_date[trade_date] = incomplete_details
                 if not first_incomplete_details:
@@ -132,6 +155,9 @@ class TuShareETFProvider(Stage2StructuredProvider):
                 "candidate_date_count": len(trade_dates),
                 "complete_date_count": complete_date_count,
                 "row_count": row_count,
+                "row_count_floor_ratio": ETF_COMPLETENESS_ROW_FLOOR_RATIO,
+                "max_usable_rows_by_exchange": dict(max_rows_by_exchange),
+                "min_required_rows_by_exchange": dict(min_rows_by_exchange),
                 "latest_trade_date": window_dates[-1],
                 "start_trade_date": window_dates[0],
                 "metric_basis": "etf_total_size_delta",
@@ -334,16 +360,50 @@ def _record_matches_request(record: Mapping[str, Any], trade_date: str, exchange
     return True
 
 
+def _max_usable_rows_by_exchange(
+    records_by_date: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]]
+) -> Dict[str, int]:
+    max_counts: Dict[str, int] = {}
+    for exchange in EXCHANGES:
+        counts = []
+        for trade_date, records_by_exchange in records_by_date.items():
+            count = len(
+                _usable_total_sizes(
+                    records_by_exchange.get(exchange, []), trade_date, exchange
+                )
+            )
+            if count > 0:
+                counts.append(count)
+        max_counts[exchange] = max(counts) if counts else 1
+    return max_counts
+
+
+def _min_usable_rows_by_exchange(
+    records_by_date: Mapping[str, Mapping[str, Sequence[Mapping[str, Any]]]]
+) -> Dict[str, int]:
+    floors: Dict[str, int] = {}
+    for exchange, reference_count in _max_usable_rows_by_exchange(
+        records_by_date
+    ).items():
+        floors[exchange] = max(
+            1,
+            int(math.ceil(reference_count * ETF_COMPLETENESS_ROW_FLOOR_RATIO)),
+        )
+    return floors
+
+
 def _date_total_from_records(
     records_by_exchange: Mapping[str, Sequence[Mapping[str, Any]]],
     trade_date: str,
+    min_rows_by_exchange: Optional[Mapping[str, int]] = None,
 ) -> Optional[float]:
     total = 0.0
     for exchange in EXCHANGES:
         usable = _usable_total_sizes(
             records_by_exchange.get(exchange, []), trade_date, exchange
         )
-        if not usable:
+        min_rows = int((min_rows_by_exchange or {}).get(exchange, 1))
+        if len(usable) < max(1, min_rows):
             return None
         total += sum(usable)
     return total
@@ -371,12 +431,48 @@ def _usable_total_sizes(
 def _incomplete_date_diagnostics(
     records_by_exchange: Mapping[str, Sequence[Mapping[str, Any]]],
     trade_date: str,
+    min_rows_by_exchange: Optional[Mapping[str, int]] = None,
 ) -> Dict[str, Any]:
+    usable_counts = {
+        exchange: len(
+            _usable_total_sizes(
+                records_by_exchange.get(exchange, []), trade_date, exchange
+            )
+        )
+        for exchange in EXCHANGES
+    }
+    required_counts = {
+        exchange: max(1, int((min_rows_by_exchange or {}).get(exchange, 1)))
+        for exchange in EXCHANGES
+    }
     for exchange in EXCHANGES:
-        if _usable_total_sizes(records_by_exchange.get(exchange, []), trade_date, exchange):
-            continue
-        return {"missing_trade_date": trade_date, "missing_exchange": exchange}
-    return {"missing_trade_date": trade_date}
+        usable_count = usable_counts[exchange]
+        required_count = required_counts[exchange]
+        if usable_count <= 0:
+            return {
+                "missing_trade_date": trade_date,
+                "missing_exchange": exchange,
+                "incomplete_reason": "missing_exchange_rows",
+                "usable_row_count": usable_count,
+                "min_required_row_count": required_count,
+                "usable_row_count_by_exchange": usable_counts,
+                "min_required_rows_by_exchange": required_counts,
+            }
+        if usable_count < required_count:
+            return {
+                "missing_trade_date": trade_date,
+                "missing_exchange": exchange,
+                "incomplete_reason": "partial_exchange_rows",
+                "usable_row_count": usable_count,
+                "min_required_row_count": required_count,
+                "usable_row_count_by_exchange": usable_counts,
+                "min_required_rows_by_exchange": required_counts,
+            }
+    return {
+        "missing_trade_date": trade_date,
+        "usable_row_count_by_exchange": usable_counts,
+        "min_required_rows_by_exchange": required_counts,
+    }
 
 
 def _policy_blocked_diagnostics(diagnostics: Mapping[str, Any], **details: Any) -> Dict[str, Any]:

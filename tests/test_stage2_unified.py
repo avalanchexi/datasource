@@ -1267,6 +1267,19 @@ def test_daily_quote_context_can_use_completed_close_lag():
     assert context["closing_date_label"] == "2026年6月9日"
 
 
+def test_daily_quote_context_skips_weekend_for_completed_close_lag():
+    from datasource.engines.stage2_task_planner import Stage2TaskPlanner
+
+    planner = Stage2TaskPlanner()
+    payload = {"metadata": {"date": "2026-06-15"}}
+
+    context = planner._build_query_context(payload, profile={"closing_date_lag_days": 1})
+
+    assert context["ref_date"] == "2026-06-15"
+    assert context["closing_date"] == "2026-06-12"
+    assert context["closing_date_label"] == "2026年6月12日"
+
+
 def test_bcom_and_gsg_profiles_use_previous_completed_close():
     from datasource.config.search_profiles import SEARCH_PROFILES
 
@@ -1663,6 +1676,27 @@ def test_high_gap_quote_dated_families_survive_profile_budget(
     expected_date = "2026-05-11" if indicator_key in {"BCOM", "GSG"} else "2026-05-12"
     expected_label = "2026年5月11日" if indicator_key in {"BCOM", "GSG"} else "2026年5月12日"
     assert any(expected_date in item["query"] or expected_label in item["query"] for item in candidates)
+
+
+def test_bcom_query_candidates_skip_weekend_after_monday_report_date(tmp_path: Path):
+    payload = {
+        "metadata": {"date": "2026-06-15"},
+        "missing_items": [{"key": "BCOM"}],
+    }
+
+    planner = Stage2TaskPlanner(task_file=tmp_path / "tasks.jsonl")
+    task = next(t for t in planner.build_tasks(payload) if t["indicator_key"] == "BCOM")
+    candidates = stage2._expand_query_candidates(task)
+    candidate_queries = [item["query"] for item in candidates]
+
+    assert any(
+        "2026-06-12" in query or "2026年6月12日" in query
+        for query in candidate_queries
+    )
+    assert not any(
+        "2026-06-14" in query or "2026年6月14日" in query
+        for query in candidate_queries
+    )
 
 
 def test_fund_flow_profiles_have_field_queries_for_all_report_windows():

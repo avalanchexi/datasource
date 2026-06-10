@@ -104,6 +104,73 @@ class FakeTuShareETFProInternalMissing(FakeTuShareETFPro):
         )
 
 
+class FakeTuShareETFProPartialRows(FakeTuShareETFPro):
+    def __init__(
+        self,
+        partial_trade_date,
+        partial_exchange="SSE",
+        trade_date_count=131,
+    ):
+        super().__init__(trade_date_count=trade_date_count)
+        self.partial_trade_date = partial_trade_date
+        self.partial_exchange = partial_exchange
+
+    def etf_share_size(self, trade_date, exchange=None, market=None):
+        exchange_value = exchange or market
+        index = self.trade_dates.index(trade_date)
+        total_size_wan = (1000.0 + index) * 10000.0 / 2.0
+        row_count = (
+            1
+            if (
+                trade_date == self.partial_trade_date
+                and exchange_value == self.partial_exchange
+            )
+            else 4
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "trade_date": trade_date,
+                    "exchange": exchange_value,
+                    "ts_code": "{0}.{1:03d}".format(exchange_value, row_index),
+                    "total_size": total_size_wan / row_count,
+                }
+                for row_index in range(row_count)
+            ]
+        )
+
+
+class FakeTuShareETFProMostlyPartialRows(FakeTuShareETFPro):
+    def __init__(self, partial_count=66, trade_date_count=131, partial_exchange="SSE"):
+        super().__init__(trade_date_count=trade_date_count)
+        self.partial_dates = set(self.trade_dates[:partial_count])
+        self.partial_exchange = partial_exchange
+
+    def etf_share_size(self, trade_date, exchange=None, market=None):
+        exchange_value = exchange or market
+        index = self.trade_dates.index(trade_date)
+        total_size_wan = (1000.0 + index) * 10000.0 / 2.0
+        row_count = (
+            1
+            if (
+                trade_date in self.partial_dates
+                and exchange_value == self.partial_exchange
+            )
+            else 4
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "trade_date": trade_date,
+                    "exchange": exchange_value,
+                    "ts_code": "{0}.{1:03d}".format(exchange_value, row_index),
+                    "total_size": total_size_wan / row_count,
+                }
+                for row_index in range(row_count)
+            ]
+        )
+
+
 class FakeProvider:
     name = "fake"
     supported_keys = {"GC=F"}
@@ -334,6 +401,35 @@ async def test_market_quote_page_provider_parses_bcom_investing_close():
 
 
 @pytest.mark.asyncio
+async def test_market_quote_page_provider_uses_previous_weekday_for_monday_bcom_close():
+    html = """
+    <html><body>
+      <h1>Bloomberg Commodity Historical Data</h1>
+      <table>
+        <tr><td>Jun 12, 2026</td><td>129.5000</td><td>130.9746</td></tr>
+      </table>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "bloomberg-commodity-historical-data" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "BCOM"}, {}, "2026-06-15")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(129.5)
+    assert extraction["as_of_date"] == "2026-06-12"
+    assert extraction["diagnostics"]["candidate_close_dates"][:3] == [
+        "2026-06-12",
+        "2026-06-11",
+        "2026-06-10",
+    ]
+    assert extraction["diagnostics"]["as_of_date_basis"] == "date_row"
+
+
+@pytest.mark.asyncio
 async def test_market_quote_page_provider_parses_gsg_stockanalysis_close():
     html = """
     <html><body>
@@ -355,6 +451,100 @@ async def test_market_quote_page_provider_parses_gsg_stockanalysis_close():
     assert extraction["unit"] == "USD"
     assert extraction["as_of_date"] == "2026-06-09"
     assert extraction["diagnostics"]["price_basis"] == "market_close"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_uses_explicit_page_date_for_labelled_gsg_close():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24</div>
+      <div>Market data as of Jun 12, 2026</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["as_of_date"] == "2026-06-12"
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_with_date"
+    assert "2026-06-12" in extraction["diagnostics"]["candidate_close_dates"]
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_uses_nearest_explicit_date_for_labelled_gsg_close():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <section>Older table heading Jun 10, 2026 with enough intervening context to keep this stale heading farther away from the close value than the later page date.</section>
+      <div>Previous Close 31.24</div>
+      <div>Market data as of Jun 12, 2026</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["as_of_date"] == "2026-06-12"
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_with_date"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_prefers_closest_date_over_farther_as_of_date():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24 <span>Jun 11, 2026</span></div>
+      <p>Supplemental context with enough words to move the later date farther away from the close value.</p>
+      <p>Market data as of Jun 12, 2026</p>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["as_of_date"] == "2026-06-11"
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_with_date"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_does_not_invent_labelled_close_date():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert "as_of_date" not in extraction
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_without_date"
 
 
 @pytest.mark.asyncio
@@ -506,6 +696,71 @@ async def test_tushare_etf_provider_fails_closed_when_internal_exchange_date_mis
     ]
     assert exc_info.value.diagnostics["candidate_date_count"] == 131
     assert exc_info.value.diagnostics["complete_date_count"] == 130
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_fails_closed_when_exchange_rows_are_partial():
+    partial_trade_date = _trade_dates(131)[20]
+    provider = TuShareETFProvider(
+        pro=FakeTuShareETFProPartialRows(partial_trade_date=partial_trade_date)
+    )
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    diagnostics = exc_info.value.diagnostics
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert diagnostics["missing_trade_date"] == partial_trade_date
+    assert diagnostics["missing_exchange"] == "SSE"
+    assert diagnostics["incomplete_reason"] == "partial_exchange_rows"
+    assert diagnostics["usable_row_count"] == 1
+    assert diagnostics["min_required_row_count"] == 4
+    assert diagnostics["usable_row_count_by_exchange"]["SSE"] == 1
+    assert diagnostics["usable_row_count_by_exchange"]["SZSE"] == 4
+    assert diagnostics["min_required_rows_by_exchange"]["SSE"] == 4
+    assert diagnostics["skipped_incomplete_trade_dates"] == [partial_trade_date]
+    assert diagnostics["terminal_structured_provider_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_rolls_back_when_latest_exchange_rows_are_partial():
+    latest_trade_date = _trade_dates(131)[-1]
+    provider = TuShareETFProvider(
+        pro=FakeTuShareETFProPartialRows(partial_trade_date=latest_trade_date)
+    )
+
+    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    extraction = result.to_extraction()
+    assert extraction["is_estimated"] is False
+    assert extraction["metric_basis"] == "etf_total_size_delta"
+    assert extraction["total_120d"] == pytest.approx(120.0)
+    assert extraction["as_of_date"] == _trade_dates(131)[-2]
+    assert extraction["diagnostics"]["latest_trade_date_was_incomplete"] is True
+    assert extraction["diagnostics"]["skipped_incomplete_trade_dates"] == [
+        latest_trade_date
+    ]
+    assert extraction["diagnostics"]["min_required_rows_by_exchange"]["SSE"] == 4
+    assert extraction["diagnostics"]["min_required_rows_by_exchange"]["SZSE"] == 4
+    assert extraction["diagnostics"]["complete_date_count"] == 130
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_fails_closed_when_partial_rows_are_majority():
+    provider = TuShareETFProvider(pro=FakeTuShareETFProMostlyPartialRows())
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    diagnostics = exc_info.value.diagnostics
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert diagnostics["missing_exchange"] == "SSE"
+    assert diagnostics["incomplete_reason"] == "partial_exchange_rows"
+    assert diagnostics["usable_row_count"] == 1
+    assert diagnostics["min_required_row_count"] == 4
+    assert diagnostics["min_required_rows_by_exchange"]["SSE"] == 4
+    assert diagnostics["min_required_rows_by_exchange"]["SZSE"] == 4
+    assert diagnostics["terminal_structured_provider_error"] is True
 
 
 @pytest.mark.asyncio
