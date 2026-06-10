@@ -53,11 +53,13 @@ class FakeTuShareETFPro:
         trade_date_count=131,
         wrong_trade_date=False,
         wrong_exchange=False,
+        missing_by_date_exchange=None,
     ):
         self.trade_dates = _trade_dates(trade_date_count)
         self.missing_exchange = missing_exchange
         self.wrong_trade_date = wrong_trade_date
         self.wrong_exchange = wrong_exchange
+        self.missing_by_date_exchange = set(missing_by_date_exchange or [])
 
     def trade_cal(self, exchange="", start_date=None, end_date=None, is_open=1):
         return pd.DataFrame(
@@ -67,6 +69,8 @@ class FakeTuShareETFPro:
     def etf_share_size(self, trade_date, exchange=None, market=None):
         exchange_value = exchange or market
         if exchange_value == self.missing_exchange:
+            return pd.DataFrame([])
+        if (trade_date, exchange_value) in self.missing_by_date_exchange:
             return pd.DataFrame([])
         index = self.trade_dates.index(trade_date)
         total_size_wan = (1000.0 + index) * 10000.0 / 2.0
@@ -90,6 +94,14 @@ class FakeTuShareETFProLatestMissing(FakeTuShareETFPro):
         if trade_date == _trade_dates(131)[-1] and exchange_value == "SSE":
             return []
         return super().etf_share_size(trade_date=trade_date, exchange=exchange_value)
+
+
+class FakeTuShareETFProInternalMissing(FakeTuShareETFPro):
+    def __init__(self):
+        super().__init__(
+            trade_date_count=131,
+            missing_by_date_exchange={(_trade_dates(131)[20], "SSE")},
+        )
 
 
 class FakeProvider:
@@ -451,6 +463,8 @@ async def test_tushare_etf_provider_computes_total_size_delta_windows():
     assert extraction["source_url"] == TUSHARE_ETF_SOURCE_URL
     assert extraction["diagnostics"]["row_count"] == 262
     assert extraction["diagnostics"]["date_count"] == 121
+    assert extraction["diagnostics"]["candidate_date_count"] == 131
+    assert extraction["diagnostics"]["complete_date_count"] == 131
     assert extraction["diagnostics"]["exchange_count"] == 2
 
 
@@ -463,11 +477,35 @@ async def test_tushare_etf_provider_uses_latest_complete_window_when_reference_d
     extraction = result.to_extraction()
     assert extraction["is_estimated"] is False
     assert extraction["metric_basis"] == "etf_total_size_delta"
+    assert extraction["total_120d"] == pytest.approx(120.0)
+    assert extraction["as_of_date"] == _trade_dates(131)[-2]
+    assert extraction["diagnostics"]["latest_trade_date"] == _trade_dates(131)[-2]
+    assert extraction["diagnostics"]["start_trade_date"] == _trade_dates(131)[9]
     assert extraction["diagnostics"]["latest_trade_date_was_incomplete"] is True
     assert extraction["diagnostics"]["skipped_incomplete_trade_dates"] == [
         _trade_dates(131)[-1]
     ]
     assert extraction["diagnostics"]["date_count"] == 121
+    assert extraction["diagnostics"]["candidate_date_count"] == 131
+    assert extraction["diagnostics"]["complete_date_count"] == 130
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_fails_closed_when_internal_exchange_date_missing():
+    provider = TuShareETFProvider(pro=FakeTuShareETFProInternalMissing())
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert exc_info.value.diagnostics["missing_trade_date"] == _trade_dates(131)[20]
+    assert exc_info.value.diagnostics["missing_exchange"] == "SSE"
+    assert exc_info.value.diagnostics["latest_trade_date_was_incomplete"] is False
+    assert exc_info.value.diagnostics["skipped_incomplete_trade_dates"] == [
+        _trade_dates(131)[20]
+    ]
+    assert exc_info.value.diagnostics["candidate_date_count"] == 131
+    assert exc_info.value.diagnostics["complete_date_count"] == 130
 
 
 @pytest.mark.asyncio

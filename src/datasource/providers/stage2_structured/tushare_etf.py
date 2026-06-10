@@ -58,6 +58,7 @@ class TuShareETFProvider(Stage2StructuredProvider):
         )
         totals_by_date: Dict[str, float] = {}
         skipped_incomplete_trade_dates = []
+        incomplete_details_by_date: Dict[str, Dict[str, Any]] = {}
         first_incomplete_details: Dict[str, Any] = {}
         row_count = 0
         for trade_date in trade_dates:
@@ -69,37 +70,50 @@ class TuShareETFProvider(Stage2StructuredProvider):
             total_wan = _date_total_from_records(records_by_exchange, trade_date)
             if total_wan is None:
                 skipped_incomplete_trade_dates.append(trade_date)
+                incomplete_details = _incomplete_date_diagnostics(
+                    records_by_exchange, trade_date
+                )
+                incomplete_details_by_date[trade_date] = incomplete_details
                 if not first_incomplete_details:
-                    first_incomplete_details = _incomplete_date_diagnostics(
-                        records_by_exchange, trade_date
-                    )
+                    first_incomplete_details = incomplete_details
                 continue
             totals_by_date[trade_date] = total_wan / 10000.0
 
-        complete_dates = [
-            trade_date for trade_date in trade_dates if trade_date in totals_by_date
+        latest_trade_date_was_incomplete = bool(trade_dates) and (
+            trade_dates[-1] in skipped_incomplete_trade_dates
+        )
+        usable_trade_dates = list(trade_dates)
+        while usable_trade_dates and usable_trade_dates[-1] not in totals_by_date:
+            usable_trade_dates.pop()
+
+        complete_date_count = len(totals_by_date)
+        window_dates = usable_trade_dates[-WINDOW_DATES:]
+        incomplete_window_dates = [
+            trade_date for trade_date in window_dates if trade_date not in totals_by_date
         ]
-        window_dates = complete_dates[-WINDOW_DATES:]
-        if len(window_dates) < WINDOW_DATES:
+
+        if len(window_dates) < WINDOW_DATES or incomplete_window_dates:
+            blocked_details = first_incomplete_details
+            if incomplete_window_dates:
+                blocked_details = incomplete_details_by_date[incomplete_window_dates[0]]
             blocked = _policy_blocked_diagnostics(
                 diagnostics,
-                **first_incomplete_details,
+                **blocked_details,
                 date_count=len(window_dates),
                 candidate_date_count=len(trade_dates),
-                complete_date_count=len(complete_dates),
+                complete_date_count=complete_date_count,
                 row_count=row_count,
                 skipped_incomplete_trade_dates=skipped_incomplete_trade_dates,
                 latest_trade_date=trade_dates[-1] if trade_dates else None,
-                latest_trade_date_was_incomplete=(
-                    bool(trade_dates) and trade_dates[-1] in skipped_incomplete_trade_dates
-                ),
+                latest_trade_date_was_incomplete=latest_trade_date_was_incomplete,
+                incomplete_window_trade_dates=incomplete_window_dates,
                 metric_basis="etf_total_size_delta",
             )
             raise StructuredProviderError(
                 provider=self.name,
                 indicator_key=key,
                 reason="policy_gate_blocked",
-                message="TuShare ETF share-size window has fewer than 121 complete dates",
+                message="TuShare ETF share-size window is not a complete continuous window",
                 diagnostics=blocked,
             )
 
@@ -110,14 +124,14 @@ class TuShareETFProvider(Stage2StructuredProvider):
         diagnostics.update(
             {
                 "date_count": len(window_dates),
+                "candidate_date_count": len(trade_dates),
+                "complete_date_count": complete_date_count,
                 "row_count": row_count,
                 "latest_trade_date": window_dates[-1],
                 "start_trade_date": window_dates[0],
                 "metric_basis": "etf_total_size_delta",
                 "skipped_incomplete_trade_dates": skipped_incomplete_trade_dates,
-                "latest_trade_date_was_incomplete": (
-                    trade_dates[-1] in skipped_incomplete_trade_dates
-                ),
+                "latest_trade_date_was_incomplete": latest_trade_date_was_incomplete,
             }
         )
 
