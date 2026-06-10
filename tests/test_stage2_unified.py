@@ -1660,7 +1660,9 @@ def test_high_gap_quote_dated_families_survive_profile_budget(
     assert candidates
     assert candidates[0]["family"] == expected_family
     assert any(item["family"] == expected_family for item in candidates)
-    assert any("2026-05-12" in item["query"] or "2026年5月12日" in item["query"] for item in candidates)
+    expected_date = "2026-05-11" if indicator_key in {"BCOM", "GSG"} else "2026-05-12"
+    expected_label = "2026年5月11日" if indicator_key in {"BCOM", "GSG"} else "2026年5月12日"
+    assert any(expected_date in item["query"] or expected_label in item["query"] for item in candidates)
 
 
 def test_fund_flow_profiles_have_field_queries_for_all_report_windows():

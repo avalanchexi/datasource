@@ -54,7 +54,12 @@ class TuShareETFProvider(Stage2StructuredProvider):
             "exchange_count": len(EXCHANGES),
         }
         trade_dates = self._fetch_trade_dates(
-            pro, key, reference_date, diagnostics, min_dates=WINDOW_DATES + 10
+            pro,
+            key,
+            reference_date,
+            diagnostics,
+            min_dates=WINDOW_DATES,
+            candidate_dates=WINDOW_DATES + 10,
         )
         totals_by_date: Dict[str, float] = {}
         skipped_incomplete_trade_dates = []
@@ -175,6 +180,7 @@ class TuShareETFProvider(Stage2StructuredProvider):
         reference_date: str,
         diagnostics: Mapping[str, Any],
         min_dates: int = WINDOW_DATES,
+        candidate_dates: Optional[int] = None,
     ) -> List[str]:
         try:
             reference_dt = _parse_reference_date(reference_date)
@@ -232,7 +238,8 @@ class TuShareETFProvider(Stage2StructuredProvider):
                 message="TuShare trade calendar has fewer than required open dates",
                 diagnostics=blocked,
             )
-        return open_dates[-min_dates:]
+        take_count = max(min_dates, candidate_dates or min_dates)
+        return open_dates[-take_count:]
 
     def _fetch_share_size_records(
         self, pro, trade_date: str, exchange: str
