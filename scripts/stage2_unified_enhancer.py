@@ -1843,6 +1843,10 @@ def _join_forex_compare_evidence_text(extraction: Dict[str, Any]) -> str:
     return " ".join(str(extraction.get(field) or "") for field in _FOREX_COMPARE_TEXT_FIELDS).lower()
 
 
+def _has_forex_positive_compare_text(evidence_text: str, field: str) -> bool:
+    return any(token in evidence_text for token in _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()))
+
+
 def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
     context_tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
     ascii_negative_tokens = (
@@ -1867,6 +1871,20 @@ def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
 
     for context_token in context_tokens:
         context_pattern = re.escape(context_token).replace(r"\ ", r"\s+")
+        if re.search(
+            rf"\bno\b[^.;,，。]*{context_pattern}[^.;,，。]*(?:data|value|window|evidence)\b",
+            evidence_text,
+        ):
+            return True
+        if re.search(
+            rf"{context_pattern}[^.;,，。]*\bno\b[^.;,，。]*(?:data|value|window|evidence)\b",
+            evidence_text,
+        ):
+            return True
+        if re.search(rf"无[^.;,，。]*{context_pattern}[^.;,，。]*(?:数据|窗口|证据|值)", evidence_text):
+            return True
+        if re.search(rf"{context_pattern}[^.;,，。]*无[^.;,，。]*(?:数据|窗口|证据|值)", evidence_text):
+            return True
         for negative_token in ascii_negative_tokens:
             negative_pattern = re.escape(negative_token).replace(r"\ ", r"\s+")
             if re.search(rf"\b{negative_pattern}\b[^.;,，。]*{context_pattern}", evidence_text):
@@ -1874,24 +1892,40 @@ def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
             if re.search(rf"{context_pattern}[^.;,，。]*\b{negative_pattern}\b", evidence_text):
                 return True
         for negative_token in chinese_negative_tokens:
-            if f"{negative_token}{context_token}" in evidence_text:
+            negative_pattern = re.escape(negative_token).replace(r"\ ", r"\s*")
+            if re.search(rf"{negative_pattern}[^.;,，。]*{context_pattern}", evidence_text):
                 return True
-            if f"{context_token}{negative_token}" in evidence_text:
+            if re.search(rf"{context_pattern}[^.;,，。]*{negative_pattern}", evidence_text):
                 return True
     return False
 
 
-def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
+def _has_forex_compare_evidence(
+    extraction: Dict[str, Any],
+    field: str,
+    existing_entry: Optional[Dict[str, Any]] = None,
+) -> bool:
     parsed_value = _safe_number(extraction.get(field)) if field in extraction else None
     evidence_text = _join_forex_compare_evidence_text(extraction)
     if _has_negative_forex_compare_marker(evidence_text, field):
         return False
     if parsed_value is not None:
         return True
-    return any(token in evidence_text for token in _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()))
+    if _has_forex_positive_compare_text(evidence_text, field):
+        return True
+    if not existing_entry:
+        return False
+    existing_evidence_text = _join_forex_compare_evidence_text(existing_entry)
+    if _has_negative_forex_compare_marker(existing_evidence_text, field):
+        return False
+    return _has_forex_positive_compare_text(existing_evidence_text, field)
 
 
-def _scrub_unevidenced_forex_zeroes(entry: Dict[str, Any], extraction: Dict[str, Any]) -> None:
+def _scrub_unevidenced_forex_zeroes(
+    entry: Dict[str, Any],
+    extraction: Dict[str, Any],
+    existing_entry: Optional[Dict[str, Any]] = None,
+) -> None:
     pending = entry.get("compare_fields_pending")
     if isinstance(pending, list):
         pending_fields = list(pending)
@@ -1903,7 +1937,7 @@ def _scrub_unevidenced_forex_zeroes(entry: Dict[str, Any], extraction: Dict[str,
     for field in FOREX_COMPARE_FIELDS:
         if _safe_number(entry.get(field)) != 0.0:
             continue
-        if _has_forex_compare_evidence(extraction, field):
+        if _has_forex_compare_evidence(extraction, field, existing_entry or entry):
             continue
         entry.pop(field, None)
         if field not in pending_fields:
@@ -2108,9 +2142,10 @@ def _apply_extraction(
         if not isinstance(item, dict):
             continue
         if item.get("pair") == indicator_key or item.get("symbol") == indicator_key:
+            existing_item = dict(item)
             _write_common_fields(item, "current_rate")
             _copy_forex_compare_fields(item, extraction)
-            _scrub_unevidenced_forex_zeroes(item, extraction)
+            _scrub_unevidenced_forex_zeroes(item, extraction, existing_item)
             if not item.get("date"):
                 item["date"] = as_of_date or report_period or item.get("date") or ""
             return "forex"
