@@ -1817,66 +1817,61 @@ def _source_label_for_task(
 
 
 FOREX_COMPARE_FIELDS = ("daily_change", "change_120d")
+_FOREX_COMPARE_EVIDENCE_TOKENS = {
+    "change_120d": ("120d", "120日", "120-day", "120 day", "direct window"),
+    "daily_change": (
+        "daily change",
+        "day change",
+        "previous close",
+        "change from previous close",
+        "日变化",
+        "日变动",
+        "日涨跌",
+    ),
+}
+_FOREX_COMPARE_TEXT_FIELDS = (
+    "metric_basis",
+    "change_period",
+    "window_evidence",
+    "estimation_method",
+    "note",
+    "source",
+)
+
+
+def _join_forex_compare_evidence_text(extraction: Dict[str, Any]) -> str:
+    return " ".join(str(extraction.get(field) or "") for field in _FOREX_COMPARE_TEXT_FIELDS).lower()
+
+
+def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
+    context_tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
+    ascii_negative_tokens = ("missing", "no", "without", "unavailable", "not available")
+    chinese_negative_tokens = ("缺少", "无", "没有", "不可得")
+
+    for context_token in context_tokens:
+        context_pattern = re.escape(context_token).replace(r"\ ", r"\s+")
+        for negative_token in ascii_negative_tokens:
+            negative_pattern = re.escape(negative_token).replace(r"\ ", r"\s+")
+            if re.search(rf"\b{negative_pattern}\b[^.;,，。]*{context_pattern}", evidence_text):
+                return True
+            if re.search(rf"{context_pattern}[^.;,，。]*\b{negative_pattern}\b", evidence_text):
+                return True
+        for negative_token in chinese_negative_tokens:
+            if f"{negative_token}{context_token}" in evidence_text:
+                return True
+            if f"{context_token}{negative_token}" in evidence_text:
+                return True
+    return False
 
 
 def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
     parsed_value = _safe_number(extraction.get(field)) if field in extraction else None
-    if parsed_value is not None and parsed_value != 0.0:
-        return True
-
-    evidence_text = " ".join(
-        str(extraction.get(text_field) or "")
-        for text_field in ("metric_basis", "change_period", "window_evidence", "estimation_method", "note")
-    ).lower()
-    evidence_tokens = {
-        "change_120d": ("120d", "120日", "120-day", "direct window"),
-        "daily_change": ("daily", "日变化", "day change", "previous close"),
-    }
-    field_context_tokens = {
-        "change_120d": ("120d", "120日", "120-day"),
-        "daily_change": ("daily", "日变化", "day change", "previous close"),
-    }
-    negative_tokens = {
-        "change_120d": (
-            "missing",
-            "no",
-            "without",
-            "缺少",
-            "无",
-            "没有",
-            "missing 120d",
-            "no 120d",
-            "without 120d",
-            "missing 120-day",
-            "no 120-day",
-            "without 120-day",
-            "缺少120日",
-            "无120日",
-            "没有120日",
-        ),
-        "daily_change": (
-            "missing",
-            "no",
-            "without",
-            "缺少",
-            "无",
-            "没有",
-            "missing daily",
-            "no daily",
-            "without daily",
-            "missing day change",
-            "no day change",
-            "without day change",
-            "缺少日变化",
-            "无日变化",
-            "没有日变化",
-        ),
-    }
-    has_negative_marker = any(token in evidence_text for token in negative_tokens.get(field, ()))
-    has_field_context = any(token in evidence_text for token in field_context_tokens.get(field, ()))
-    if has_negative_marker and has_field_context:
+    evidence_text = _join_forex_compare_evidence_text(extraction)
+    if _has_negative_forex_compare_marker(evidence_text, field):
         return False
-    return any(token in evidence_text for token in evidence_tokens.get(field, ()))
+    if parsed_value is not None:
+        return True
+    return any(token in evidence_text for token in _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()))
 
 
 def _scrub_unevidenced_forex_zeroes(entry: Dict[str, Any], extraction: Dict[str, Any]) -> None:
