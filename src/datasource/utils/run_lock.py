@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import socket
 import time
 import uuid
@@ -13,9 +14,17 @@ class RunLockError(RuntimeError):
     """Raised when a daily run lock is held by another live owner."""
 
 
+_DASHED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_COMPACT_DATE_RE = re.compile(r"^\d{8}$")
+_CORRUPT_LOCK_MARKER = "__corrupt_lock__"
+
+
 def run_dir_from_date(date_value: str, runs_root: Path = Path("data/runs")) -> Path:
-    compact_date = date_value.replace("-", "")
-    if len(compact_date) != 8 or not compact_date.isdigit():
+    if _DASHED_DATE_RE.match(date_value):
+        compact_date = date_value.replace("-", "")
+    elif _COMPACT_DATE_RE.match(date_value):
+        compact_date = date_value
+    else:
         raise ValueError("date_value must use YYYY-MM-DD or YYYYMMDD")
     return Path(runs_root) / compact_date
 
@@ -87,11 +96,15 @@ class DailyRunLock:
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except FileExistsError:
                 existing_payload = self._read_existing_lock(lock_path)
+                if self._is_corrupt_lock(existing_payload):
+                    if self._unlink_if_text_matches(
+                        lock_path, str(existing_payload.get("raw_text", ""))
+                    ):
+                        continue
+                    continue
                 if self._is_stale_or_dead(existing_payload):
-                    try:
-                        lock_path.unlink()
-                    except FileNotFoundError:
-                        pass
+                    if self._unlink_if_payload_matches(lock_path, existing_payload):
+                        continue
                     continue
                 raise self._lock_error(existing_payload)
 
@@ -120,12 +133,75 @@ class DailyRunLock:
                 "created_at": 0,
                 "token": None,
             }
-        except (json.JSONDecodeError, OSError) as exc:
+        except json.JSONDecodeError as exc:
+            try:
+                raw_text = lock_path.read_text(encoding="utf-8")
+                mtime = lock_path.stat().st_mtime
+            except FileNotFoundError:
+                return {
+                    "owner": "<released>",
+                    "pid": None,
+                    "hostname": None,
+                    "created_at": 0,
+                    "token": None,
+                }
+            except OSError as os_exc:
+                raise RunLockError(
+                    f"{self.owner} cannot inspect corrupt run lock: {os_exc}"
+                ) from os_exc
+
+            if time.time() - mtime > self.stale_after_seconds:
+                return {
+                    "owner": "<corrupt>",
+                    "pid": None,
+                    "hostname": None,
+                    "created_at": mtime,
+                    "token": None,
+                    _CORRUPT_LOCK_MARKER: True,
+                    "raw_text": raw_text,
+                }
+            raise RunLockError(
+                f"{self.owner} cannot acquire run lock; corrupt existing run lock is fresh: {exc}"
+            ) from exc
+        except OSError as exc:
             raise RunLockError(f"{self.owner} cannot read existing run lock: {exc}") from exc
 
     @staticmethod
     def _read_lock(lock_path: Path) -> Dict[str, Any]:
         return json.loads(lock_path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _is_corrupt_lock(payload: Dict[str, Any]) -> bool:
+        return bool(payload.get(_CORRUPT_LOCK_MARKER))
+
+    def _unlink_if_payload_matches(
+        self, lock_path: Path, expected: Dict[str, Any]
+    ) -> bool:
+        try:
+            current = self._read_lock(lock_path)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return False
+        if current != expected:
+            return False
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
+
+    @staticmethod
+    def _unlink_if_text_matches(lock_path: Path, expected_text: str) -> bool:
+        try:
+            current_text = lock_path.read_text(encoding="utf-8")
+        except (FileNotFoundError, OSError):
+            return False
+        if current_text != expected_text:
+            return False
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            return False
+        return True
 
     def _is_stale_or_dead(self, payload: Dict[str, Any]) -> bool:
         created_at = self._as_float(payload.get("created_at"))
