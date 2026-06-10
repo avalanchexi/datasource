@@ -18,8 +18,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 2. `bash run_preflight.sh` — 验证三个 API key + 清代理 + DNS/HTTPS 探活。失败是 hard fail，不要继续。
 3. 所有流水线脚本通过 `bash run_clean.sh python scripts/...` 执行；不要直跑。
 4. Stage1 → Stage2 → Stage2.5 → Stage3 → Stage4，每日按序一次性跑完。**Tavily 每日只能跑 1 次** — 422/quota 后改走 Stage2.5 manual，不要重跑 Stage2。
-5. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
-6. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
+5. Stage2.5/Stage3/Stage4 同日写产物会持有 `data/runs/YYYYMMDD/.run.lock`；遇到 live owner 先确认/停止并行会话，不手动删锁。
+6. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
+7. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
 
 ## Critical Constraints
 
@@ -29,6 +30,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **手工补数验证**: 所有手工填写的数值必须通过 WebSearch 验证后再填入，禁止凭记忆填写汇率、指数等高精度数值
 - **Exa failover 边界**: Stage2 是 structured-provider-first + Tavily-first；`EXA_API_KEY` 用于 Tavily quota/rate/payment failover。结构化源失败、超时、解析失败或质量 gate 阻断时继续搜索链路；环境/proxy/SOCKS/DNS/TLS 错误和普通 Tavily extract 422 不切 Exa；非 quota fallback 仍需 `--enable-exa-fallback` 或 `STAGE2_ENABLE_EXA_FALLBACK=1`
 - **无值强制人工**: `no_value/deepseek_no_value/no_deepseek_key` 必须进入 `manual_required`，在 Stage2.5 产出待补全骨架
+- **forex 零值防占位**: `daily_change/change_120d=0.0` 只有直接窗口、基准价或明确无变化证据才保留；当前汇率-only、`no_deepseek_key`、`no change_120d value` 等必须转 `manual_required=missing_compare_values`
 - **采集优先级固定**: `TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover) -> Stage2.5`；排障可用 `--disable-structured-providers` 回到搜索-only 诊断路径，当前流程不使用旧版外部补数链路
 
 ## Quick Start
@@ -126,11 +128,11 @@ cat data/runs/${DATE_NH}/gap_monitor.json                                       
 
 - DeepSeek 抽取采用减负 schema + 证据约束，默认只要求报告写回所需字段；`source_url` 必须来自 snippets。
 - Stage2.5 feedback loop: `BCOM` can use Investing historical close only for plain Bloomberg Commodity Index evidence and must reject `BCOMTR`/Total Return; `mlf` PBoC multi-price notices need PBoC URL + explicit `多重价位`/`无统一利率` marker to become official reference results; `CN10Y_CDB` estimator stays `is_estimated=true` and requires explicit spread provenance; ETF stockdata/individual pages are scope mismatches and must not release fund-flow gates.
-- Stage2 默认 structured-provider-first：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断后才继续 Tavily-first 搜索。当前来源包括 Trading Economics 商品/政策页、Stooq `GSG` CSV、ChinaMoney `USDCNY` JSON、国家统计局详情页；ETF 顺序为 TuShare `etf_share_size` before EastMoney/search，TuShare 仅在 121 个交易日、SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析时释放 gate（`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false`），EastMoney 仍需 full-market direct daily series 验证。
+- Stage2 默认 structured-provider-first：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断后才继续 Tavily-first 搜索。当前来源包括 Trading Economics 商品/政策页、已验证 BCOM/GSG quote 页面、Stooq `GSG` CSV、ChinaMoney `USDCNY` JSON、国家统计局详情页；ETF 顺序为 TuShare `etf_share_size` before EastMoney/search，TuShare 仅在 latest complete 121 交易日窗口内 SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析时释放 gate（`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false`），EastMoney 仍需 full-market direct daily series 验证。
 - DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖；Stage2 抽取输出 token 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`。
 - DeepSeek extraction 默认开启 queue，默认 `--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查时显式传 `--no-use-queue`。
 - Stage2 默认直连：Tavily/DeepSeek 都不读取环境代理；只有 `DATASOURCE_NETWORK_MODE=proxy` 时才允许 proxy env。VPN 切换后先跑 `bash run_preflight.sh`。
-- Stage2 quote/操作公告搜索看 `time_context_type`：`daily_quote` 不带宏观月度 token，并为官方来源校验提供 `ref_date`；`reverse_repo/mlf` 与商品、DXY、BDI、BCOM/GSG 同属该类。PBoC `reverse_repo` 公告必须匹配 `ref_date`，`mlf` 至少匹配 `ref_date` 所在月份；公告正文和 URL 都解析不出操作日期时，不得回退为官方非估算值。`monthly_period` 才带 `expected_period_tokens`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated`、`field_retry_merged_count`。
+- Stage2 quote/操作公告搜索看 `time_context_type`：`daily_quote` 不带宏观月度 token，并为官方来源校验提供 `ref_date`；`BCOM/GSG` 的 `closing_date` 指向上一已完成收盘日，报告 `ref_date` 不变。PBoC `reverse_repo` 公告必须匹配 `ref_date`，`mlf` 至少匹配 `ref_date` 所在月份；公告正文和 URL 都解析不出操作日期时，不得回退为官方非估算值。`monthly_period` 才带 `expected_period_tokens`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated`、`field_retry_merged_count`。
 - `search_profiles` 支持 `max_query_candidates` 与 `extract_policy`；`BCOM/GSG/DXY/CN10Y_CDB` 默认限制 3 个 query candidates，并跳过 Tavily extract 直接用 snippets 抽取，降低 422 和 Stage2.5 手工补数压力。
 - `USDCNY` 是 quote profile 的受控例外：ChinaMoney/CFETS 官方表格页可走 official extract top1；`official_domains_only` 严格按 hostname 匹配，若没有官方 snippets，会标记 `official_domain_filter_empty` 并阻断 Tavily extract、DeepSeek、regex fallback。
 - dated quote profiles 会用 `bad_url_patterns` 和 `value_evidence_miss` 降权/剔除概念页、规格页、annual weights、forecast 等不可写报告页面。
@@ -181,6 +183,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json                                       
 **Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
 **gap_monitor 只读诊断**: 不直接手改 `gap_monitor`，也不把手工清空作为正常流程；只为诊断读取该文件，实际修复应补齐/修正源数据后重跑 Stage2.5/Stage3。
+
+**同日写锁**: Stage2.5/Stage3/Stage4 持有 `data/runs/YYYYMMDD/.run.lock`。锁内有 `owner/pid/hostname/created_at`；live pid 说明另一个会话正在写同日产物，只能等待或停止该会话。不要手工删除 live lock。
 
 **TuShare 股指日内时间差**: Stage1 在 15:00 CST 前运行时，当日收盘价尚未生成，Stage1 返回前一交易日数据 — 属预期行为，下午收盘后无需重跑 Stage1
 
@@ -257,8 +261,10 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 | DeepSeek JSON 失败 | `deepseek_json_truncated` 优先调 token 或转 Stage2.5；`deepseek_json_parse_error` 查 prompt/schema 与 snippets |
 | Tavily extract 422 | 自动回退 DeepSeek；不会激活全局 Exa failover，仍不稳用 `--disable-extract` |
 | USDCNY 官方表格为空 | 看 `official_domain_filter_empty`；不要放宽到非官方 fallback，转 Stage2.5 补可信官方来源 |
+| forex 变化字段为 0 | 检查 `compare_fields_pending`/`missing_compare_values`；无直接窗口或明确无变化证据时用 Stage2.5/trend_history 补齐，不把 0 当真实变化 |
 | Tavily quota/rate/payment | 有 `EXA_API_KEY` 时同轮切 Exa；看 `search_backend_final`、`tavily_to_exa_failover_count`、`exa_failover_*`、`exa_error_breakdown`。无 Exa 或 `exa_unavailable` 时转 Stage2.5 |
 | Stage2 代理/DNS/TLS 错误 | 环境错误不触发 Exa；重跑 `bash run_preflight.sh`，确认 `DATASOURCE_NETWORK_MODE` 和代理设置 |
+| `.run.lock` 被占用 | 查看 `data/runs/${DATE_NH}/.run.lock` 的 `owner/pid/hostname/created_at`；live owner 先停并行会话，不手动删锁 |
 | Tavily 当日重复 422 | **不要重试 Stage2**；改用 Stage2.5 手工注入 |
 | 日志出现 `deepseek_no_value/no_deepseek_key` | 视为 `manual_required`，优先使用 `metadata.manual_required` 骨架补数 |
 | Stage3 `block_stage3=True` 但数据已注入 | 检查 `missing_items`、`policy_evaluation.json`、`gap_monitor.json`，补齐/修正 manual JSON 后重跑 Stage2.5/Stage3 |
