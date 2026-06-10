@@ -2967,6 +2967,40 @@ def test_stage2_keeps_forex_zero_compare_fields_with_explicit_evidence():
     assert market_payload["forex"][0]["change_120d"] == 0.0
 
 
+def test_stage2_copies_forex_compare_fields_and_clears_pending():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "daily_change": 0.44,
+                "change_120d": 1.23,
+                "compare_fields_pending": ["daily_change", "change_120d"],
+            }
+        ],
+    }
+    task = {"task_id": "fx-3", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "daily_change": 0.0,
+        "change_120d": 0.0,
+        "metric_basis": "daily previous close; 120d direct window",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["daily_change"] == 0.0
+    assert item["change_120d"] == 0.0
+    assert "daily_change" not in item.get("compare_fields_pending", [])
+    assert "change_120d" not in item.get("compare_fields_pending", [])
+
+
 def test_apply_extraction_upserts_forex_when_section_missing_item():
     payload = {
         "metadata": {"date": "2026-02-06"},

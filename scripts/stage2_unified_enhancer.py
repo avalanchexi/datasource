@@ -1856,6 +1856,34 @@ def _scrub_unevidenced_forex_zeroes(entry: Dict[str, Any], extraction: Dict[str,
         entry["compare_fields_pending"] = pending_fields
 
 
+def _copy_forex_compare_fields(entry: Dict[str, Any], extraction: Dict[str, Any]) -> None:
+    pending = entry.get("compare_fields_pending")
+    if isinstance(pending, list):
+        pending_fields = list(pending)
+    elif pending:
+        pending_fields = [pending]
+    else:
+        pending_fields = []
+
+    changed_pending = False
+    for field in FOREX_COMPARE_FIELDS:
+        if field not in extraction:
+            continue
+        parsed_value = _safe_number(extraction.get(field))
+        if parsed_value is None:
+            continue
+        entry[field] = parsed_value
+        if field in pending_fields:
+            pending_fields = [pending_field for pending_field in pending_fields if pending_field != field]
+            changed_pending = True
+
+    if changed_pending:
+        if pending_fields:
+            entry["compare_fields_pending"] = pending_fields
+        else:
+            entry.pop("compare_fields_pending", None)
+
+
 def _apply_extraction(
     market_payload: Dict[str, Any],
     task: Dict[str, Any],
@@ -2024,6 +2052,7 @@ def _apply_extraction(
             continue
         if item.get("pair") == indicator_key or item.get("symbol") == indicator_key:
             _write_common_fields(item, "current_rate")
+            _copy_forex_compare_fields(item, extraction)
             _scrub_unevidenced_forex_zeroes(item, extraction)
             if not item.get("date"):
                 item["date"] = as_of_date or report_period or item.get("date") or ""
