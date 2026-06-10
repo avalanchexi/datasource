@@ -1845,8 +1845,25 @@ def _join_forex_compare_evidence_text(extraction: Dict[str, Any]) -> str:
 
 def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
     context_tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
-    ascii_negative_tokens = ("missing", "no", "without", "unavailable", "not available")
-    chinese_negative_tokens = ("缺少", "无", "没有", "不可得")
+    ascii_negative_tokens = (
+        "missing",
+        "without",
+        "unavailable",
+        "not available",
+        "no data",
+        "no value",
+        "no window",
+        "no evidence",
+    )
+    chinese_negative_tokens = (
+        "缺少",
+        "没有",
+        "不可得",
+        "无数据",
+        "无窗口",
+        "无证据",
+        "无值",
+    )
 
     for context_token in context_tokens:
         context_pattern = re.escape(context_token).replace(r"\ ", r"\s+")
