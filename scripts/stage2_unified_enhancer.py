@@ -1832,8 +1832,18 @@ def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
         "change_120d": ("120d", "120日", "120-day", "direct window"),
         "daily_change": ("daily", "日变化", "day change", "previous close"),
     }
+    field_context_tokens = {
+        "change_120d": ("120d", "120日", "120-day"),
+        "daily_change": ("daily", "日变化", "day change", "previous close"),
+    }
     negative_tokens = {
         "change_120d": (
+            "missing",
+            "no",
+            "without",
+            "缺少",
+            "无",
+            "没有",
             "missing 120d",
             "no 120d",
             "without 120d",
@@ -1845,6 +1855,12 @@ def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
             "没有120日",
         ),
         "daily_change": (
+            "missing",
+            "no",
+            "without",
+            "缺少",
+            "无",
+            "没有",
             "missing daily",
             "no daily",
             "without daily",
@@ -1856,7 +1872,9 @@ def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
             "没有日变化",
         ),
     }
-    if any(token in evidence_text for token in negative_tokens.get(field, ())):
+    has_negative_marker = any(token in evidence_text for token in negative_tokens.get(field, ()))
+    has_field_context = any(token in evidence_text for token in field_context_tokens.get(field, ()))
+    if has_negative_marker and has_field_context:
         return False
     return any(token in evidence_text for token in evidence_tokens.get(field, ()))
 
@@ -2116,13 +2134,13 @@ def _apply_extraction(
             "pair": indicator_key,
             "name": _FOREX_UPSERT_META[indicator_key],
             "current_rate": value,
-            "daily_change": None,
-            "change_120d": None,
             "trend": "待校验",
             "source": source_label,
             "stage_task_id": task["task_id"],
             "note": (f"{note} stage2_auto_upsert" if note else "stage2_auto_upsert"),
         }
+        _copy_forex_compare_fields(entry, extraction)
+        _scrub_unevidenced_forex_zeroes(entry, extraction)
         market_payload.setdefault("forex", []).append(entry)
         return "forex_upsert"
 
