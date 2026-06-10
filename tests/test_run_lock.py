@@ -5,6 +5,7 @@ import time
 
 import pytest
 
+import datasource.utils.run_lock as run_lock
 from datasource.utils.run_lock import (
     DailyRunLock,
     RunLockError,
@@ -106,6 +107,44 @@ def test_daily_run_lock_removes_stale_dead_pid_lock(tmp_path):
     assert not lock_path.exists()
 
 
+def test_daily_run_lock_fails_closed_when_stale_lock_unlink_denied(
+    tmp_path, monkeypatch
+):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    run_dir.mkdir(parents=True)
+    lock_path = run_dir / ".run.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "owner": "old-session",
+                "pid": 99999999,
+                "hostname": "old-host",
+                "created_at": time.time() - 1000,
+                "token": "old-token",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    original_unlink = run_lock.Path.unlink
+
+    def deny_lock_unlink(path, *args, **kwargs):
+        if path == lock_path:
+            raise PermissionError("unlink denied")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(run_lock.Path, "unlink", deny_lock_unlink)
+
+    with pytest.raises(RunLockError) as exc_info:
+        with DailyRunLock(run_dir, owner="new-session", stale_after_seconds=1).acquire():
+            pass
+
+    error = str(exc_info.value)
+    assert "old-session" in error
+    assert "unlink failed" in error
+    assert "unlink denied" in error
+
+
 def test_daily_run_lock_does_not_remove_replaced_lock(tmp_path):
     run_dir = tmp_path / "data" / "runs" / "20260610"
     with DailyRunLock(run_dir, owner="stage3_pring_analyzer").acquire():
@@ -197,6 +236,35 @@ def test_daily_run_lock_removes_stale_corrupt_lock(tmp_path):
     assert not lock_path.exists()
 
 
+def test_daily_run_lock_fails_closed_when_stale_corrupt_lock_unlink_denied(
+    tmp_path, monkeypatch
+):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    run_dir.mkdir(parents=True)
+    lock_path = run_dir / ".run.lock"
+    lock_path.write_text("", encoding="utf-8")
+    old_timestamp = time.time() - 1000
+    os.utime(lock_path, (old_timestamp, old_timestamp))
+
+    original_unlink = run_lock.Path.unlink
+
+    def deny_lock_unlink(path, *args, **kwargs):
+        if path == lock_path:
+            raise PermissionError("unlink denied")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(run_lock.Path, "unlink", deny_lock_unlink)
+
+    with pytest.raises(RunLockError) as exc_info:
+        with DailyRunLock(run_dir, owner="new-session", stale_after_seconds=1).acquire():
+            pass
+
+    error = str(exc_info.value)
+    assert "<corrupt>" in error
+    assert "unlink failed" in error
+    assert "unlink denied" in error
+
+
 def test_daily_run_lock_does_not_unlink_same_text_replaced_corrupt_lock(
     tmp_path, monkeypatch
 ):
@@ -268,3 +336,55 @@ def test_daily_run_lock_release_ignores_schema_invalid_replacement(tmp_path):
 
     assert lock_path.read_text(encoding="utf-8") == replacement_payload
     assert lock._acquired is False
+
+
+def test_pid_is_alive_on_windows_uses_open_process(monkeypatch):
+    calls = []
+
+    class FakeKernel32:
+        def OpenProcess(self, access, inherit_handle, pid):
+            calls.append(("open", access, inherit_handle, pid))
+            return 123
+
+        def CloseHandle(self, handle):
+            calls.append(("close", handle))
+            return True
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    def fail_if_called(pid, signal_number):
+        raise AssertionError("os.kill must not be used on Windows")
+
+    monkeypatch.setattr(run_lock.os, "name", "nt")
+    monkeypatch.setattr(run_lock.os, "kill", fail_if_called)
+    monkeypatch.setattr(run_lock.ctypes, "windll", FakeWindll(), raising=False)
+
+    assert DailyRunLock._pid_is_alive(42) is True
+    assert calls == [("open", 0x1000, False, 42), ("close", 123)]
+
+
+def test_pid_is_alive_on_windows_returns_false_without_handle(monkeypatch):
+    calls = []
+
+    class FakeKernel32:
+        def OpenProcess(self, access, inherit_handle, pid):
+            calls.append(("open", access, inherit_handle, pid))
+            return 0
+
+        def CloseHandle(self, handle):
+            calls.append(("close", handle))
+            return True
+
+    class FakeWindll:
+        kernel32 = FakeKernel32()
+
+    def fail_if_called(pid, signal_number):
+        raise AssertionError("os.kill must not be used on Windows")
+
+    monkeypatch.setattr(run_lock.os, "name", "nt")
+    monkeypatch.setattr(run_lock.os, "kill", fail_if_called)
+    monkeypatch.setattr(run_lock.ctypes, "windll", FakeWindll(), raising=False)
+
+    assert DailyRunLock._pid_is_alive(42) is False
+    assert calls == [("open", 0x1000, False, 42)]

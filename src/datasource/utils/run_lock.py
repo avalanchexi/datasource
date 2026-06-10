@@ -1,3 +1,4 @@
+import ctypes
 import json
 import os
 import re
@@ -208,25 +209,32 @@ class DailyRunLock:
     ) -> bool:
         try:
             current = self._read_lock(lock_path)
-        except (FileNotFoundError, json.JSONDecodeError, _CorruptLockPayload, OSError):
+        except FileNotFoundError:
             return False
+        except (json.JSONDecodeError, _CorruptLockPayload):
+            return False
+        except OSError as exc:
+            raise self._unreclaimable_lock_error(expected, "read", exc) from exc
         if current != expected:
             return False
         try:
             lock_path.unlink()
         except FileNotFoundError:
             return False
+        except OSError as exc:
+            raise self._unreclaimable_lock_error(expected, "unlink", exc) from exc
         return True
 
-    @staticmethod
     def _unlink_if_corrupt_identity_matches(
-        lock_path: Path, expected: Dict[str, Any]
+        self, lock_path: Path, expected: Dict[str, Any]
     ) -> bool:
         try:
             current_text = lock_path.read_text(encoding="utf-8")
             current_mtime = lock_path.stat().st_mtime
-        except (FileNotFoundError, OSError):
+        except FileNotFoundError:
             return False
+        except OSError as exc:
+            raise self._unreclaimable_lock_error(expected, "read", exc) from exc
         if current_text != expected.get("raw_text"):
             return False
         if current_mtime != expected.get("mtime"):
@@ -235,7 +243,19 @@ class DailyRunLock:
             lock_path.unlink()
         except FileNotFoundError:
             return False
+        except OSError as exc:
+            raise self._unreclaimable_lock_error(expected, "unlink", exc) from exc
         return True
+
+    def _unreclaimable_lock_error(
+        self, payload: Dict[str, Any], action: str, reason: BaseException
+    ) -> RunLockError:
+        existing_owner = payload.get("owner", "<unknown>")
+        existing_pid = payload.get("pid", "<unknown>")
+        return RunLockError(
+            f"{self.owner} cannot reclaim stale run lock owned by "
+            f"{existing_owner} (pid={existing_pid}); {action} failed: {reason}"
+        )
 
     def _is_stale_or_dead(self, payload: Dict[str, Any]) -> bool:
         hostname = payload.get("hostname")
@@ -261,6 +281,16 @@ class DailyRunLock:
 
     @staticmethod
     def _pid_is_alive(pid: int) -> bool:
+        if os.name == "nt":
+            process_query_limited_information = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(
+                process_query_limited_information, False, pid
+            )
+            if not handle:
+                return False
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
