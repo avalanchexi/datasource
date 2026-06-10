@@ -1,0 +1,743 @@
+{
+  "entries": {
+    "scripts/backfill_fund_flow_series.py": [
+      "datasource.utils.json_io",
+      "datasource.utils.trend_history_store"
+    ],
+    "scripts/backfill_trend_history_event_dates.py": [],
+    "scripts/check_monthly_freshness.py": [],
+    "scripts/check_stage2_inputs.py": [
+      "datasource.config.search_profiles"
+    ],
+    "scripts/compare_stage2_runs.py": [],
+    "scripts/fix_estimated_verified.py": [
+      "datasource.utils.policy_rules",
+      "datasource.utils.run_paths"
+    ],
+    "scripts/fund_flow_analysis.py": [
+      "datasource"
+    ],
+    "scripts/gap_monitor_to_manual_template.py": [],
+    "scripts/index_trend_analysis.py": [
+      "datasource",
+      "datasource.config.indices_config"
+    ],
+    "scripts/recap_consistency_check.py": [
+      "datasource.utils.json_io",
+      "datasource.utils.run_paths"
+    ],
+    "scripts/run_snapshot.py": [],
+    "scripts/sanitize_market_data.py": [],
+    "scripts/setup_stage2_search_env.py": [],
+    "scripts/stage1_data_collector.py": [
+      "datasource",
+      "datasource.calculators.technical_indicators",
+      "datasource.models.market_data_contract",
+      "datasource.utils.run_paths",
+      "datasource.utils.trend_history_store"
+    ],
+    "scripts/stage2_5_injector.py": [
+      "datasource.models.market_data_contract",
+      "datasource.utils.coercion",
+      "datasource.utils.fund_flow_series",
+      "datasource.utils.key_aliases",
+      "datasource.utils.missing_items",
+      "datasource.utils.pipeline_quality_state",
+      "datasource.utils.policy_rules",
+      "datasource.utils.quality_metrics",
+      "datasource.utils.run_lock",
+      "datasource.utils.run_paths",
+      "datasource.utils.source_trust",
+      "datasource.utils.text_markers",
+      "datasource.utils.trend_history_store"
+    ],
+    "scripts/stage2_health_check.py": [],
+    "scripts/stage2_low_score_audit.py": [
+      "datasource.utils.json_io",
+      "datasource.utils.policy_rules",
+      "datasource.utils.run_paths"
+    ],
+    "scripts/stage2_unified_enhancer.py": [
+      "datasource.adapters.exa_client",
+      "datasource.adapters.tavily_client",
+      "datasource.cache.memory_cache",
+      "datasource.cache.sqlite_cache",
+      "datasource.engines.deepseek_reasoner",
+      "datasource.engines.stage2_lc_pipeline",
+      "datasource.engines.stage2_task_planner",
+      "datasource.providers.stage2_structured",
+      "datasource.utils.coercion",
+      "datasource.utils.json_io",
+      "datasource.utils.key_aliases",
+      "datasource.utils.missing_items",
+      "datasource.utils.observability",
+      "datasource.utils.policy_rules",
+      "datasource.utils.quality_metrics",
+      "datasource.utils.run_paths",
+      "datasource.utils.run_snapshot",
+      "datasource.utils.source_conflicts",
+      "datasource.utils.source_trust",
+      "datasource.utils.text_markers"
+    ],
+    "scripts/stage3_pring_analyzer.py": [
+      "datasource",
+      "datasource.calculators.pring_analyzer",
+      "datasource.models.market_data_contract",
+      "datasource.utils.gate_formatting",
+      "datasource.utils.missing_items",
+      "datasource.utils.pipeline_gate",
+      "datasource.utils.pipeline_quality_state",
+      "datasource.utils.policy_rules",
+      "datasource.utils.run_lock",
+      "datasource.utils.run_paths"
+    ],
+    "scripts/stage4_report_generator.py": [
+      "datasource.generators.simple_report",
+      "datasource.utils.gate_formatting",
+      "datasource.utils.pipeline_gate",
+      "datasource.utils.pipeline_quality_state",
+      "datasource.utils.run_lock",
+      "datasource.utils.run_paths"
+    ],
+    "scripts/stage4_risk_review.py": [],
+    "scripts/trend_history_backfill.py": [
+      "datasource",
+      "datasource.utils.trend_history_store"
+    ],
+    "scripts/trend_history_scan.py": [
+      "datasource.utils.run_paths",
+      "datasource.utils.trend_history_store"
+    ]
+  },
+  "modules": {
+    "datasource": {
+      "file": "src/datasource/__init__.py",
+      "reachable": true,
+      "imports": [
+        "datasource.adapters.international_finance_adapter",
+        "datasource.adapters.tushare_adapter",
+        "datasource.manager",
+        "datasource.models.base",
+        "datasource.utils.dns_patch"
+      ]
+    },
+    "datasource.adapters": {
+      "file": "src/datasource/adapters/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.adapters.exa_client": {
+      "file": "src/datasource/adapters/exa_client.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.adapters.international_finance_adapter": {
+      "file": "src/datasource/adapters/international_finance_adapter.py",
+      "reachable": true,
+      "imports": [
+        "datasource.cache.memory_cache",
+        "datasource.config.indices_config",
+        "datasource.models.base",
+        "datasource.utils.rate_limiter",
+        "datasource.utils.yahoo_finance"
+      ]
+    },
+    "datasource.adapters.tavily_client": {
+      "file": "src/datasource/adapters/tavily_client.py",
+      "reachable": true,
+      "imports": [
+        "datasource.cache.memory_cache"
+      ]
+    },
+    "datasource.adapters.tushare_adapter": {
+      "file": "src/datasource/adapters/tushare_adapter.py",
+      "reachable": true,
+      "imports": [
+        "datasource.cache.memory_cache",
+        "datasource.models.base",
+        "datasource.utils.rate_limiter",
+        "datasource.utils.retry",
+        "datasource.utils.tushare_patch"
+      ]
+    },
+    "datasource.agents": {
+      "file": "src/datasource/agents/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.agents.background_scan.agent"
+      ]
+    },
+    "datasource.agents.background_scan": {
+      "file": "src/datasource/agents/background_scan/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.agents.background_scan.agent",
+        "datasource.agents.background_scan.config"
+      ]
+    },
+    "datasource.agents.background_scan.agent": {
+      "file": "src/datasource/agents/background_scan/agent.py",
+      "reachable": false,
+      "imports": [
+        "datasource.agents.background_scan.config",
+        "datasource.manager"
+      ]
+    },
+    "datasource.agents.background_scan.config": {
+      "file": "src/datasource/agents/background_scan/config.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.analyzers": {
+      "file": "src/datasource/analyzers/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.analyzers.long_term_analyzer"
+      ]
+    },
+    "datasource.analyzers.long_term_analyzer": {
+      "file": "src/datasource/analyzers/long_term_analyzer.py",
+      "reachable": false,
+      "imports": [
+        "datasource.calculators.pring_analyzer",
+        "datasource.calculators.technical_indicators",
+        "datasource.config.indices_config",
+        "datasource.manager",
+        "datasource.models.base"
+      ]
+    },
+    "datasource.cache": {
+      "file": "src/datasource/cache/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.cache.memory_cache": {
+      "file": "src/datasource/cache/memory_cache.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.cache.sqlite_cache": {
+      "file": "src/datasource/cache/sqlite_cache.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.calculators": {
+      "file": "src/datasource/calculators/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.calculators.bond_calculator": {
+      "file": "src/datasource/calculators/bond_calculator.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.calculators.economic_cycle_analyzer": {
+      "file": "src/datasource/calculators/economic_cycle_analyzer.py",
+      "reachable": false,
+      "imports": [
+        "datasource.calculators.pring_analyzer",
+        "datasource.calculators.technical_indicators",
+        "datasource.manager",
+        "datasource.models.base"
+      ]
+    },
+    "datasource.calculators.fund_flow_calculator": {
+      "file": "src/datasource/calculators/fund_flow_calculator.py",
+      "reachable": false,
+      "imports": [
+        "datasource.utils.yahoo_finance"
+      ]
+    },
+    "datasource.calculators.pring": {
+      "file": "src/datasource/calculators/pring/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.calculators.pring.leading_indicator": {
+      "file": "src/datasource/calculators/pring/leading_indicator.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.calculators.pring.scoring": {
+      "file": "src/datasource/calculators/pring/scoring.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.calculators.pring.stage_allocations": {
+      "file": "src/datasource/calculators/pring/stage_allocations.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.calculators.pring.summaries": {
+      "file": "src/datasource/calculators/pring/summaries.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.calculators.pring_analyzer": {
+      "file": "src/datasource/calculators/pring_analyzer.py",
+      "reachable": true,
+      "imports": [
+        "datasource.calculators.pring",
+        "datasource.calculators.pring.scoring",
+        "datasource.calculators.pring.stage_allocations",
+        "datasource.calculators.pring.summaries",
+        "datasource.models.market_data_contract"
+      ]
+    },
+    "datasource.calculators.technical_indicators": {
+      "file": "src/datasource/calculators/technical_indicators.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.comparators": {
+      "file": "src/datasource/comparators/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.comparators.international_comparator"
+      ]
+    },
+    "datasource.comparators.international_comparator": {
+      "file": "src/datasource/comparators/international_comparator.py",
+      "reachable": false,
+      "imports": [
+        "datasource.calculators.technical_indicators",
+        "datasource.manager",
+        "datasource.models.base"
+      ]
+    },
+    "datasource.config": {
+      "file": "src/datasource/config/__init__.py",
+      "reachable": true,
+      "imports": [
+        "datasource.config.indices_config"
+      ]
+    },
+    "datasource.config.indices_config": {
+      "file": "src/datasource/config/indices_config.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.config.search_profiles": {
+      "file": "src/datasource/config/search_profiles.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.key_aliases"
+      ]
+    },
+    "datasource.engines": {
+      "file": "src/datasource/engines/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.engines.data_engine": {
+      "file": "src/datasource/engines/data_engine.py",
+      "reachable": false,
+      "imports": [
+        "datasource.calculators.bond_calculator",
+        "datasource.calculators.fund_flow_calculator",
+        "datasource.calculators.pring_analyzer",
+        "datasource.calculators.technical_indicators",
+        "datasource.manager"
+      ]
+    },
+    "datasource.engines.deepseek_reasoner": {
+      "file": "src/datasource/engines/deepseek_reasoner.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.coercion"
+      ]
+    },
+    "datasource.engines.stage2_lc_pipeline": {
+      "file": "src/datasource/engines/stage2_lc_pipeline.py",
+      "reachable": true,
+      "imports": [
+        "datasource.engines.deepseek_reasoner"
+      ]
+    },
+    "datasource.engines.stage2_task_planner": {
+      "file": "src/datasource/engines/stage2_task_planner.py",
+      "reachable": true,
+      "imports": [
+        "datasource.config.search_profiles",
+        "datasource.utils.coercion",
+        "datasource.utils.key_aliases",
+        "datasource.utils.pipeline_quality_state",
+        "datasource.utils.run_paths"
+      ]
+    },
+    "datasource.generators": {
+      "file": "src/datasource/generators/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.generators.report_generator": {
+      "file": "src/datasource/generators/report_generator.py",
+      "reachable": false,
+      "imports": [
+        "datasource.engines.data_engine"
+      ]
+    },
+    "datasource.generators.simple_report": {
+      "file": "src/datasource/generators/simple_report.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.coercion",
+        "datasource.utils.policy_rules",
+        "datasource.utils.quality_metrics",
+        "datasource.utils.run_paths",
+        "datasource.utils.trend_history_store"
+      ]
+    },
+    "datasource.manager": {
+      "file": "src/datasource/manager.py",
+      "reachable": true,
+      "imports": [
+        "datasource.adapters.international_finance_adapter",
+        "datasource.adapters.tushare_adapter",
+        "datasource.config.indices_config",
+        "datasource.models.base"
+      ]
+    },
+    "datasource.mappers": {
+      "file": "src/datasource/mappers/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.mappers.industry_rotation_mapper"
+      ]
+    },
+    "datasource.mappers.industry_rotation_mapper": {
+      "file": "src/datasource/mappers/industry_rotation_mapper.py",
+      "reachable": false,
+      "imports": [
+        "datasource.calculators.technical_indicators",
+        "datasource.manager",
+        "datasource.mappers",
+        "datasource.models.base"
+      ]
+    },
+    "datasource.mcp_adapter": {
+      "file": "src/datasource/mcp_adapter.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.models": {
+      "file": "src/datasource/models/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.models.base": {
+      "file": "src/datasource/models/base.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.models.market_data_contract": {
+      "file": "src/datasource/models/market_data_contract.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.models.pring_result_contract": {
+      "file": "src/datasource/models/pring_result_contract.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.providers": {
+      "file": "src/datasource/providers/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.providers.stage2_structured": {
+      "file": "src/datasource/providers/stage2_structured/__init__.py",
+      "reachable": true,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.registry"
+      ]
+    },
+    "datasource.providers.stage2_structured.base": {
+      "file": "src/datasource/providers/stage2_structured/base.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.providers.stage2_structured.cdb_estimator": {
+      "file": "src/datasource/providers/stage2_structured/cdb_estimator.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.chinabond",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.chinabond": {
+      "file": "src/datasource/providers/stage2_structured/chinabond.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.eastmoney_etf": {
+      "file": "src/datasource/providers/stage2_structured/eastmoney_etf.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.http_fetcher": {
+      "file": "src/datasource/providers/stage2_structured/http_fetcher.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.providers.stage2_structured.market_quote_pages": {
+      "file": "src/datasource/providers/stage2_structured/market_quote_pages.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.official_china": {
+      "file": "src/datasource/providers/stage2_structured/official_china.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers",
+        "datasource.utils.key_aliases"
+      ]
+    },
+    "datasource.providers.stage2_structured.registry": {
+      "file": "src/datasource/providers/stage2_structured/registry.py",
+      "reachable": true,
+      "imports": [
+        "datasource.providers.stage2_structured.base"
+      ]
+    },
+    "datasource.providers.stage2_structured.source_tiers": {
+      "file": "src/datasource/providers/stage2_structured/source_tiers.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.providers.stage2_structured.stooq": {
+      "file": "src/datasource/providers/stage2_structured/stooq.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.trading_economics": {
+      "file": "src/datasource/providers/stage2_structured/trading_economics.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.tushare_etf": {
+      "file": "src/datasource/providers/stage2_structured/tushare_etf.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.providers.stage2_structured.yahoo_finance": {
+      "file": "src/datasource/providers/stage2_structured/yahoo_finance.py",
+      "reachable": false,
+      "imports": [
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.source_tiers"
+      ]
+    },
+    "datasource.trackers": {
+      "file": "src/datasource/trackers/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.trackers.policy_tracker"
+      ]
+    },
+    "datasource.trackers.policy_tracker": {
+      "file": "src/datasource/trackers/policy_tracker.py",
+      "reachable": false,
+      "imports": [
+        "datasource.manager",
+        "datasource.models.base"
+      ]
+    },
+    "datasource.utils": {
+      "file": "src/datasource/utils/__init__.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.coercion": {
+      "file": "src/datasource/utils/coercion.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.data_completion": {
+      "file": "src/datasource/utils/data_completion.py",
+      "reachable": false,
+      "imports": [
+        "datasource",
+        "datasource.manager",
+        "datasource.utils.mcp_tools",
+        "datasource.utils.trend_history_store",
+        "datasource.utils.yahoo_finance"
+      ]
+    },
+    "datasource.utils.dns_patch": {
+      "file": "src/datasource/utils/dns_patch.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.fund_flow_series": {
+      "file": "src/datasource/utils/fund_flow_series.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.trend_history_store"
+      ]
+    },
+    "datasource.utils.gate_formatting": {
+      "file": "src/datasource/utils/gate_formatting.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.json_io": {
+      "file": "src/datasource/utils/json_io.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.key_aliases": {
+      "file": "src/datasource/utils/key_aliases.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.coercion"
+      ]
+    },
+    "datasource.utils.mcp_tools": {
+      "file": "src/datasource/utils/mcp_tools.py",
+      "reachable": false,
+      "imports": []
+    },
+    "datasource.utils.missing_items": {
+      "file": "src/datasource/utils/missing_items.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.observability": {
+      "file": "src/datasource/utils/observability.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.pipeline_gate": {
+      "file": "src/datasource/utils/pipeline_gate.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.pipeline_quality_state": {
+      "file": "src/datasource/utils/pipeline_quality_state.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.coercion",
+        "datasource.utils.policy_rules"
+      ]
+    },
+    "datasource.utils.policy_rules": {
+      "file": "src/datasource/utils/policy_rules.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.quality_metrics": {
+      "file": "src/datasource/utils/quality_metrics.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.rate_limiter": {
+      "file": "src/datasource/utils/rate_limiter.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.retry": {
+      "file": "src/datasource/utils/retry.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.run_lock": {
+      "file": "src/datasource/utils/run_lock.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.run_paths": {
+      "file": "src/datasource/utils/run_paths.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.run_snapshot": {
+      "file": "src/datasource/utils/run_snapshot.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.source_conflicts": {
+      "file": "src/datasource/utils/source_conflicts.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.source_priority"
+      ]
+    },
+    "datasource.utils.source_priority": {
+      "file": "src/datasource/utils/source_priority.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.source_trust": {
+      "file": "src/datasource/utils/source_trust.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.text_markers": {
+      "file": "src/datasource/utils/text_markers.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.trend_history_store": {
+      "file": "src/datasource/utils/trend_history_store.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.utils.tushare_patch": {
+      "file": "src/datasource/utils/tushare_patch.py",
+      "reachable": true,
+      "imports": [
+        "datasource.utils.dns_patch"
+      ]
+    },
+    "datasource.utils.yahoo_finance": {
+      "file": "src/datasource/utils/yahoo_finance.py",
+      "reachable": true,
+      "imports": []
+    },
+    "datasource.warnings": {
+      "file": "src/datasource/warnings/__init__.py",
+      "reachable": false,
+      "imports": [
+        "datasource.warnings.systemic_risk_monitor"
+      ]
+    },
+    "datasource.warnings.systemic_risk_monitor": {
+      "file": "src/datasource/warnings/systemic_risk_monitor.py",
+      "reachable": false,
+      "imports": [
+        "datasource.calculators.technical_indicators",
+        "datasource.manager",
+        "datasource.models.base"
+      ]
+    }
+  }
+}

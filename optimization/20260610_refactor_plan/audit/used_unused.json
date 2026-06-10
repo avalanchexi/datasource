@@ -1,0 +1,813 @@
+{
+  "datasource": {
+    "file": "src/datasource/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 77.77777777777777,
+    "imported_by": [
+      "datasource.utils.data_completion",
+      "scripts/fund_flow_analysis.py",
+      "scripts/index_trend_analysis.py",
+      "scripts/stage1_data_collector.py",
+      "scripts/stage3_pring_analyzer.py",
+      "scripts/trend_history_backfill.py"
+    ]
+  },
+  "datasource.adapters": {
+    "file": "src/datasource/adapters/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.adapters.exa_client": {
+    "file": "src/datasource/adapters/exa_client.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.adapters.international_finance_adapter": {
+    "file": "src/datasource/adapters/international_finance_adapter.py",
+    "tier": "imported_only",
+    "coverage_percent": 19.23076923076923,
+    "imported_by": [
+      "datasource",
+      "datasource.manager"
+    ]
+  },
+  "datasource.adapters.tavily_client": {
+    "file": "src/datasource/adapters/tavily_client.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.adapters.tushare_adapter": {
+    "file": "src/datasource/adapters/tushare_adapter.py",
+    "tier": "runtime_used",
+    "coverage_percent": 23.06451612903226,
+    "imported_by": [
+      "datasource",
+      "datasource.manager"
+    ]
+  },
+  "datasource.agents": {
+    "file": "src/datasource/agents/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.agents.background_scan": {
+    "file": "src/datasource/agents/background_scan/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.agents.background_scan.agent": {
+    "file": "src/datasource/agents/background_scan/agent.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.agents",
+      "datasource.agents.background_scan"
+    ]
+  },
+  "datasource.agents.background_scan.config": {
+    "file": "src/datasource/agents/background_scan/config.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.agents.background_scan",
+      "datasource.agents.background_scan.agent"
+    ]
+  },
+  "datasource.analyzers": {
+    "file": "src/datasource/analyzers/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.analyzers.long_term_analyzer": {
+    "file": "src/datasource/analyzers/long_term_analyzer.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.analyzers"
+    ]
+  },
+  "datasource.cache": {
+    "file": "src/datasource/cache/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.cache.memory_cache": {
+    "file": "src/datasource/cache/memory_cache.py",
+    "tier": "runtime_used",
+    "coverage_percent": 53.06122448979592,
+    "imported_by": [
+      "datasource.adapters.international_finance_adapter",
+      "datasource.adapters.tavily_client",
+      "datasource.adapters.tushare_adapter",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.cache.sqlite_cache": {
+    "file": "src/datasource/cache/sqlite_cache.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.calculators": {
+    "file": "src/datasource/calculators/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.calculators.bond_calculator": {
+    "file": "src/datasource/calculators/bond_calculator.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.engines.data_engine"
+    ]
+  },
+  "datasource.calculators.economic_cycle_analyzer": {
+    "file": "src/datasource/calculators/economic_cycle_analyzer.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.calculators.fund_flow_calculator": {
+    "file": "src/datasource/calculators/fund_flow_calculator.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.engines.data_engine"
+    ]
+  },
+  "datasource.calculators.pring": {
+    "file": "src/datasource/calculators/pring/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": [
+      "datasource.calculators.pring_analyzer"
+    ]
+  },
+  "datasource.calculators.pring.leading_indicator": {
+    "file": "src/datasource/calculators/pring/leading_indicator.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.calculators.pring.scoring": {
+    "file": "src/datasource/calculators/pring/scoring.py",
+    "tier": "runtime_used",
+    "coverage_percent": 53.191489361702125,
+    "imported_by": [
+      "datasource.calculators.pring_analyzer"
+    ]
+  },
+  "datasource.calculators.pring.stage_allocations": {
+    "file": "src/datasource/calculators/pring/stage_allocations.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": [
+      "datasource.calculators.pring_analyzer"
+    ]
+  },
+  "datasource.calculators.pring.summaries": {
+    "file": "src/datasource/calculators/pring/summaries.py",
+    "tier": "runtime_used",
+    "coverage_percent": 86.04651162790698,
+    "imported_by": [
+      "datasource.calculators.pring_analyzer"
+    ]
+  },
+  "datasource.calculators.pring_analyzer": {
+    "file": "src/datasource/calculators/pring_analyzer.py",
+    "tier": "runtime_used",
+    "coverage_percent": 66.56410256410257,
+    "imported_by": [
+      "datasource.analyzers.long_term_analyzer",
+      "datasource.calculators.economic_cycle_analyzer",
+      "datasource.engines.data_engine",
+      "scripts/stage3_pring_analyzer.py"
+    ]
+  },
+  "datasource.calculators.technical_indicators": {
+    "file": "src/datasource/calculators/technical_indicators.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.analyzers.long_term_analyzer",
+      "datasource.calculators.economic_cycle_analyzer",
+      "datasource.comparators.international_comparator",
+      "datasource.engines.data_engine",
+      "datasource.mappers.industry_rotation_mapper",
+      "datasource.warnings.systemic_risk_monitor",
+      "scripts/stage1_data_collector.py"
+    ]
+  },
+  "datasource.comparators": {
+    "file": "src/datasource/comparators/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.comparators.international_comparator": {
+    "file": "src/datasource/comparators/international_comparator.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.comparators"
+    ]
+  },
+  "datasource.config": {
+    "file": "src/datasource/config/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.config.indices_config": {
+    "file": "src/datasource/config/indices_config.py",
+    "tier": "runtime_used",
+    "coverage_percent": 33.333333333333336,
+    "imported_by": [
+      "datasource.adapters.international_finance_adapter",
+      "datasource.analyzers.long_term_analyzer",
+      "datasource.config",
+      "datasource.manager",
+      "scripts/index_trend_analysis.py"
+    ]
+  },
+  "datasource.config.search_profiles": {
+    "file": "src/datasource/config/search_profiles.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.engines.stage2_task_planner",
+      "scripts/check_stage2_inputs.py"
+    ]
+  },
+  "datasource.engines": {
+    "file": "src/datasource/engines/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.engines.data_engine": {
+    "file": "src/datasource/engines/data_engine.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.generators.report_generator"
+    ]
+  },
+  "datasource.engines.deepseek_reasoner": {
+    "file": "src/datasource/engines/deepseek_reasoner.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.engines.stage2_lc_pipeline",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.engines.stage2_lc_pipeline": {
+    "file": "src/datasource/engines/stage2_lc_pipeline.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.engines.stage2_task_planner": {
+    "file": "src/datasource/engines/stage2_task_planner.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.generators": {
+    "file": "src/datasource/generators/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.generators.report_generator": {
+    "file": "src/datasource/generators/report_generator.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.generators.simple_report": {
+    "file": "src/datasource/generators/simple_report.py",
+    "tier": "runtime_used",
+    "coverage_percent": 59.795918367346935,
+    "imported_by": [
+      "scripts/stage4_report_generator.py"
+    ]
+  },
+  "datasource.manager": {
+    "file": "src/datasource/manager.py",
+    "tier": "runtime_used",
+    "coverage_percent": 42.48366013071895,
+    "imported_by": [
+      "datasource",
+      "datasource.agents.background_scan.agent",
+      "datasource.analyzers.long_term_analyzer",
+      "datasource.calculators.economic_cycle_analyzer",
+      "datasource.comparators.international_comparator",
+      "datasource.engines.data_engine",
+      "datasource.mappers.industry_rotation_mapper",
+      "datasource.trackers.policy_tracker",
+      "datasource.utils.data_completion",
+      "datasource.warnings.systemic_risk_monitor"
+    ]
+  },
+  "datasource.mappers": {
+    "file": "src/datasource/mappers/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.mappers.industry_rotation_mapper"
+    ]
+  },
+  "datasource.mappers.industry_rotation_mapper": {
+    "file": "src/datasource/mappers/industry_rotation_mapper.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.mappers"
+    ]
+  },
+  "datasource.mcp_adapter": {
+    "file": "src/datasource/mcp_adapter.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.models": {
+    "file": "src/datasource/models/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.models.base": {
+    "file": "src/datasource/models/base.py",
+    "tier": "runtime_used",
+    "coverage_percent": 86.27450980392157,
+    "imported_by": [
+      "datasource",
+      "datasource.adapters.international_finance_adapter",
+      "datasource.adapters.tushare_adapter",
+      "datasource.analyzers.long_term_analyzer",
+      "datasource.calculators.economic_cycle_analyzer",
+      "datasource.comparators.international_comparator",
+      "datasource.manager",
+      "datasource.mappers.industry_rotation_mapper",
+      "datasource.trackers.policy_tracker",
+      "datasource.warnings.systemic_risk_monitor"
+    ]
+  },
+  "datasource.models.market_data_contract": {
+    "file": "src/datasource/models/market_data_contract.py",
+    "tier": "runtime_used",
+    "coverage_percent": 86.48648648648648,
+    "imported_by": [
+      "datasource.calculators.pring_analyzer",
+      "scripts/stage1_data_collector.py",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage3_pring_analyzer.py"
+    ]
+  },
+  "datasource.models.pring_result_contract": {
+    "file": "src/datasource/models/pring_result_contract.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers": {
+    "file": "src/datasource/providers/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured": {
+    "file": "src/datasource/providers/stage2_structured/__init__.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.providers.stage2_structured.base": {
+    "file": "src/datasource/providers/stage2_structured/base.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.providers.stage2_structured",
+      "datasource.providers.stage2_structured.cdb_estimator",
+      "datasource.providers.stage2_structured.chinabond",
+      "datasource.providers.stage2_structured.eastmoney_etf",
+      "datasource.providers.stage2_structured.market_quote_pages",
+      "datasource.providers.stage2_structured.official_china",
+      "datasource.providers.stage2_structured.registry",
+      "datasource.providers.stage2_structured.stooq",
+      "datasource.providers.stage2_structured.trading_economics",
+      "datasource.providers.stage2_structured.tushare_etf",
+      "datasource.providers.stage2_structured.yahoo_finance"
+    ]
+  },
+  "datasource.providers.stage2_structured.cdb_estimator": {
+    "file": "src/datasource/providers/stage2_structured/cdb_estimator.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.chinabond": {
+    "file": "src/datasource/providers/stage2_structured/chinabond.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.providers.stage2_structured.cdb_estimator"
+    ]
+  },
+  "datasource.providers.stage2_structured.eastmoney_etf": {
+    "file": "src/datasource/providers/stage2_structured/eastmoney_etf.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.http_fetcher": {
+    "file": "src/datasource/providers/stage2_structured/http_fetcher.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.providers.stage2_structured.chinabond",
+      "datasource.providers.stage2_structured.eastmoney_etf",
+      "datasource.providers.stage2_structured.market_quote_pages",
+      "datasource.providers.stage2_structured.official_china",
+      "datasource.providers.stage2_structured.stooq",
+      "datasource.providers.stage2_structured.trading_economics",
+      "datasource.providers.stage2_structured.yahoo_finance"
+    ]
+  },
+  "datasource.providers.stage2_structured.market_quote_pages": {
+    "file": "src/datasource/providers/stage2_structured/market_quote_pages.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.official_china": {
+    "file": "src/datasource/providers/stage2_structured/official_china.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.registry": {
+    "file": "src/datasource/providers/stage2_structured/registry.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.providers.stage2_structured"
+    ]
+  },
+  "datasource.providers.stage2_structured.source_tiers": {
+    "file": "src/datasource/providers/stage2_structured/source_tiers.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.providers.stage2_structured.cdb_estimator",
+      "datasource.providers.stage2_structured.chinabond",
+      "datasource.providers.stage2_structured.eastmoney_etf",
+      "datasource.providers.stage2_structured.market_quote_pages",
+      "datasource.providers.stage2_structured.official_china",
+      "datasource.providers.stage2_structured.stooq",
+      "datasource.providers.stage2_structured.trading_economics",
+      "datasource.providers.stage2_structured.tushare_etf",
+      "datasource.providers.stage2_structured.yahoo_finance"
+    ]
+  },
+  "datasource.providers.stage2_structured.stooq": {
+    "file": "src/datasource/providers/stage2_structured/stooq.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.trading_economics": {
+    "file": "src/datasource/providers/stage2_structured/trading_economics.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.tushare_etf": {
+    "file": "src/datasource/providers/stage2_structured/tushare_etf.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.providers.stage2_structured.yahoo_finance": {
+    "file": "src/datasource/providers/stage2_structured/yahoo_finance.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.trackers": {
+    "file": "src/datasource/trackers/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.trackers.policy_tracker": {
+    "file": "src/datasource/trackers/policy_tracker.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.trackers"
+    ]
+  },
+  "datasource.utils": {
+    "file": "src/datasource/utils/__init__.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": []
+  },
+  "datasource.utils.coercion": {
+    "file": "src/datasource/utils/coercion.py",
+    "tier": "runtime_used",
+    "coverage_percent": 78.26086956521739,
+    "imported_by": [
+      "datasource.engines.deepseek_reasoner",
+      "datasource.engines.stage2_task_planner",
+      "datasource.generators.simple_report",
+      "datasource.utils.key_aliases",
+      "datasource.utils.pipeline_quality_state",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.data_completion": {
+    "file": "src/datasource/utils/data_completion.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.utils.dns_patch": {
+    "file": "src/datasource/utils/dns_patch.py",
+    "tier": "runtime_used",
+    "coverage_percent": 21.323529411764707,
+    "imported_by": [
+      "datasource",
+      "datasource.utils.tushare_patch"
+    ]
+  },
+  "datasource.utils.fund_flow_series": {
+    "file": "src/datasource/utils/fund_flow_series.py",
+    "tier": "runtime_used",
+    "coverage_percent": 23.404255319148938,
+    "imported_by": [
+      "scripts/stage2_5_injector.py"
+    ]
+  },
+  "datasource.utils.gate_formatting": {
+    "file": "src/datasource/utils/gate_formatting.py",
+    "tier": "runtime_used",
+    "coverage_percent": 100.0,
+    "imported_by": [
+      "scripts/stage3_pring_analyzer.py",
+      "scripts/stage4_report_generator.py"
+    ]
+  },
+  "datasource.utils.json_io": {
+    "file": "src/datasource/utils/json_io.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/backfill_fund_flow_series.py",
+      "scripts/recap_consistency_check.py",
+      "scripts/stage2_low_score_audit.py",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.key_aliases": {
+    "file": "src/datasource/utils/key_aliases.py",
+    "tier": "runtime_used",
+    "coverage_percent": 34.666666666666664,
+    "imported_by": [
+      "datasource.config.search_profiles",
+      "datasource.engines.stage2_task_planner",
+      "datasource.providers.stage2_structured.official_china",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.mcp_tools": {
+    "file": "src/datasource/utils/mcp_tools.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.utils.data_completion"
+    ]
+  },
+  "datasource.utils.missing_items": {
+    "file": "src/datasource/utils/missing_items.py",
+    "tier": "imported_only",
+    "coverage_percent": 8.474576271186441,
+    "imported_by": [
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_unified_enhancer.py",
+      "scripts/stage3_pring_analyzer.py"
+    ]
+  },
+  "datasource.utils.observability": {
+    "file": "src/datasource/utils/observability.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.pipeline_gate": {
+    "file": "src/datasource/utils/pipeline_gate.py",
+    "tier": "runtime_used",
+    "coverage_percent": 76.42276422764228,
+    "imported_by": [
+      "scripts/stage3_pring_analyzer.py",
+      "scripts/stage4_report_generator.py"
+    ]
+  },
+  "datasource.utils.pipeline_quality_state": {
+    "file": "src/datasource/utils/pipeline_quality_state.py",
+    "tier": "runtime_used",
+    "coverage_percent": 82.38993710691824,
+    "imported_by": [
+      "datasource.engines.stage2_task_planner",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage3_pring_analyzer.py",
+      "scripts/stage4_report_generator.py"
+    ]
+  },
+  "datasource.utils.policy_rules": {
+    "file": "src/datasource/utils/policy_rules.py",
+    "tier": "runtime_used",
+    "coverage_percent": 62.371134020618555,
+    "imported_by": [
+      "datasource.generators.simple_report",
+      "datasource.utils.pipeline_quality_state",
+      "scripts/fix_estimated_verified.py",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_low_score_audit.py",
+      "scripts/stage2_unified_enhancer.py",
+      "scripts/stage3_pring_analyzer.py"
+    ]
+  },
+  "datasource.utils.quality_metrics": {
+    "file": "src/datasource/utils/quality_metrics.py",
+    "tier": "runtime_used",
+    "coverage_percent": 73.33333333333333,
+    "imported_by": [
+      "datasource.generators.simple_report",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.rate_limiter": {
+    "file": "src/datasource/utils/rate_limiter.py",
+    "tier": "runtime_used",
+    "coverage_percent": 82.14285714285714,
+    "imported_by": [
+      "datasource.adapters.international_finance_adapter",
+      "datasource.adapters.tushare_adapter"
+    ]
+  },
+  "datasource.utils.retry": {
+    "file": "src/datasource/utils/retry.py",
+    "tier": "runtime_used",
+    "coverage_percent": 65.21739130434783,
+    "imported_by": [
+      "datasource.adapters.tushare_adapter"
+    ]
+  },
+  "datasource.utils.run_lock": {
+    "file": "src/datasource/utils/run_lock.py",
+    "tier": "runtime_used",
+    "coverage_percent": 44.29223744292238,
+    "imported_by": [
+      "scripts/stage2_5_injector.py",
+      "scripts/stage3_pring_analyzer.py",
+      "scripts/stage4_report_generator.py"
+    ]
+  },
+  "datasource.utils.run_paths": {
+    "file": "src/datasource/utils/run_paths.py",
+    "tier": "runtime_used",
+    "coverage_percent": 85.27131782945736,
+    "imported_by": [
+      "datasource.engines.stage2_task_planner",
+      "datasource.generators.simple_report",
+      "scripts/fix_estimated_verified.py",
+      "scripts/recap_consistency_check.py",
+      "scripts/stage1_data_collector.py",
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_low_score_audit.py",
+      "scripts/stage2_unified_enhancer.py",
+      "scripts/stage3_pring_analyzer.py",
+      "scripts/stage4_report_generator.py",
+      "scripts/trend_history_scan.py"
+    ]
+  },
+  "datasource.utils.run_snapshot": {
+    "file": "src/datasource/utils/run_snapshot.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.source_conflicts": {
+    "file": "src/datasource/utils/source_conflicts.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.source_priority": {
+    "file": "src/datasource/utils/source_priority.py",
+    "tier": "reachable_not_run",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.utils.source_conflicts"
+    ]
+  },
+  "datasource.utils.source_trust": {
+    "file": "src/datasource/utils/source_trust.py",
+    "tier": "imported_only",
+    "coverage_percent": 17.177914110429448,
+    "imported_by": [
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.text_markers": {
+    "file": "src/datasource/utils/text_markers.py",
+    "tier": "runtime_used",
+    "coverage_percent": 33.333333333333336,
+    "imported_by": [
+      "scripts/stage2_5_injector.py",
+      "scripts/stage2_unified_enhancer.py"
+    ]
+  },
+  "datasource.utils.trend_history_store": {
+    "file": "src/datasource/utils/trend_history_store.py",
+    "tier": "runtime_used",
+    "coverage_percent": 81.98757763975155,
+    "imported_by": [
+      "datasource.generators.simple_report",
+      "datasource.utils.data_completion",
+      "datasource.utils.fund_flow_series",
+      "scripts/backfill_fund_flow_series.py",
+      "scripts/stage1_data_collector.py",
+      "scripts/stage2_5_injector.py",
+      "scripts/trend_history_backfill.py",
+      "scripts/trend_history_scan.py"
+    ]
+  },
+  "datasource.utils.tushare_patch": {
+    "file": "src/datasource/utils/tushare_patch.py",
+    "tier": "runtime_used",
+    "coverage_percent": 41.666666666666664,
+    "imported_by": [
+      "datasource.adapters.tushare_adapter"
+    ]
+  },
+  "datasource.utils.yahoo_finance": {
+    "file": "src/datasource/utils/yahoo_finance.py",
+    "tier": "imported_only",
+    "coverage_percent": 16.9811320754717,
+    "imported_by": [
+      "datasource.adapters.international_finance_adapter",
+      "datasource.calculators.fund_flow_calculator",
+      "datasource.utils.data_completion"
+    ]
+  },
+  "datasource.warnings": {
+    "file": "src/datasource/warnings/__init__.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": []
+  },
+  "datasource.warnings.systemic_risk_monitor": {
+    "file": "src/datasource/warnings/systemic_risk_monitor.py",
+    "tier": "unreachable",
+    "coverage_percent": 0.0,
+    "imported_by": [
+      "datasource.warnings"
+    ]
+  }
+}
