@@ -1,5 +1,6 @@
 import json
 import os
+import socket
 import time
 
 import pytest
@@ -36,6 +37,12 @@ def test_run_dir_from_artifact_rejects_non_run_paths(tmp_path):
         run_dir_from_artifact(artifact)
 
 
+def test_run_dir_from_artifact_rejects_invalid_calendar_run_date(tmp_path):
+    artifact = tmp_path / "data" / "runs" / "20269999" / "x.json"
+    with pytest.raises(ValueError, match="data/runs/YYYYMMDD"):
+        run_dir_from_artifact(artifact)
+
+
 def test_daily_run_lock_rejects_second_live_owner(tmp_path):
     run_dir = tmp_path / "data" / "runs" / "20260610"
     with DailyRunLock(run_dir, owner="stage2_5_injector").acquire():
@@ -45,6 +52,27 @@ def test_daily_run_lock_rejects_second_live_owner(tmp_path):
 
     assert "stage2_5_injector" in str(exc_info.value)
     assert "stage4_report_generator" in str(exc_info.value)
+
+
+def test_daily_run_lock_rejects_old_live_same_host_pid_lock(tmp_path):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    run_dir.mkdir(parents=True)
+    lock_path = run_dir / ".run.lock"
+    existing_payload = {
+        "owner": "live-old-session",
+        "pid": os.getpid(),
+        "hostname": socket.gethostname(),
+        "created_at": time.time() - 1000,
+        "token": "live-old-token",
+    }
+    lock_path.write_text(json.dumps(existing_payload), encoding="utf-8")
+
+    with pytest.raises(RunLockError) as exc_info:
+        with DailyRunLock(run_dir, owner="new-session", stale_after_seconds=1).acquire():
+            pass
+
+    assert "live-old-session" in str(exc_info.value)
+    assert json.loads(lock_path.read_text(encoding="utf-8")) == existing_payload
 
 
 def test_daily_run_lock_removes_stale_dead_pid_lock(tmp_path):
@@ -226,9 +254,11 @@ def test_daily_run_lock_reclaims_stale_schema_invalid_lock(tmp_path, payload_tex
 def test_daily_run_lock_release_ignores_schema_invalid_replacement(tmp_path):
     run_dir = tmp_path / "data" / "runs" / "20260610"
     replacement_payload = "[]"
+    lock = DailyRunLock(run_dir, owner="stage3_pring_analyzer")
 
-    with DailyRunLock(run_dir, owner="stage3_pring_analyzer").acquire():
+    with lock.acquire():
         lock_path = run_dir / ".run.lock"
         lock_path.write_text(replacement_payload, encoding="utf-8")
 
     assert lock_path.read_text(encoding="utf-8") == replacement_payload
+    assert lock._acquired is False

@@ -26,6 +26,10 @@ class _CorruptLockPayload(ValueError):
 
 
 def run_dir_from_date(date_value: str, runs_root: Path = Path("data/runs")) -> Path:
+    return Path(runs_root) / _compact_run_date(date_value)
+
+
+def _compact_run_date(date_value: str) -> str:
     if _DASHED_DATE_RE.match(date_value):
         compact_date = date_value.replace("-", "")
     elif _COMPACT_DATE_RE.match(date_value):
@@ -38,7 +42,7 @@ def run_dir_from_date(date_value: str, runs_root: Path = Path("data/runs")) -> P
     except ValueError as exc:
         raise ValueError("date_value must use YYYY-MM-DD or YYYYMMDD") from exc
 
-    return Path(runs_root) / compact_date
+    return compact_date
 
 
 def run_dir_from_artifact(path: Union[os.PathLike, str]) -> Path:
@@ -49,7 +53,11 @@ def run_dir_from_artifact(path: Union[os.PathLike, str]) -> Path:
         if parts[index] == "data" and parts[index + 1] == "runs":
             run_date = parts[index + 2]
             has_artifact_name = len(parts) > index + 3
-            if len(run_date) == 8 and run_date.isdigit() and has_artifact_name:
+            if has_artifact_name:
+                try:
+                    _compact_run_date(run_date)
+                except ValueError:
+                    break
                 return Path(*parts[: index + 3])
             break
 
@@ -84,6 +92,7 @@ class DailyRunLock:
             self._acquired = False
             return
         except (json.JSONDecodeError, _CorruptLockPayload, OSError):
+            self._acquired = False
             return
 
         if payload.get("token") != self.token:
@@ -227,18 +236,18 @@ class DailyRunLock:
         return True
 
     def _is_stale_or_dead(self, payload: Dict[str, Any]) -> bool:
-        created_at = self._as_float(payload.get("created_at"))
-        if created_at is not None and time.time() - created_at > self.stale_after_seconds:
-            return True
-
         hostname = payload.get("hostname")
-        if hostname and hostname != socket.gethostname():
-            return False
-
         pid = self._as_int(payload.get("pid"))
-        if pid is None or pid <= 0:
-            return False
-        return not self._pid_is_alive(pid)
+        if hostname == socket.gethostname():
+            if pid is None or pid <= 0:
+                return False
+            return not self._pid_is_alive(pid)
+
+        created_at = self._as_float(payload.get("created_at"))
+        return (
+            created_at is not None
+            and time.time() - created_at > self.stale_after_seconds
+        )
 
     def _lock_error(self, payload: Dict[str, Any]) -> RunLockError:
         existing_owner = payload.get("owner", "<unknown>")
