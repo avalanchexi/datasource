@@ -97,8 +97,8 @@ class DailyRunLock:
             except FileExistsError:
                 existing_payload = self._read_existing_lock(lock_path)
                 if self._is_corrupt_lock(existing_payload):
-                    if self._unlink_if_text_matches(
-                        lock_path, str(existing_payload.get("raw_text", ""))
+                    if self._unlink_if_corrupt_identity_matches(
+                        lock_path, existing_payload
                     ):
                         continue
                     continue
@@ -159,6 +159,7 @@ class DailyRunLock:
                     "token": None,
                     _CORRUPT_LOCK_MARKER: True,
                     "raw_text": raw_text,
+                    "mtime": mtime,
                 }
             raise RunLockError(
                 f"{self.owner} cannot acquire run lock; corrupt existing run lock is fresh: {exc}"
@@ -190,12 +191,17 @@ class DailyRunLock:
         return True
 
     @staticmethod
-    def _unlink_if_text_matches(lock_path: Path, expected_text: str) -> bool:
+    def _unlink_if_corrupt_identity_matches(
+        lock_path: Path, expected: Dict[str, Any]
+    ) -> bool:
         try:
             current_text = lock_path.read_text(encoding="utf-8")
+            current_mtime = lock_path.stat().st_mtime
         except (FileNotFoundError, OSError):
             return False
-        if current_text != expected_text:
+        if current_text != expected.get("raw_text"):
+            return False
+        if current_mtime != expected.get("mtime"):
             return False
         try:
             lock_path.unlink()

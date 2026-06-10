@@ -159,3 +159,33 @@ def test_daily_run_lock_removes_stale_corrupt_lock(tmp_path):
         assert payload["owner"] == "new-session"
 
     assert not lock_path.exists()
+
+
+def test_daily_run_lock_does_not_unlink_same_text_replaced_corrupt_lock(
+    tmp_path, monkeypatch
+):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    run_dir.mkdir(parents=True)
+    lock_path = run_dir / ".run.lock"
+    lock_path.write_text("", encoding="utf-8")
+    stale_timestamp = time.time() - 1000
+    fresh_timestamp = time.time()
+    os.utime(lock_path, (stale_timestamp, stale_timestamp))
+
+    original_read_existing_lock = DailyRunLock._read_existing_lock
+
+    def replace_after_inspection(self, path):
+        payload = original_read_existing_lock(self, path)
+        lock_path.write_text("", encoding="utf-8")
+        os.utime(lock_path, (fresh_timestamp, fresh_timestamp))
+        return payload
+
+    monkeypatch.setattr(DailyRunLock, "_read_existing_lock", replace_after_inspection)
+
+    with pytest.raises(RunLockError, match="corrupt"):
+        with DailyRunLock(run_dir, owner="new-session", stale_after_seconds=1).acquire():
+            pass
+
+    assert lock_path.exists()
+    assert lock_path.read_text(encoding="utf-8") == ""
+    assert lock_path.stat().st_mtime > stale_timestamp
