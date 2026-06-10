@@ -640,6 +640,68 @@ def test_post_writeback_flags_missing_monetary_compare_fields_for_quality_gap():
     assert task["post_writeback_missing_fields"] == ["change_from_120d"]
 
 
+def test_post_writeback_flags_forex_pending_compare_fields():
+    payload = {
+        "metadata": {"date": "2026-05-22"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "fund_flow": {},
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "current_rate": 7.12,
+                "compare_fields_pending": ["daily_change", "change_120d"],
+            }
+        ],
+    }
+    task = {
+        "indicator_key": "USDCNY",
+        "stage_phase": "assets",
+    }
+
+    reason = stage2._post_writeback_manual_reason(payload, task, "USDCNY")
+
+    assert reason == "missing_compare_values"
+    assert task["post_writeback_missing_fields"] == ["daily_change", "change_120d"]
+
+
+def test_post_writeback_manual_required_records_forex_missing_category():
+    payload = {
+        "metadata": {"date": "2026-05-22", "missing_items": {}},
+        "missing_items": [],
+        "fund_flow": {},
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "current_rate": 7.12,
+                "compare_fields_pending": ["change_120d"],
+            }
+        ],
+    }
+    task_record = {}
+    task = {
+        "indicator_key": "USDCNY",
+        "stage_phase": "assets",
+    }
+    extraction = {"value": 7.12}
+
+    stage2._mark_post_writeback_manual_required(
+        payload,
+        task_record,
+        task,
+        extraction,
+        "USDCNY",
+        "missing_compare_values",
+    )
+
+    assert payload["metadata"]["missing_items"]["forex"] == [
+        {"key": "USDCNY", "reason": "missing_compare_values"}
+    ]
+    assert "USDCNY" in payload["missing_items"]
+    assert task_record["manual_required"] is True
+    assert extraction["manual_required"] is True
+
+
 def test_apply_extraction_preserves_bond_estimated_metadata():
     payload = {
         "metadata": {"date": "2026-05-22"},

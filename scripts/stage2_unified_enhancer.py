@@ -2987,6 +2987,20 @@ def _entry_for_task(
     indicator_key: str,
 ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
     category = task.get("quality_gap_category") or task.get("category") or task.get("stage_phase")
+    if category == "forex" or indicator_key in _FOREX_UPSERT_META:
+        for item in market_payload.get("forex", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("pair") == indicator_key or item.get("symbol") == indicator_key:
+                return "forex", item
+    if category == "commodities" or indicator_key in _COMMODITY_UPSERT_META:
+        for item in market_payload.get("commodities", []) or []:
+            if isinstance(item, dict) and item.get("symbol") == indicator_key:
+                return "commodities", item
+    if category == "bonds" or indicator_key in _BOND_UPSERT_META:
+        for item in market_payload.get("bonds", []) or []:
+            if isinstance(item, dict) and item.get("symbol") == indicator_key:
+                return "bonds", item
     if category == "macro_indicators":
         entry = market_payload.get("macro_indicators", {}).get(indicator_key)
         return category, entry if isinstance(entry, dict) else None
@@ -2997,10 +3011,6 @@ def _entry_for_task(
     if category == "fund_flow":
         entry = market_payload.get("fund_flow", {}).get(indicator_key)
         return category, entry if isinstance(entry, dict) else None
-    if category == "bonds":
-        for item in market_payload.get("bonds", []) or []:
-            if isinstance(item, dict) and item.get("symbol") == indicator_key:
-                return category, item
     return None, None
 
 
@@ -3014,6 +3024,9 @@ def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) ->
         "recent_5d",
         "total_120d",
         "current_yield",
+        "current_rate",
+        "daily_change",
+        "change_120d",
         "change_5d_bp",
         "change_120d_bp",
     }
@@ -3041,6 +3054,18 @@ def _post_writeback_manual_reason(
         indicator = str(indicator_key or task_or_indicator or "")
 
     category, entry = _entry_for_task(market_payload, task, indicator)
+    if category == "forex" and isinstance(entry, dict):
+        pending = entry.get("compare_fields_pending")
+        if isinstance(pending, list):
+            pending_fields = [str(field) for field in pending if str(field)]
+        elif pending:
+            pending_fields = [str(pending)]
+        else:
+            pending_fields = []
+        if pending_fields:
+            task["post_writeback_missing_fields"] = pending_fields
+            return "missing_compare_values"
+
     if (
         task.get("quality_gap_reason") == "missing_compare_values"
         and isinstance(entry, dict)
@@ -3063,6 +3088,24 @@ def _post_writeback_manual_reason(
     return "estimated_not_allowed"
 
 
+def _post_writeback_missing_category(
+    market_payload: Dict[str, Any],
+    task: Dict[str, Any],
+    task_record: Dict[str, Any],
+    indicator_key: str,
+) -> str:
+    category = (
+        task.get("quality_gap_category")
+        or task.get("category")
+        or task_record.get("category")
+    )
+    if category in {None, "", "assets", "essential", "all"}:
+        category, _entry = _entry_for_task(market_payload, task, indicator_key)
+    if category in {None, ""}:
+        return "fund_flow"
+    return str(category)
+
+
 def _mark_post_writeback_manual_required(
     market_payload: Dict[str, Any],
     task_record: Dict[str, Any],
@@ -3078,7 +3121,7 @@ def _mark_post_writeback_manual_required(
     extraction["manual_reason"] = reason
     extraction["note"] = _append_note(extraction.get("note"), reason)
     task_record["note"] = extraction.get("note")
-    category = task.get("quality_gap_category") or task.get("category") or task_record.get("category") or "fund_flow"
+    category = _post_writeback_missing_category(market_payload, task, task_record, indicator_key)
     append_missing_item(market_payload, category, indicator_key, reason)
 
 
