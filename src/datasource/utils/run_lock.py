@@ -1,0 +1,174 @@
+import json
+import os
+import socket
+import time
+import uuid
+from contextlib import contextmanager
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Dict, Iterator, Optional, Union
+
+
+class RunLockError(RuntimeError):
+    """Raised when a daily run lock is held by another live owner."""
+
+
+def run_dir_from_date(date_value: str, runs_root: Path = Path("data/runs")) -> Path:
+    compact_date = date_value.replace("-", "")
+    if len(compact_date) != 8 or not compact_date.isdigit():
+        raise ValueError("date_value must use YYYY-MM-DD or YYYYMMDD")
+    return Path(runs_root) / compact_date
+
+
+def run_dir_from_artifact(path: Union[os.PathLike, str]) -> Path:
+    artifact_path = Path(path)
+    parts = artifact_path.parts
+
+    for index in range(len(parts) - 3):
+        if parts[index] == "data" and parts[index + 1] == "runs":
+            run_date = parts[index + 2]
+            has_artifact_name = len(parts) > index + 3
+            if len(run_date) == 8 and run_date.isdigit() and has_artifact_name:
+                return Path(*parts[: index + 3])
+            break
+
+    raise ValueError("artifact path must be inside data/runs/YYYYMMDD/<artifact>")
+
+
+@dataclass
+class DailyRunLock:
+    run_dir: Union[os.PathLike, str]
+    owner: str
+    stale_after_seconds: int = 21600
+    token: str = field(default_factory=lambda: uuid.uuid4().hex, init=False)
+    _acquired: bool = field(default=False, init=False)
+
+    @property
+    def lock_path(self) -> Path:
+        return Path(self.run_dir) / ".run.lock"
+
+    @contextmanager
+    def acquire(self) -> Iterator["DailyRunLock"]:
+        self._acquire()
+        try:
+            yield self
+        finally:
+            self.release()
+
+    def release(self) -> None:
+        lock_path = self.lock_path
+        try:
+            payload = self._read_lock(lock_path)
+        except FileNotFoundError:
+            self._acquired = False
+            return
+        except (json.JSONDecodeError, OSError):
+            return
+
+        if payload.get("token") != self.token:
+            self._acquired = False
+            return
+
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+        finally:
+            self._acquired = False
+
+    def _acquire(self) -> None:
+        run_dir = Path(self.run_dir)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        lock_path = self.lock_path
+
+        while True:
+            payload = self._build_payload()
+            try:
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+            except FileExistsError:
+                existing_payload = self._read_existing_lock(lock_path)
+                if self._is_stale_or_dead(existing_payload):
+                    try:
+                        lock_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    continue
+                raise self._lock_error(existing_payload)
+
+            with os.fdopen(fd, "w", encoding="utf-8") as lock_file:
+                json.dump(payload, lock_file, ensure_ascii=False)
+            self._acquired = True
+            return
+
+    def _build_payload(self) -> Dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "created_at": time.time(),
+            "token": self.token,
+        }
+
+    def _read_existing_lock(self, lock_path: Path) -> Dict[str, Any]:
+        try:
+            return self._read_lock(lock_path)
+        except FileNotFoundError:
+            return {
+                "owner": "<released>",
+                "pid": None,
+                "hostname": None,
+                "created_at": 0,
+                "token": None,
+            }
+        except (json.JSONDecodeError, OSError) as exc:
+            raise RunLockError(f"{self.owner} cannot read existing run lock: {exc}") from exc
+
+    @staticmethod
+    def _read_lock(lock_path: Path) -> Dict[str, Any]:
+        return json.loads(lock_path.read_text(encoding="utf-8"))
+
+    def _is_stale_or_dead(self, payload: Dict[str, Any]) -> bool:
+        created_at = self._as_float(payload.get("created_at"))
+        if created_at is not None and time.time() - created_at > self.stale_after_seconds:
+            return True
+
+        hostname = payload.get("hostname")
+        if hostname and hostname != socket.gethostname():
+            return False
+
+        pid = self._as_int(payload.get("pid"))
+        if pid is None or pid <= 0:
+            return False
+        return not self._pid_is_alive(pid)
+
+    def _lock_error(self, payload: Dict[str, Any]) -> RunLockError:
+        existing_owner = payload.get("owner", "<unknown>")
+        existing_pid = payload.get("pid", "<unknown>")
+        return RunLockError(
+            f"{self.owner} cannot acquire run lock; existing owner "
+            f"{existing_owner} is live (pid={existing_pid})"
+        )
+
+    @staticmethod
+    def _pid_is_alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
+
+    @staticmethod
+    def _as_float(value: object) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _as_int(value: object) -> Optional[int]:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
