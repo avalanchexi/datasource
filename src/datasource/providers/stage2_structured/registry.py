@@ -78,6 +78,7 @@ def build_default_registry() -> StructuredProviderRegistry:
         "eastmoney_etf",
         "official_china",
         "trading_economics",
+        "market_quote_pages",
         "stooq",
         "yahoo_finance",
     )

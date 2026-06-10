@@ -25,6 +25,7 @@ from datasource.providers.stage2_structured.official_china import (
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.registry import build_default_registry
 from datasource.providers.stage2_structured.source_tiers import classify_structured_source_tier
+from datasource.providers.stage2_structured.market_quote_pages import MarketQuotePageProvider
 from datasource.providers.stage2_structured.stooq import StooqQuoteProvider
 from datasource.providers.stage2_structured.trading_economics import TradingEconomicsProvider
 from datasource.providers.stage2_structured.tushare_etf import (
@@ -273,6 +274,79 @@ def test_default_registry_orders_tushare_etf_before_eastmoney_etf():
     assert provider_names.index("tushare_etf") < provider_names.index("eastmoney_etf")
 
 
+def test_default_registry_orders_market_quote_pages_before_quote_fallbacks():
+    provider_names = [
+        provider.name
+        for provider in build_default_registry().providers_for("GSG")
+    ]
+
+    assert provider_names.index("market_quote_pages") < provider_names.index("stooq")
+    assert provider_names.index("market_quote_pages") < provider_names.index("yahoo_finance")
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_parses_bcom_investing_close():
+    html = """
+    <html><body>
+      <h1>Bloomberg Commodity Historical Data</h1>
+      <table>
+        <tr><td>Jun 09, 2026</td><td>130.9746</td><td>132.4088</td></tr>
+      </table>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "bloomberg-commodity-historical-data" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "BCOM"}, {}, "2026-06-10")
+
+    extraction = result.to_extraction()
+    assert result.provider == "market_quote_pages"
+    assert extraction["value"] == pytest.approx(130.9746)
+    assert extraction["unit"] == "index points"
+    assert extraction["as_of_date"] == "2026-06-09"
+    assert extraction["diagnostics"]["price_basis"] == "official_close"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_parses_gsg_stockanalysis_close():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24</div>
+      <div>Jun 09, 2026</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-10")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["unit"] == "USD"
+    assert extraction["as_of_date"] == "2026-06-09"
+    assert extraction["diagnostics"]["price_basis"] == "market_close"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_rejects_bcom_total_return_page():
+    async def fetch_text(url, params=None):
+        return "Bloomberg Commodity Total Return Index BCOMTR 295.44 Jun 09, 2026"
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "BCOM"}, {}, "2026-06-10")
+
+    assert exc_info.value.reason == "rejected_page"
+
+
 @pytest.mark.asyncio
 async def test_yahoo_finance_provider_parses_chart_quote():
     async def fetch_json(url, params=None):
@@ -301,6 +375,11 @@ async def test_yahoo_finance_provider_parses_chart_quote():
     assert extraction["value"] == 3367.8
     assert extraction["unit"] == "$/oz"
     assert extraction["source_url"] == "https://finance.yahoo.com/quote/GC=F"
+
+
+@pytest.mark.asyncio
+async def test_yahoo_finance_provider_fetches_market_quote():
+    await test_yahoo_finance_provider_parses_chart_quote()
 
 
 @pytest.mark.asyncio
@@ -848,6 +927,11 @@ async def test_stooq_quote_provider_parses_gsg_csv_close():
     assert extraction["unit"] == "USD"
     assert extraction["as_of_date"] == "2026-05-22"
     assert extraction["source_tier"] == "tier2"
+
+
+@pytest.mark.asyncio
+async def test_stooq_provider_parses_gsg_csv_quote():
+    await test_stooq_quote_provider_parses_gsg_csv_close()
 
 
 @pytest.mark.asyncio
