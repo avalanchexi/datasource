@@ -104,6 +104,73 @@ class FakeTuShareETFProInternalMissing(FakeTuShareETFPro):
         )
 
 
+class FakeTuShareETFProPartialRows(FakeTuShareETFPro):
+    def __init__(
+        self,
+        partial_trade_date,
+        partial_exchange="SSE",
+        trade_date_count=131,
+    ):
+        super().__init__(trade_date_count=trade_date_count)
+        self.partial_trade_date = partial_trade_date
+        self.partial_exchange = partial_exchange
+
+    def etf_share_size(self, trade_date, exchange=None, market=None):
+        exchange_value = exchange or market
+        index = self.trade_dates.index(trade_date)
+        total_size_wan = (1000.0 + index) * 10000.0 / 2.0
+        row_count = (
+            1
+            if (
+                trade_date == self.partial_trade_date
+                and exchange_value == self.partial_exchange
+            )
+            else 4
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "trade_date": trade_date,
+                    "exchange": exchange_value,
+                    "ts_code": "{0}.{1:03d}".format(exchange_value, row_index),
+                    "total_size": total_size_wan / row_count,
+                }
+                for row_index in range(row_count)
+            ]
+        )
+
+
+class FakeTuShareETFProMostlyPartialRows(FakeTuShareETFPro):
+    def __init__(self, partial_count=66, trade_date_count=131, partial_exchange="SSE"):
+        super().__init__(trade_date_count=trade_date_count)
+        self.partial_dates = set(self.trade_dates[:partial_count])
+        self.partial_exchange = partial_exchange
+
+    def etf_share_size(self, trade_date, exchange=None, market=None):
+        exchange_value = exchange or market
+        index = self.trade_dates.index(trade_date)
+        total_size_wan = (1000.0 + index) * 10000.0 / 2.0
+        row_count = (
+            1
+            if (
+                trade_date in self.partial_dates
+                and exchange_value == self.partial_exchange
+            )
+            else 4
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "trade_date": trade_date,
+                    "exchange": exchange_value,
+                    "ts_code": "{0}.{1:03d}".format(exchange_value, row_index),
+                    "total_size": total_size_wan / row_count,
+                }
+                for row_index in range(row_count)
+            ]
+        )
+
+
 class FakeProvider:
     name = "fake"
     supported_keys = {"GC=F"}
@@ -506,6 +573,71 @@ async def test_tushare_etf_provider_fails_closed_when_internal_exchange_date_mis
     ]
     assert exc_info.value.diagnostics["candidate_date_count"] == 131
     assert exc_info.value.diagnostics["complete_date_count"] == 130
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_fails_closed_when_exchange_rows_are_partial():
+    partial_trade_date = _trade_dates(131)[20]
+    provider = TuShareETFProvider(
+        pro=FakeTuShareETFProPartialRows(partial_trade_date=partial_trade_date)
+    )
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    diagnostics = exc_info.value.diagnostics
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert diagnostics["missing_trade_date"] == partial_trade_date
+    assert diagnostics["missing_exchange"] == "SSE"
+    assert diagnostics["incomplete_reason"] == "partial_exchange_rows"
+    assert diagnostics["usable_row_count"] == 1
+    assert diagnostics["min_required_row_count"] == 4
+    assert diagnostics["usable_row_count_by_exchange"]["SSE"] == 1
+    assert diagnostics["usable_row_count_by_exchange"]["SZSE"] == 4
+    assert diagnostics["min_required_rows_by_exchange"]["SSE"] == 4
+    assert diagnostics["skipped_incomplete_trade_dates"] == [partial_trade_date]
+    assert diagnostics["terminal_structured_provider_error"] is True
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_rolls_back_when_latest_exchange_rows_are_partial():
+    latest_trade_date = _trade_dates(131)[-1]
+    provider = TuShareETFProvider(
+        pro=FakeTuShareETFProPartialRows(partial_trade_date=latest_trade_date)
+    )
+
+    result = await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    extraction = result.to_extraction()
+    assert extraction["is_estimated"] is False
+    assert extraction["metric_basis"] == "etf_total_size_delta"
+    assert extraction["total_120d"] == pytest.approx(120.0)
+    assert extraction["as_of_date"] == _trade_dates(131)[-2]
+    assert extraction["diagnostics"]["latest_trade_date_was_incomplete"] is True
+    assert extraction["diagnostics"]["skipped_incomplete_trade_dates"] == [
+        latest_trade_date
+    ]
+    assert extraction["diagnostics"]["min_required_rows_by_exchange"]["SSE"] == 4
+    assert extraction["diagnostics"]["min_required_rows_by_exchange"]["SZSE"] == 4
+    assert extraction["diagnostics"]["complete_date_count"] == 130
+
+
+@pytest.mark.asyncio
+async def test_tushare_etf_provider_fails_closed_when_partial_rows_are_majority():
+    provider = TuShareETFProvider(pro=FakeTuShareETFProMostlyPartialRows())
+
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch({"indicator_key": "etf"}, {}, "2026-05-24")
+
+    diagnostics = exc_info.value.diagnostics
+    assert exc_info.value.reason == "policy_gate_blocked"
+    assert diagnostics["missing_exchange"] == "SSE"
+    assert diagnostics["incomplete_reason"] == "partial_exchange_rows"
+    assert diagnostics["usable_row_count"] == 1
+    assert diagnostics["min_required_row_count"] == 4
+    assert diagnostics["min_required_rows_by_exchange"]["SSE"] == 4
+    assert diagnostics["min_required_rows_by_exchange"]["SZSE"] == 4
+    assert diagnostics["terminal_structured_provider_error"] is True
 
 
 @pytest.mark.asyncio
