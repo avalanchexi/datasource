@@ -27,6 +27,7 @@ from datasource.utils.pipeline_gate import (
     filter_effective_quality_blockers,
 )
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
+from datasource.utils.run_lock import DailyRunLock
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 
@@ -204,12 +205,13 @@ def main() -> None:
     )
     _assert_pring_matches_market(market_payload, pring_payload)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
-        shutil.copy2(output_path, output_path.with_suffix(output_path.suffix + ".bak"))
+    with DailyRunLock(run_paths.data_dir, owner="stage4_report_generator").acquire():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            shutil.copy2(output_path, output_path.with_suffix(output_path.suffix + ".bak"))
 
-    print("[INFO] 开始生成 Markdown 报告 ...")
-    generate_report(market_path, pring_path, output_path)
+        print("[INFO] 开始生成 Markdown 报告 ...")
+        generate_report(market_path, pring_path, output_path)
     print(f"[DONE] 报告已写入: {output_path}")
 
 

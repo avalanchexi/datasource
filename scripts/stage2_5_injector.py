@@ -40,6 +40,7 @@ from datasource.utils.policy_rules import (
     is_estimated_allowlisted,
     get_non_blocking_warning_rules,
 )
+from datasource.utils.run_lock import DailyRunLock, run_dir_from_artifact
 from datasource.utils.run_paths import build_run_paths_from_reference
 from datasource.utils.source_trust import is_official_source_url
 from datasource.utils.text_markers import contains_ytd_marker
@@ -4796,9 +4797,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    market_data_file = Path(args.market_data_path).expanduser().resolve()
-    websearch_file = Path(args.websearch_path).expanduser().resolve()
-    output_file = Path(args.output_path).expanduser().resolve()
+    market_data_arg = getattr(args, "market_data_path", getattr(args, "input_file", None))
+    websearch_arg = getattr(args, "websearch_path", getattr(args, "websearch_file", None))
+    output_arg = getattr(args, "output_path", getattr(args, "output_file", None))
+    market_data_file = Path(market_data_arg).expanduser().resolve()
+    websearch_file = Path(websearch_arg).expanduser().resolve()
+    output_file = Path(output_arg).expanduser().resolve()
     gap_monitor_path = (
         Path(args.gap_monitor_path).expanduser().resolve()
         if args.gap_monitor_path
@@ -4818,18 +4822,20 @@ def main() -> None:
         sys.exit(1)
 
     try:
-        inject_websearch_data(
-            market_data_path=market_data_file,
-            websearch_path=websearch_file,
-            output_path=output_file,
-            backfill_trend=args.backfill_trend,
-            date_override=args.date,
-            gap_monitor_path=gap_monitor_path,
-            override_stale=args.override_stale,
-            force_override=args.force_override,
-            trend_history_base_dir=trend_history_base_dir,
-            disable_trend_history_write=args.disable_trend_history_write,
-        )
+        run_dir = run_dir_from_artifact(output_file)
+        with DailyRunLock(run_dir, owner="stage2_5_injector").acquire():
+            inject_websearch_data(
+                market_data_path=market_data_file,
+                websearch_path=websearch_file,
+                output_path=output_file,
+                backfill_trend=args.backfill_trend,
+                date_override=args.date,
+                gap_monitor_path=gap_monitor_path,
+                override_stale=args.override_stale,
+                force_override=args.force_override,
+                trend_history_base_dir=trend_history_base_dir,
+                disable_trend_history_write=args.disable_trend_history_write,
+            )
     except Exception as exc:  # noqa: BLE001
         print(f"\n[ERROR] 数据注入失败: {exc}")
         import traceback

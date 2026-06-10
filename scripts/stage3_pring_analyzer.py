@@ -32,6 +32,7 @@ from datasource.utils.pipeline_gate import (
 )
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.policy_rules import is_estimated_allowlisted, load_policy_rules
+from datasource.utils.run_lock import DailyRunLock, run_dir_from_artifact
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 MIN_COMPLETENESS_DEFAULT = 0.80
@@ -847,18 +848,19 @@ def main() -> None:
         else (market_path.parent / "pring_result.json").resolve()
     )
 
-    asyncio.run(_run_analysis(
-        market_path,
-        output_path,
-        min_completeness=min_completeness,
-        gap_monitor_path=Path(args.gap_monitor) if args.gap_monitor else None,
-        skip_gap_check=args.skip_gap_check,
-        skip_fund_flow_check=args.skip_fund_flow_check,
-        days=days,
-        allow_fallback=args.allow_fallback,
-        allow_estimated=args.allow_estimated,
-        legacy_stage_rules=args.legacy_stage_rules,
-    ))
+    with DailyRunLock(run_dir_from_artifact(output_path), owner="stage3_pring_analyzer").acquire():
+        asyncio.run(_run_analysis(
+            market_path,
+            output_path,
+            min_completeness=min_completeness,
+            gap_monitor_path=Path(args.gap_monitor) if args.gap_monitor else None,
+            skip_gap_check=args.skip_gap_check,
+            skip_fund_flow_check=args.skip_fund_flow_check,
+            days=days,
+            allow_fallback=args.allow_fallback,
+            allow_estimated=args.allow_estimated,
+            legacy_stage_rules=args.legacy_stage_rules,
+        ))
 
 
 if __name__ == "__main__":

@@ -120,6 +120,41 @@ def _load_run_paths_module() -> ModuleType:
     return module
 
 
+def _load_run_lock_module() -> ModuleType:
+    helper_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "datasource"
+        / "utils"
+        / "run_lock.py"
+    )
+    if not helper_path.exists():
+        raise ImportError(
+            f"cannot load run_lock helper; file not found: {helper_path}"
+        )
+
+    module_name = "_stage4_risk_review_run_lock"
+    spec = importlib.util.spec_from_file_location(module_name, helper_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load run_lock helper from: {helper_path}")
+
+    module = importlib.util.module_from_spec(spec)
+    previous_module = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise ImportError(
+            f"cannot execute run_lock helper from {helper_path}: {exc}"
+        ) from exc
+    finally:
+        if previous_module is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous_module
+    return module
+
+
 _run_paths = _load_run_paths_module()
 try:
     build_run_paths = _run_paths.build_run_paths
@@ -128,6 +163,12 @@ except AttributeError as exc:
     raise ImportError(
         "run_paths helper is missing required path builder functions"
     ) from exc
+
+_run_lock = _load_run_lock_module()
+try:
+    DailyRunLock = _run_lock.DailyRunLock
+except AttributeError as exc:
+    raise ImportError("run_lock helper is missing DailyRunLock") from exc
 
 
 def parse_args() -> argparse.Namespace:
@@ -590,10 +631,11 @@ def main() -> None:
         missing_optional_files=missing_optional_files,
     )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(review, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    with DailyRunLock(output_path.parent, owner="stage4_risk_review").acquire():
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as handle:
+            json.dump(review, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
 
     print(f"[DONE] Stage4 risk review written: {output_path}")
     print(
