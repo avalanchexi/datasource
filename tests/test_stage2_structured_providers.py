@@ -401,6 +401,35 @@ async def test_market_quote_page_provider_parses_bcom_investing_close():
 
 
 @pytest.mark.asyncio
+async def test_market_quote_page_provider_uses_previous_weekday_for_monday_bcom_close():
+    html = """
+    <html><body>
+      <h1>Bloomberg Commodity Historical Data</h1>
+      <table>
+        <tr><td>Jun 12, 2026</td><td>129.5000</td><td>130.9746</td></tr>
+      </table>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "bloomberg-commodity-historical-data" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "BCOM"}, {}, "2026-06-15")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(129.5)
+    assert extraction["as_of_date"] == "2026-06-12"
+    assert extraction["diagnostics"]["candidate_close_dates"][:3] == [
+        "2026-06-12",
+        "2026-06-11",
+        "2026-06-10",
+    ]
+    assert extraction["diagnostics"]["as_of_date_basis"] == "date_row"
+
+
+@pytest.mark.asyncio
 async def test_market_quote_page_provider_parses_gsg_stockanalysis_close():
     html = """
     <html><body>
@@ -422,6 +451,100 @@ async def test_market_quote_page_provider_parses_gsg_stockanalysis_close():
     assert extraction["unit"] == "USD"
     assert extraction["as_of_date"] == "2026-06-09"
     assert extraction["diagnostics"]["price_basis"] == "market_close"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_uses_explicit_page_date_for_labelled_gsg_close():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24</div>
+      <div>Market data as of Jun 12, 2026</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["as_of_date"] == "2026-06-12"
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_with_date"
+    assert "2026-06-12" in extraction["diagnostics"]["candidate_close_dates"]
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_uses_nearest_explicit_date_for_labelled_gsg_close():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <section>Older table heading Jun 10, 2026 with enough intervening context to keep this stale heading farther away from the close value than the later page date.</section>
+      <div>Previous Close 31.24</div>
+      <div>Market data as of Jun 12, 2026</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["as_of_date"] == "2026-06-12"
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_with_date"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_prefers_closest_date_over_farther_as_of_date():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24 <span>Jun 11, 2026</span></div>
+      <p>Supplemental context with enough words to move the later date farther away from the close value.</p>
+      <p>Market data as of Jun 12, 2026</p>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["as_of_date"] == "2026-06-11"
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_with_date"
+
+
+@pytest.mark.asyncio
+async def test_market_quote_page_provider_does_not_invent_labelled_close_date():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <div>Previous Close 31.24</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-16")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert "as_of_date" not in extraction
+    assert extraction["diagnostics"]["as_of_date_basis"] == "labelled_close_without_date"
 
 
 @pytest.mark.asyncio
