@@ -1866,7 +1866,9 @@ def _has_forex_structured_compare_evidence(payload: Dict[str, Any], field: str) 
             )
         )
     if field == "change_120d":
-        return change_period in {"120d", "120-day", "120 day", "120日"}
+        if change_period in {"120d", "120-day", "120 day", "120日"}:
+            return True
+        return window_evidence in {"direct_window", "direct window", "direct_120d_window", "direct 120d window"}
     return False
 
 
@@ -1884,8 +1886,14 @@ def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
     )
     chinese_negative_tokens = (
         "缺少",
-        "没有",
+        "缺失",
         "不可得",
+        "不可用",
+        "未披露",
+        "没有数据",
+        "没有窗口",
+        "没有证据",
+        "没有值",
         "无数据",
         "无窗口",
         "无证据",
