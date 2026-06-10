@@ -1847,6 +1847,29 @@ def _has_forex_positive_compare_text(evidence_text: str, field: str) -> bool:
     return any(token in evidence_text for token in _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()))
 
 
+def _has_forex_structured_compare_evidence(payload: Dict[str, Any], field: str) -> bool:
+    change_period = str(payload.get("change_period") or "").strip().lower()
+    window_evidence = str(payload.get("window_evidence") or "").strip().lower()
+    metric_basis = str(payload.get("metric_basis") or "").strip().lower()
+    if field == "daily_change":
+        if change_period in {"daily", "1d", "day", "日频", "日变化"}:
+            return True
+        return any(
+            token in window_evidence or token in metric_basis
+            for token in (
+                "direct_daily_series",
+                "direct daily series",
+                "direct_daily_window",
+                "direct daily window",
+                "previous_close",
+                "previous close",
+            )
+        )
+    if field == "change_120d":
+        return change_period in {"120d", "120-day", "120 day", "120日"}
+    return False
+
+
 def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
     context_tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
     ascii_negative_tokens = (
@@ -1911,6 +1934,8 @@ def _has_forex_compare_evidence(
         return False
     if parsed_value is not None:
         return True
+    if _has_forex_structured_compare_evidence(extraction, field):
+        return True
     if _has_forex_positive_compare_text(evidence_text, field):
         return True
     if not existing_entry:
@@ -1918,6 +1943,8 @@ def _has_forex_compare_evidence(
     existing_evidence_text = _join_forex_compare_evidence_text(existing_entry)
     if _has_negative_forex_compare_marker(existing_evidence_text, field):
         return False
+    if _has_forex_structured_compare_evidence(existing_entry, field):
+        return True
     return _has_forex_positive_compare_text(existing_evidence_text, field)
 
 

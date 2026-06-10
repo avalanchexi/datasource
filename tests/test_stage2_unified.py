@@ -3161,6 +3161,64 @@ def test_stage2_preserves_existing_forex_zero_compare_with_previous_note_evidenc
     assert "compare_fields_pending" not in item
 
 
+def test_stage2_preserves_existing_daily_zero_compare_with_window_evidence():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "daily_change": 0.0,
+                "window_evidence": "direct_daily_series",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-existing-daily-window", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["daily_change"] == 0.0
+    assert "compare_fields_pending" not in item
+
+
+def test_stage2_preserves_existing_daily_zero_compare_with_daily_change_period():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "daily_change": 0.0,
+                "change_period": "daily",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-existing-daily-period", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["daily_change"] == 0.0
+    assert "compare_fields_pending" not in item
+
+
 def test_stage2_rejects_daily_quote_only_as_daily_change_evidence():
     from scripts.stage2_unified_enhancer import _apply_extraction
 
