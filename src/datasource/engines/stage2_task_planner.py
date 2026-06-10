@@ -100,10 +100,16 @@ class Stage2TaskPlanner:
             return None
 
     @staticmethod
-    def _apply_calendar_lag(dt: datetime, lag_days: int) -> datetime:
+    def _apply_completed_business_day_lag(dt: datetime, lag_days: int) -> datetime:
         if lag_days <= 0:
             return dt
-        return dt - timedelta(days=lag_days)
+        cursor = dt
+        remaining = lag_days
+        while remaining > 0:
+            cursor -= timedelta(days=1)
+            if cursor.weekday() < 5:
+                remaining -= 1
+        return cursor
 
     def _build_query_context(
         self,
@@ -119,7 +125,7 @@ class Stage2TaskPlanner:
             closing_date_lag_days = int((profile or {}).get("closing_date_lag_days") or 0)
         except (TypeError, ValueError):
             closing_date_lag_days = 0
-        closing_dt = self._apply_calendar_lag(dt, closing_date_lag_days)
+        closing_dt = self._apply_completed_business_day_lag(dt, closing_date_lag_days)
         ref_year = dt.year
         ref_month = dt.month
         ref_day = dt.day
