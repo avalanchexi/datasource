@@ -1907,7 +1907,21 @@ def _normalize_forex_compare_text(text: Any) -> str:
 
 
 def _has_forex_positive_compare_text(evidence_text: str, field: str) -> bool:
-    return any(token in evidence_text for token in _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()))
+    normalized = _normalize_forex_compare_text(evidence_text)
+    if _has_forex_no_change_evidence(evidence_text):
+        return True
+    if field == "daily_change":
+        tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()) + _FOREX_DAILY_EVIDENCE_MARKERS
+    elif field == "change_120d":
+        tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()) + _FOREX_120D_EVIDENCE_MARKERS
+    else:
+        tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
+    return any(token in evidence_text or token in normalized for token in tokens)
+
+
+def _has_forex_no_change_evidence(text: Any) -> bool:
+    normalized = _normalize_forex_compare_text(text)
+    return any(token in normalized for token in ("no change", "unchanged", "无变化", "没有变化"))
 
 
 def _is_forex_absence_text(text: Any) -> bool:
@@ -1931,6 +1945,7 @@ def _is_forex_absence_text(text: Any) -> bool:
                 "no window",
                 "no evidence",
                 "deepseek no value",
+                "no deepseek key",
                 "缺少",
                 "缺失",
                 "不可得",
@@ -1959,6 +1974,7 @@ def _is_forex_absence_text(text: Any) -> bool:
             "no window",
             "no evidence",
             "deepseek no value",
+            "no deepseek key",
             "missing previous value",
             "no previous value",
             "failed",
@@ -1983,15 +1999,135 @@ def _is_forex_absence_text(text: Any) -> bool:
     )
 
 
+def _is_forex_compare_absence_text(text: Any, field: str) -> bool:
+    raw = str(text or "").strip()
+    normalized = _normalize_forex_compare_text(raw)
+    if not raw:
+        return False
+    if _has_forex_no_change_evidence(raw):
+        non_absence = normalized
+        for token in ("no change", "unchanged", "无变化", "没有变化"):
+            non_absence = non_absence.replace(token, "")
+        if not _is_forex_absence_text(non_absence):
+            return False
+    if _is_forex_absence_text(raw):
+        if field == "change_120d" and any(
+            token in normalized for token in ("missing previous value", "no previous value", "reason=no previous value")
+        ):
+            return False
+        return True
+    if field == "daily_change":
+        return any(
+            marker in normalized
+            for marker in (
+                "missing previous value",
+                "no previous value",
+                "reason=no previous value",
+                "missing daily change",
+                "no daily change",
+                "daily change missing",
+            )
+        )
+    if field == "change_120d":
+        return any(
+            marker in normalized
+            for marker in (
+                "missing 120d",
+                "120d missing",
+                "no 120d",
+                "120d no",
+                "missing 120 day",
+                "120 day missing",
+                "missing 120日",
+                "120日 缺失",
+            )
+        )
+    return False
+
+
+def _is_valid_forex_compare_source_url(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if _is_forex_absence_text(text):
+        return False
+    return bool(re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE))
+
+
+def _is_valid_forex_compare_base_date(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if _is_forex_absence_text(text):
+        return False
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-\d{2}", text))
+
+
+def _is_valid_forex_compare_base_price(value: Any) -> bool:
+    if value is None:
+        return False
+    if _is_forex_absence_text(str(value)):
+        return False
+    return _safe_number(value) is not None
+
+
+def _has_forex_computed_marker(value: Any, markers: Tuple[str, ...], *, reject_daily_prefix: bool = False) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if _is_forex_absence_text(text):
+        return False
+    tokens = set(re.split(r"[^a-z0-9_]+", text))
+    negative_prefixes = ("failed", "failure", "error", "invalid", "unavailable")
+    for token in tokens:
+        if reject_daily_prefix and token.startswith("daily_"):
+            continue
+        if token.startswith(negative_prefixes):
+            continue
+        for marker in markers:
+            marker_token = marker.replace(" ", "_")
+            if token == marker_token or token.endswith(f"_{marker_token}"):
+                return True
+    return False
+
+
 def _has_forex_field_specific_evidence(payload: Dict[str, Any], field: str) -> bool:
     evidence_keys = _FOREX_COMPARE_FIELD_EVIDENCE_KEYS.get(field, ())
     for key in evidence_keys:
         value = payload.get(key)
         if value in (None, "", "N/A"):
             continue
-        if isinstance(value, str) and _is_forex_absence_text(value):
+        if field == "daily_change":
+            if key in {"daily_change_basis", "daily_change_source", "daily_change_window_evidence"}:
+                if _has_forex_computed_marker(value, _FOREX_DAILY_EVIDENCE_MARKERS):
+                    return True
+                continue
+            if key == "daily_change_source_url":
+                if _is_valid_forex_compare_source_url(value):
+                    return True
+                continue
+            if key in {"daily_change_base_date", "base_1d_date"}:
+                if _is_valid_forex_compare_base_date(value):
+                    return True
+                continue
+            if key == "daily_change_base_price" and _is_valid_forex_compare_base_price(value):
+                return True
             continue
-        return True
+        if field == "change_120d":
+            if key in {"change_120d_basis", "change_120d_source", "change_120d_window_evidence"}:
+                if _has_forex_computed_marker(value, _FOREX_120D_EVIDENCE_MARKERS, reject_daily_prefix=True):
+                    return True
+                continue
+            if key == "change_120d_source_url":
+                if _is_valid_forex_compare_source_url(value):
+                    return True
+                continue
+            if key == "change_120d_base_date":
+                if _is_valid_forex_compare_base_date(value):
+                    return True
+                continue
+            if key == "change_120d_base_price" and _is_valid_forex_compare_base_price(value):
+                return True
     return False
 
 
@@ -2014,7 +2150,7 @@ def _has_forex_structured_compare_evidence(payload: Dict[str, Any], field: str) 
 
 
 def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
-    if _is_forex_absence_text(evidence_text):
+    if _is_forex_compare_absence_text(evidence_text, field):
         return True
     context_tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
     ascii_negative_tokens = (
@@ -2120,6 +2256,8 @@ def _scrub_unevidenced_forex_zeroes(
         if _safe_number(entry.get(field)) != 0.0:
             continue
         if _has_forex_compare_evidence(extraction, field, existing_entry or entry):
+            if field in pending_fields:
+                pending_fields = [pending_field for pending_field in pending_fields if pending_field != field]
             continue
         entry.pop(field, None)
         if field not in pending_fields:
@@ -2127,6 +2265,8 @@ def _scrub_unevidenced_forex_zeroes(
 
     if pending_fields:
         entry["compare_fields_pending"] = pending_fields
+    else:
+        entry.pop("compare_fields_pending", None)
 
 
 def _copy_forex_compare_fields(entry: Dict[str, Any], extraction: Dict[str, Any]) -> None:

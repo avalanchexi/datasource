@@ -3057,6 +3057,29 @@ def test_stage2_keeps_forex_zero_compare_when_note_says_no_change():
     assert "compare_fields_pending" not in item
 
 
+def test_stage2_keeps_forex_zero_compare_when_note_is_bare_no_change():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [{"pair": "DXY", "current_rate": 98.5, "daily_change": 0.44}],
+    }
+    task = {"task_id": "fx-4-bare-no-change", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "daily_change": 0.0,
+        "note": "no change",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["daily_change"] == 0.0
+    assert "compare_fields_pending" not in item
+
+
 def test_stage2_keeps_forex_zero_compare_when_chinese_note_says_unchanged():
     from scripts.stage2_unified_enhancer import _apply_extraction
 
@@ -3169,6 +3192,35 @@ def test_stage2_preserves_existing_forex_zero_compare_with_previous_note_evidenc
         ],
     }
     task = {"task_id": "fx-4-existing-note", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["change_120d"] == 0.0
+    assert "compare_fields_pending" not in item
+
+
+def test_stage2_preserves_existing_120d_zero_compare_with_note_direct_window():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "change_120d": 0.0,
+                "note": "direct_window",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-existing-note-direct-window", "indicator_key": "DXY", "category": "forex"}
     extraction = {
         "value": 98.5,
         "current_rate": 98.5,
@@ -3300,6 +3352,35 @@ def test_stage2_preserves_existing_daily_zero_compare_with_window_evidence():
     assert "compare_fields_pending" not in item
 
 
+def test_stage2_preserves_existing_daily_zero_compare_with_source_direct_daily_series():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "daily_change": 0.0,
+                "source": "direct_daily_series",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-existing-daily-source", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["daily_change"] == 0.0
+    assert "compare_fields_pending" not in item
+
+
 def test_stage2_preserves_existing_daily_zero_compare_with_field_specific_evidence():
     from scripts.stage2_unified_enhancer import _apply_extraction
 
@@ -3327,6 +3408,94 @@ def test_stage2_preserves_existing_daily_zero_compare_with_field_specific_eviden
 
     item = market_payload["forex"][0]
     assert item["daily_change"] == 0.0
+    assert "compare_fields_pending" not in item
+
+
+def test_stage2_rejects_provider_only_daily_change_field_evidence():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "daily_change": 0.0,
+                "daily_change_source": "ChinaMoney",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-provider-only-daily", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert "daily_change" not in item
+    assert item["compare_fields_pending"] == ["daily_change"]
+
+
+def test_stage2_rejects_daily_change_rate_as_120d_field_evidence():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "change_120d": 0.0,
+                "change_120d_basis": "daily_change_rate",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-daily-rate-120d", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert "change_120d" not in item
+    assert item["compare_fields_pending"] == ["change_120d"]
+
+
+def test_stage2_preserves_120d_zero_when_daily_missing_reason_is_unrelated():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "DXY",
+                "current_rate": 98.5,
+                "change_120d": 0.0,
+                "change_120d_basis": "trend_history",
+                "note": "reason=no_previous_value",
+            }
+        ],
+    }
+    task = {"task_id": "fx-4-unrelated-daily-missing", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "note": "current quote only",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert item["change_120d"] == 0.0
     assert "compare_fields_pending" not in item
 
 
@@ -3486,6 +3655,29 @@ def test_stage2_rejects_machine_no_value_forex_compare_evidence_text():
         "change_120d": 0.0,
         "manual_reason": "missing_120d_window",
         "note": "deepseek_no_value",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert "change_120d" not in item
+    assert item["compare_fields_pending"] == ["change_120d"]
+
+
+def test_stage2_rejects_no_deepseek_key_forex_compare_evidence_text():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [{"pair": "DXY", "current_rate": 98.5, "change_120d": 0.0}],
+    }
+    task = {"task_id": "fx-6-no-deepseek-key", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "change_120d": 0.0,
+        "note": "no_deepseek_key 120d",
         "source_url": "https://www.investing.com/indices/us-dollar-index",
     }
 
