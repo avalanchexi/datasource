@@ -1921,7 +1921,19 @@ def _has_forex_positive_compare_text(evidence_text: str, field: str) -> bool:
 
 def _has_forex_no_change_evidence(text: Any) -> bool:
     normalized = _normalize_forex_compare_text(text)
+    if _is_forex_no_change_absence_text(normalized):
+        return False
     return any(token in normalized for token in ("no change", "unchanged", "无变化", "没有变化"))
+
+
+def _is_forex_no_change_absence_text(normalized_text: str) -> bool:
+    return any(
+        re.search(pattern, normalized_text)
+        for pattern in (
+            r"\bno change\s+(?:from\s+)?(?:120d|120\s+day|120日)\b",
+            r"\bno change\s+(?:value|data|window|evidence)\b",
+        )
+    )
 
 
 def _is_forex_absence_text(text: Any) -> bool:
@@ -1929,6 +1941,8 @@ def _is_forex_absence_text(text: Any) -> bool:
     normalized = _normalize_forex_compare_text(raw)
     if not raw:
         return False
+    if _is_forex_no_change_absence_text(normalized):
+        return True
     if any(token in normalized for token in ("no change", "unchanged", "无变化", "没有变化")):
         non_absence = normalized
         for token in ("no change", "unchanged", "无变化", "没有变化"):

@@ -3750,6 +3750,29 @@ def test_stage2_rejects_no_deepseek_key_forex_compare_evidence_text():
     assert item["compare_fields_pending"] == ["change_120d"]
 
 
+def test_stage2_rejects_no_change_120d_value_forex_compare_evidence_text():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [{"pair": "DXY", "current_rate": 98.5, "change_120d": 0.0}],
+    }
+    task = {"task_id": "fx-6-no-change-120d-value", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "change_120d": 0.0,
+        "note": "no change_120d value",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert "change_120d" not in item
+    assert item["compare_fields_pending"] == ["change_120d"]
+
+
 def test_stage2_rejects_bare_chinese_unavailable_forex_compare_evidence_text():
     from scripts.stage2_unified_enhancer import _apply_extraction
 
