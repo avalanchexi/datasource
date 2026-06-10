@@ -189,3 +189,33 @@ def test_daily_run_lock_does_not_unlink_same_text_replaced_corrupt_lock(
     assert lock_path.exists()
     assert lock_path.read_text(encoding="utf-8") == ""
     assert lock_path.stat().st_mtime > stale_timestamp
+
+
+@pytest.mark.parametrize("payload_text", ["[]", '"x"'])
+def test_daily_run_lock_rejects_fresh_schema_invalid_lock(tmp_path, payload_text):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    run_dir.mkdir(parents=True)
+    lock_path = run_dir / ".run.lock"
+    lock_path.write_text(payload_text, encoding="utf-8")
+
+    with pytest.raises(RunLockError, match="corrupt"):
+        with DailyRunLock(run_dir, owner="new-session", stale_after_seconds=60).acquire():
+            pass
+
+    assert lock_path.read_text(encoding="utf-8") == payload_text
+
+
+@pytest.mark.parametrize("payload_text", ["[]", '"x"'])
+def test_daily_run_lock_reclaims_stale_schema_invalid_lock(tmp_path, payload_text):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    run_dir.mkdir(parents=True)
+    lock_path = run_dir / ".run.lock"
+    lock_path.write_text(payload_text, encoding="utf-8")
+    old_timestamp = time.time() - 1000
+    os.utime(lock_path, (old_timestamp, old_timestamp))
+
+    with DailyRunLock(run_dir, owner="new-session", stale_after_seconds=1).acquire():
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["owner"] == "new-session"
+
+    assert not lock_path.exists()

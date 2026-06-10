@@ -19,6 +19,10 @@ _COMPACT_DATE_RE = re.compile(r"^\d{8}$")
 _CORRUPT_LOCK_MARKER = "__corrupt_lock__"
 
 
+class _CorruptLockPayload(ValueError):
+    pass
+
+
 def run_dir_from_date(date_value: str, runs_root: Path = Path("data/runs")) -> Path:
     if _DASHED_DATE_RE.match(date_value):
         compact_date = date_value.replace("-", "")
@@ -133,7 +137,7 @@ class DailyRunLock:
                 "created_at": 0,
                 "token": None,
             }
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, _CorruptLockPayload) as exc:
             try:
                 raw_text = lock_path.read_text(encoding="utf-8")
                 mtime = lock_path.stat().st_mtime
@@ -169,7 +173,10 @@ class DailyRunLock:
 
     @staticmethod
     def _read_lock(lock_path: Path) -> Dict[str, Any]:
-        return json.loads(lock_path.read_text(encoding="utf-8"))
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise _CorruptLockPayload("run lock payload must be a JSON object")
+        return payload
 
     @staticmethod
     def _is_corrupt_lock(payload: Dict[str, Any]) -> bool:
@@ -180,7 +187,7 @@ class DailyRunLock:
     ) -> bool:
         try:
             current = self._read_lock(lock_path)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (FileNotFoundError, json.JSONDecodeError, _CorruptLockPayload, OSError):
             return False
         if current != expected:
             return False
