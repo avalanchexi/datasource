@@ -167,8 +167,9 @@ except AttributeError as exc:
 _run_lock = _load_run_lock_module()
 try:
     DailyRunLock = _run_lock.DailyRunLock
+    run_dir_from_artifact = _run_lock.run_dir_from_artifact
 except AttributeError as exc:
-    raise ImportError("run_lock helper is missing DailyRunLock") from exc
+    raise ImportError("run_lock helper is missing required lock helpers") from exc
 
 
 def parse_args() -> argparse.Namespace:
@@ -539,7 +540,7 @@ def build_review(
 def _resolve_explicit_market_paths(
     args: argparse.Namespace,
     market_path: Path,
-    market_payload: JsonObject,
+    market_payload: Optional[JsonObject] = None,
 ) -> Tuple[Path, Path, Path, Path]:
     needs_run_paths = not (args.gap_monitor and args.quality_metrics and args.output)
     run_paths = None
@@ -576,10 +577,6 @@ def resolve_paths(
 ) -> Tuple[Path, Path, Path, Path]:
     if args.market_data:
         market_path = Path(args.market_data)
-        if market_payload is None:
-            raise ValueError(
-                "market_payload is required when resolving explicit --market-data paths"
-            )
         return _resolve_explicit_market_paths(args, market_path, market_payload)
     elif args.date:
         run_paths = build_run_paths(args.date)
@@ -601,17 +598,23 @@ def resolve_paths(
     return market_path, gap_path, quality_path, output_path
 
 
-def main() -> None:
-    args = parse_args()
-    if args.market_data:
-        market_path = Path(args.market_data)
-        market_payload = _load_json(market_path, required=True)
-        assert market_payload is not None
-        market_path, gap_path, quality_path, output_path = resolve_paths(
-            args, market_payload
-        )
-    else:
-        market_path, gap_path, quality_path, output_path = resolve_paths(args)
+def _try_run_dir_from_artifact(path: Path) -> Optional[Path]:
+    try:
+        return run_dir_from_artifact(path)
+    except ValueError:
+        return None
+
+
+def _write_review_under_lock(
+    args: argparse.Namespace,
+    market_path: Path,
+    gap_path: Path,
+    quality_path: Path,
+    output_path: Path,
+    *,
+    market_payload: Optional[JsonObject] = None,
+) -> JsonObject:
+    if market_payload is None:
         market_payload = _load_json(market_path, required=True)
         assert market_payload is not None
 
@@ -631,11 +634,57 @@ def main() -> None:
         missing_optional_files=missing_optional_files,
     )
 
-    with DailyRunLock(output_path.parent, owner="stage4_risk_review").acquire():
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with output_path.open("w", encoding="utf-8") as handle:
-            json.dump(review, handle, ensure_ascii=False, indent=2)
-            handle.write("\n")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as handle:
+        json.dump(review, handle, ensure_ascii=False, indent=2)
+        handle.write("\n")
+    return review
+
+
+def main() -> None:
+    args = parse_args()
+    if args.market_data:
+        initial_market_path = Path(args.market_data)
+        daily_run_dir = _try_run_dir_from_artifact(initial_market_path)
+        if daily_run_dir is not None:
+            market_path, gap_path, quality_path, output_path = resolve_paths(args)
+            with DailyRunLock(daily_run_dir, owner="stage4_risk_review").acquire():
+                review = _write_review_under_lock(
+                    args,
+                    market_path,
+                    gap_path,
+                    quality_path,
+                    output_path,
+                )
+        else:
+            fallback_lock_dir = (
+                Path(args.output).parent if args.output else initial_market_path.parent
+            )
+            with DailyRunLock(fallback_lock_dir, owner="stage4_risk_review").acquire():
+                market_payload = _load_json(initial_market_path, required=True)
+                assert market_payload is not None
+                market_path, gap_path, quality_path, output_path = resolve_paths(
+                    args,
+                    market_payload,
+                )
+                review = _write_review_under_lock(
+                    args,
+                    market_path,
+                    gap_path,
+                    quality_path,
+                    output_path,
+                    market_payload=market_payload,
+                )
+    else:
+        market_path, gap_path, quality_path, output_path = resolve_paths(args)
+        with DailyRunLock(run_dir_from_artifact(market_path), owner="stage4_risk_review").acquire():
+            review = _write_review_under_lock(
+                args,
+                market_path,
+                gap_path,
+                quality_path,
+                output_path,
+            )
 
     print(f"[DONE] Stage4 risk review written: {output_path}")
     print(

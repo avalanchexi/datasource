@@ -31,11 +31,38 @@ class SpyLock:
         return False
 
 
+class OrderedSpyLock:
+    calls = []
+    order = []
+
+    def __init__(self, run_dir, owner, *args, **kwargs):
+        self.run_dir = Path(run_dir)
+        self.owner = owner
+        OrderedSpyLock.calls.append((self.run_dir, owner))
+
+    def acquire(self):
+        return self
+
+    def __enter__(self):
+        OrderedSpyLock.order.append("lock_entered")
+        OrderedSpyLock.calls.append(("entered", self.owner))
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        OrderedSpyLock.order.append("lock_exited")
+        OrderedSpyLock.calls.append(("exited", self.owner))
+        return False
+
+
 @pytest.fixture(autouse=True)
 def reset_spy_lock():
     SpyLock.calls = []
+    OrderedSpyLock.calls = []
+    OrderedSpyLock.order = []
     yield
     SpyLock.calls = []
+    OrderedSpyLock.calls = []
+    OrderedSpyLock.order = []
 
 
 def test_stage2_5_main_acquires_daily_lock(tmp_path, monkeypatch):
@@ -52,20 +79,18 @@ def test_stage2_5_main_acquires_daily_lock(tmp_path, monkeypatch):
         stage2_5,
         "parse_args",
         lambda: argparse.Namespace(
-                input_file=str(input_path),
-                websearch_file=str(manual_path),
-                output_file=str(output_path),
-                gap_monitor_path=None,
-                trend_history_base_dir=None,
-                backfill_trend=True,
-                date=None,
-                override_stale=True,
-                no_override_stale=False,
-                force_override=False,
-                no_trend_history=False,
-                disable_trend_history_write=False,
-            ),
-        )
+            market_data_path=str(input_path),
+            websearch_path=str(manual_path),
+            output_path=str(output_path),
+            gap_monitor_path=None,
+            trend_history_base_dir=None,
+            backfill_trend=True,
+            date=None,
+            override_stale=True,
+            force_override=False,
+            disable_trend_history_write=False,
+        ),
+    )
     monkeypatch.setattr(stage2_5, "DailyRunLock", SpyLock)
 
     def fake_inject_websearch_data(**kwargs):
@@ -158,23 +183,38 @@ def test_stage4_report_main_acquires_daily_lock(tmp_path, monkeypatch):
             allow_fund_flow_downgrade=True,
         ),
     )
-    monkeypatch.setattr(stage4_report, "DailyRunLock", SpyLock)
+    monkeypatch.setattr(stage4_report, "DailyRunLock", OrderedSpyLock)
     monkeypatch.setattr(stage4_report, "build_run_paths_from_reference", lambda *a, **k: run_paths)
-    monkeypatch.setattr(stage4_report, "build_pipeline_quality_state", lambda *a, **k: {})
+    original_json_load = stage4_report.json.load
+
+    def tracking_json_load(handle):
+        OrderedSpyLock.order.append("json_load")
+        return original_json_load(handle)
+
+    def tracking_build_pipeline_quality_state(*args, **kwargs):
+        OrderedSpyLock.order.append("quality_state")
+        return {}
+
+    monkeypatch.setattr(stage4_report.json, "load", tracking_json_load)
+    monkeypatch.setattr(stage4_report, "build_pipeline_quality_state", tracking_build_pipeline_quality_state)
     monkeypatch.setattr(stage4_report, "filter_effective_gap_items", lambda *a, **k: [])
     monkeypatch.setattr(stage4_report, "filter_effective_quality_blockers", lambda *a, **k: [])
     monkeypatch.setattr(stage4_report, "assert_no_fallback_pring_result", lambda *a, **k: None)
     monkeypatch.setattr(stage4_report, "_assert_stage4_quality_gate", lambda *a, **k: None)
 
     def fake_generate_report(market, pring, output):
+        OrderedSpyLock.order.append("generate_report")
         calls.append((Path(market), Path(pring), Path(output)))
 
     monkeypatch.setattr(stage4_report, "generate_report", fake_generate_report)
 
     stage4_report.main()
 
-    assert SpyLock.calls[0] == (run_dir.resolve(), "stage4_report_generator")
-    assert ("entered", "stage4_report_generator") in SpyLock.calls
+    assert OrderedSpyLock.calls[0] == (run_dir.resolve(), "stage4_report_generator")
+    assert ("entered", "stage4_report_generator") in OrderedSpyLock.calls
+    assert OrderedSpyLock.order.index("lock_entered") < OrderedSpyLock.order.index("json_load")
+    assert OrderedSpyLock.order.index("lock_entered") < OrderedSpyLock.order.index("quality_state")
+    assert OrderedSpyLock.order.index("lock_entered") < OrderedSpyLock.order.index("generate_report")
     assert calls == [(market_path, pring_path, report_path)]
 
 
@@ -183,7 +223,7 @@ def test_stage4_risk_review_main_acquires_daily_lock(tmp_path, monkeypatch):
     market_path = run_dir / "market_data_complete.json"
     gap_path = run_dir / "gap_monitor.json"
     quality_path = run_dir / "quality_metrics.json"
-    output_path = run_dir / "stage4_risk_review.json"
+    output_path = tmp_path / "reports" / "stage4_risk_review.json"
     review = {
         "metadata": {
             "blocker_count": 0,
@@ -204,24 +244,28 @@ def test_stage4_risk_review_main_acquires_daily_lock(tmp_path, monkeypatch):
             allow_fund_flow_downgrade=False,
         ),
     )
-    monkeypatch.setattr(stage4_risk, "DailyRunLock", SpyLock)
-    monkeypatch.setattr(
-        stage4_risk,
-        "_load_json",
-        lambda path, *, required: {"metadata": {"date": "2026-06-10"}} if required else {},
-    )
-    monkeypatch.setattr(
-        stage4_risk,
-        "resolve_paths",
-        lambda args, market_payload=None: (market_path, gap_path, quality_path, output_path),
-    )
-    monkeypatch.setattr(stage4_risk, "build_review", lambda *a, **k: review)
+    monkeypatch.setattr(stage4_risk, "DailyRunLock", OrderedSpyLock)
+
+    def fake_load_json(path, *, required):
+        OrderedSpyLock.order.append(f"load:{Path(path).name}")
+        return {"metadata": {"date": "2026-06-10"}} if required else {}
+
+    def fake_build_review(*args, **kwargs):
+        OrderedSpyLock.order.append("build_review")
+        return review
+
+    monkeypatch.setattr(stage4_risk, "_load_json", fake_load_json)
+    monkeypatch.setattr(stage4_risk, "build_review", fake_build_review)
 
     stage4_risk.main()
 
-    assert SpyLock.calls[0] == (run_dir.resolve(), "stage4_risk_review")
-    assert ("entered", "stage4_risk_review") in SpyLock.calls
+    assert OrderedSpyLock.calls[0] == (run_dir.resolve(), "stage4_risk_review")
+    assert ("entered", "stage4_risk_review") in OrderedSpyLock.calls
+    assert OrderedSpyLock.order.index("lock_entered") < OrderedSpyLock.order.index(
+        "load:market_data_complete.json"
+    )
+    assert OrderedSpyLock.order.index("lock_entered") < OrderedSpyLock.order.index("build_review")
     assert output_path.exists()
-    assert SpyLock.calls.index(("entered", "stage4_risk_review")) < SpyLock.calls.index(
+    assert OrderedSpyLock.calls.index(("entered", "stage4_risk_review")) < OrderedSpyLock.calls.index(
         ("exited", "stage4_risk_review")
     )
