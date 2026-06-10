@@ -75,7 +75,7 @@ class DailyRunLock:
         except FileNotFoundError:
             self._acquired = False
             return
-        except (json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, _CorruptLockPayload, OSError):
             return
 
         if payload.get("token") != self.token:

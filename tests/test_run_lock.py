@@ -219,3 +219,14 @@ def test_daily_run_lock_reclaims_stale_schema_invalid_lock(tmp_path, payload_tex
         assert payload["owner"] == "new-session"
 
     assert not lock_path.exists()
+
+
+def test_daily_run_lock_release_ignores_schema_invalid_replacement(tmp_path):
+    run_dir = tmp_path / "data" / "runs" / "20260610"
+    replacement_payload = "[]"
+
+    with DailyRunLock(run_dir, owner="stage3_pring_analyzer").acquire():
+        lock_path = run_dir / ".run.lock"
+        lock_path.write_text(replacement_payload, encoding="utf-8")
+
+    assert lock_path.read_text(encoding="utf-8") == replacement_payload
