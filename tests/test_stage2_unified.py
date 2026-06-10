@@ -2912,6 +2912,61 @@ def test_apply_extraction_writes_to_array_sections():
     assert payload["bonds"][0]["current_yield"] == pytest.approx(2.15)
 
 
+def test_stage2_scrubs_forex_zero_compare_fields_without_evidence():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [
+            {
+                "pair": "USDCNY",
+                "name": "USD/CNY在岸",
+                "current_rate": 7.18,
+                "daily_change": 0.0,
+                "change_120d": 0.0,
+            }
+        ],
+    }
+    task = {"task_id": "fx-1", "indicator_key": "USDCNY", "category": "forex"}
+    extraction = {
+        "value": 7.185,
+        "current_rate": 7.185,
+        "source_url": "https://www.chinamoney.com.cn/",
+        "source": "ChinaMoney structured",
+        "note": "current quote only",
+    }
+
+    target = _apply_extraction(market_payload, task, extraction)
+
+    item = market_payload["forex"][0]
+    assert target == "forex"
+    assert item["current_rate"] == 7.185
+    assert "daily_change" not in item
+    assert "change_120d" not in item
+    assert item["compare_fields_pending"] == ["daily_change", "change_120d"]
+
+
+def test_stage2_keeps_forex_zero_compare_fields_with_explicit_evidence():
+    from scripts.stage2_unified_enhancer import _apply_extraction
+
+    market_payload = {
+        "metadata": {"date": "2026-06-10"},
+        "forex": [{"pair": "DXY", "current_rate": 98.5, "change_120d": 0.0}],
+    }
+    task = {"task_id": "fx-2", "indicator_key": "DXY", "category": "forex"}
+    extraction = {
+        "value": 98.5,
+        "current_rate": 98.5,
+        "change_120d": 0.0,
+        "metric_basis": "120d direct window",
+        "source_url": "https://www.investing.com/indices/us-dollar-index",
+    }
+
+    _apply_extraction(market_payload, task, extraction)
+
+    assert market_payload["forex"][0]["change_120d"] == 0.0
+
+
 def test_apply_extraction_upserts_forex_when_section_missing_item():
     payload = {
         "metadata": {"date": "2026-02-06"},

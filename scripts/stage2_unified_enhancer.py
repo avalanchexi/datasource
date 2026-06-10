@@ -1816,6 +1816,46 @@ def _source_label_for_task(
     return "tavily+deepseek" if source_url else "tavily_regex"
 
 
+FOREX_COMPARE_FIELDS = ("daily_change", "change_120d")
+
+
+def _has_forex_compare_evidence(extraction: Dict[str, Any], field: str) -> bool:
+    if field in extraction and _safe_number(extraction.get(field)) is not None:
+        return True
+
+    evidence_text = " ".join(
+        str(extraction.get(text_field) or "")
+        for text_field in ("metric_basis", "change_period", "note", "source", "estimation_method")
+    ).lower()
+    evidence_tokens = {
+        "change_120d": ("120d", "120日", "120-day", "direct window"),
+        "daily_change": ("daily", "日变化", "day change", "previous close"),
+    }
+    return any(token in evidence_text for token in evidence_tokens.get(field, ()))
+
+
+def _scrub_unevidenced_forex_zeroes(entry: Dict[str, Any], extraction: Dict[str, Any]) -> None:
+    pending = entry.get("compare_fields_pending")
+    if isinstance(pending, list):
+        pending_fields = list(pending)
+    elif pending:
+        pending_fields = [pending]
+    else:
+        pending_fields = []
+
+    for field in FOREX_COMPARE_FIELDS:
+        if _safe_number(entry.get(field)) != 0.0:
+            continue
+        if _has_forex_compare_evidence(extraction, field):
+            continue
+        entry.pop(field, None)
+        if field not in pending_fields:
+            pending_fields.append(field)
+
+    if pending_fields:
+        entry["compare_fields_pending"] = pending_fields
+
+
 def _apply_extraction(
     market_payload: Dict[str, Any],
     task: Dict[str, Any],
@@ -1984,6 +2024,7 @@ def _apply_extraction(
             continue
         if item.get("pair") == indicator_key or item.get("symbol") == indicator_key:
             _write_common_fields(item, "current_rate")
+            _scrub_unevidenced_forex_zeroes(item, extraction)
             if not item.get("date"):
                 item["date"] = as_of_date or report_period or item.get("date") or ""
             return "forex"
