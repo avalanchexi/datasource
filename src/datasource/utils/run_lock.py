@@ -54,6 +54,8 @@ def run_dir_from_artifact(path: Union[os.PathLike, str]) -> Path:
             run_date = parts[index + 2]
             has_artifact_name = len(parts) > index + 3
             if has_artifact_name:
+                if not _COMPACT_DATE_RE.match(run_date):
+                    break
                 try:
                     _compact_run_date(run_date)
                 except ValueError:

@@ -43,6 +43,12 @@ def test_run_dir_from_artifact_rejects_invalid_calendar_run_date(tmp_path):
         run_dir_from_artifact(artifact)
 
 
+def test_run_dir_from_artifact_rejects_dashed_run_date(tmp_path):
+    artifact = tmp_path / "data" / "runs" / "2026-06-10" / "x.json"
+    with pytest.raises(ValueError, match="data/runs/YYYYMMDD"):
+        run_dir_from_artifact(artifact)
+
+
 def test_daily_run_lock_rejects_second_live_owner(tmp_path):
     run_dir = tmp_path / "data" / "runs" / "20260610"
     with DailyRunLock(run_dir, owner="stage2_5_injector").acquire():
