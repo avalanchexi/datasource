@@ -1836,6 +1836,65 @@ _FOREX_COMPARE_TEXT_FIELDS = (
     "estimation_method",
     "note",
     "source",
+    "manual_reason",
+    "manual_required_reason",
+)
+_FOREX_COMPARE_FIELD_EVIDENCE_KEYS = {
+    "daily_change": (
+        "daily_change_basis",
+        "daily_change_source",
+        "daily_change_source_url",
+        "daily_change_window_evidence",
+        "daily_change_base_date",
+        "daily_change_base_price",
+        "base_1d_date",
+        "change_1d",
+        "change_1d_pct",
+        "reason_1d",
+        "previous_value",
+        "previous_rate",
+        "previous_price",
+    ),
+    "change_120d": (
+        "change_120d_basis",
+        "change_120d_source",
+        "change_120d_source_url",
+        "change_120d_window_evidence",
+        "change_120d_base_date",
+        "change_120d_base_price",
+    ),
+}
+_FOREX_DAILY_EVIDENCE_MARKERS = (
+    "direct_daily_series",
+    "direct daily series",
+    "direct_daily_window",
+    "direct daily window",
+    "trend_history_direct_window",
+    "trend history direct window",
+    "trend_history_full_window",
+    "trend history full window",
+    "previous_close",
+    "previous close",
+    "change_1d",
+    "change 1d",
+    "change_rate",
+    "change rate",
+    "trend_history",
+    "trend history",
+)
+_FOREX_120D_EVIDENCE_MARKERS = (
+    "direct_window",
+    "direct window",
+    "direct_120d_window",
+    "direct 120d window",
+    "trend_history_direct_window",
+    "trend history direct window",
+    "trend_history_full_window",
+    "trend history full window",
+    "change_rate",
+    "change rate",
+    "trend_history",
+    "trend history",
 )
 
 
@@ -1843,8 +1902,97 @@ def _join_forex_compare_evidence_text(extraction: Dict[str, Any]) -> str:
     return " ".join(str(extraction.get(field) or "") for field in _FOREX_COMPARE_TEXT_FIELDS).lower()
 
 
+def _normalize_forex_compare_text(text: Any) -> str:
+    return re.sub(r"[_-]+", " ", str(text or "").strip().lower())
+
+
 def _has_forex_positive_compare_text(evidence_text: str, field: str) -> bool:
     return any(token in evidence_text for token in _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ()))
+
+
+def _is_forex_absence_text(text: Any) -> bool:
+    raw = str(text or "").strip().lower()
+    normalized = _normalize_forex_compare_text(raw)
+    if not raw:
+        return False
+    if any(token in normalized for token in ("no change", "unchanged", "无变化", "没有变化")):
+        non_absence = normalized
+        for token in ("no change", "unchanged", "无变化", "没有变化"):
+            non_absence = non_absence.replace(token, "")
+        if not any(
+            marker in non_absence
+            for marker in (
+                "missing",
+                "without",
+                "unavailable",
+                "not available",
+                "no data",
+                "no value",
+                "no window",
+                "no evidence",
+                "deepseek no value",
+                "缺少",
+                "缺失",
+                "不可得",
+                "不可用",
+                "未披露",
+                "没有数据",
+                "没有窗口",
+                "没有证据",
+                "没有值",
+                "无数据",
+                "无窗口",
+                "无证据",
+                "无值",
+            )
+        ):
+            return False
+    return any(
+        marker in normalized
+        for marker in (
+            "missing",
+            "without",
+            "unavailable",
+            "not available",
+            "no data",
+            "no value",
+            "no window",
+            "no evidence",
+            "deepseek no value",
+            "missing previous value",
+            "no previous value",
+            "failed",
+            "failure",
+            "error",
+            "invalid",
+            "缺少",
+            "缺失",
+            "不可得",
+            "不可用",
+            "未披露",
+            "没有数据",
+            "没有窗口",
+            "没有证据",
+            "没有值",
+            "无数据",
+            "无窗口",
+            "无证据",
+            "无值",
+            "失败",
+        )
+    )
+
+
+def _has_forex_field_specific_evidence(payload: Dict[str, Any], field: str) -> bool:
+    evidence_keys = _FOREX_COMPARE_FIELD_EVIDENCE_KEYS.get(field, ())
+    for key in evidence_keys:
+        value = payload.get(key)
+        if value in (None, "", "N/A"):
+            continue
+        if isinstance(value, str) and _is_forex_absence_text(value):
+            continue
+        return True
+    return False
 
 
 def _has_forex_structured_compare_evidence(payload: Dict[str, Any], field: str) -> bool:
@@ -1856,23 +2004,18 @@ def _has_forex_structured_compare_evidence(payload: Dict[str, Any], field: str) 
             return True
         return any(
             token in window_evidence or token in metric_basis
-            for token in (
-                "direct_daily_series",
-                "direct daily series",
-                "direct_daily_window",
-                "direct daily window",
-                "previous_close",
-                "previous close",
-            )
+            for token in _FOREX_DAILY_EVIDENCE_MARKERS
         )
     if field == "change_120d":
         if change_period in {"120d", "120-day", "120 day", "120日"}:
             return True
-        return window_evidence in {"direct_window", "direct window", "direct_120d_window", "direct 120d window"}
+        return any(token in window_evidence or token in metric_basis for token in _FOREX_120D_EVIDENCE_MARKERS)
     return False
 
 
 def _has_negative_forex_compare_marker(evidence_text: str, field: str) -> bool:
+    if _is_forex_absence_text(evidence_text):
+        return True
     context_tokens = _FOREX_COMPARE_EVIDENCE_TOKENS.get(field, ())
     ascii_negative_tokens = (
         "missing",
@@ -1940,7 +2083,9 @@ def _has_forex_compare_evidence(
     evidence_text = _join_forex_compare_evidence_text(extraction)
     if _has_negative_forex_compare_marker(evidence_text, field):
         return False
-    if parsed_value is not None:
+    if parsed_value is not None and parsed_value != 0.0:
+        return True
+    if _has_forex_field_specific_evidence(extraction, field):
         return True
     if _has_forex_structured_compare_evidence(extraction, field):
         return True
@@ -1951,6 +2096,8 @@ def _has_forex_compare_evidence(
     existing_evidence_text = _join_forex_compare_evidence_text(existing_entry)
     if _has_negative_forex_compare_marker(existing_evidence_text, field):
         return False
+    if _has_forex_field_specific_evidence(existing_entry, field):
+        return True
     if _has_forex_structured_compare_evidence(existing_entry, field):
         return True
     return _has_forex_positive_compare_text(existing_evidence_text, field)
