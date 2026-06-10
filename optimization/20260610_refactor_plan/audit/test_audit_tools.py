@@ -3,6 +3,7 @@
 import textwrap
 
 import import_graph
+import merge_audit
 
 
 def test_module_name_for_maps_src_paths():
@@ -49,3 +50,29 @@ def test_reachability_includes_ancestor_packages():
     entries = {"scripts/x.py": ["datasource.utils.coercion"]}
     seen = import_graph.reachable_from_entries(known, edges, entries)
     assert seen == {"datasource", "datasource.utils", "datasource.utils.coercion"}
+
+
+def test_classify_tiers():
+    assert merge_audit.classify(True, 85.0) == "runtime_used"
+    assert merge_audit.classify(True, 20.0) == "runtime_used"
+    assert merge_audit.classify(True, 5.0) == "imported_only"
+    # --source 模式下 coverage 会给未导入文件记 0%,必须归入静态档
+    assert merge_audit.classify(True, 0.0) == "reachable_not_run"
+    assert merge_audit.classify(True, None) == "reachable_not_run"
+    assert merge_audit.classify(False, None) == "unreachable"
+    assert merge_audit.classify(False, 0.0) == "unreachable"
+
+
+def test_coverage_by_module_maps_file_keys():
+    payload = {
+        "files": {
+            "src/datasource/utils/coercion.py": {
+                "summary": {"percent_covered": 73.2}
+            },
+            "scripts/stage3_pring_analyzer.py": {
+                "summary": {"percent_covered": 50.0}
+            },
+        }
+    }
+    out = merge_audit.coverage_by_module(payload)
+    assert out == {"datasource.utils.coercion": 73.2}
