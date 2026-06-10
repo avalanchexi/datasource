@@ -30,6 +30,7 @@ QUOTE_PAGES: Dict[str, Dict[str, Any]] = {
         "label": "Bloomberg Commodity Historical Data",
         "required_tokens": ["bloomberg", "commodity", "historical data"],
         "bad_tokens": ["total return", "bcomtr", "bcomx", "sub-index", "sub index"],
+        "parse_strategy": "date_row_first",
         "price_basis": "official_close",
         "source": "Investing structured historical close page",
         "confidence": 0.82,
@@ -40,6 +41,7 @@ QUOTE_PAGES: Dict[str, Dict[str, Any]] = {
         "label": "iShares S&P GSCI Commodity-Indexed Trust",
         "required_tokens": ["ishares", "s&p gsci", "commodity-indexed trust"],
         "bad_tokens": [],
+        "parse_strategy": "labelled_close_first",
         "price_basis": "market_close",
         "source": "StockAnalysis structured ETF quote page",
         "confidence": 0.82,
@@ -83,7 +85,11 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
         text = self._normalize_text(raw_text)
         self._validate_page(key, text, config, url)
         expected_close_date = self._expected_close_date(reference_date)
-        parsed = self._parse_close_value(text, expected_close_date)
+        parsed = self._parse_close_value(
+            text,
+            expected_close_date,
+            str(config.get("parse_strategy") or "date_row_first"),
+        )
         if parsed is None:
             raise StructuredProviderError(
                 provider=self.name,
@@ -136,25 +142,36 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
     ) -> None:
         lower_text = text.lower()
         bad_tokens = [str(token).lower() for token in config.get("bad_tokens") or []]
-        if any(token in lower_text for token in bad_tokens):
+        matched_bad_tokens = [token for token in bad_tokens if token in lower_text]
+        if matched_bad_tokens:
             raise StructuredProviderError(
                 provider=self.name,
                 indicator_key=key,
                 reason="rejected_page",
                 message="Market quote page matched a rejected instrument token",
-                diagnostics={"url": url},
+                diagnostics={
+                    "url": url,
+                    "matched_bad_tokens": matched_bad_tokens,
+                },
             )
 
         required_tokens = [
             str(token).lower() for token in config.get("required_tokens") or []
         ]
-        if not all(token in lower_text for token in required_tokens):
+        missing_required_tokens = [
+            token for token in required_tokens if token not in lower_text
+        ]
+        if missing_required_tokens:
             raise StructuredProviderError(
                 provider=self.name,
                 indicator_key=key,
                 reason="rejected_page",
                 message="Market quote page did not contain required instrument tokens",
-                diagnostics={"url": url, "required_tokens": required_tokens},
+                diagnostics={
+                    "url": url,
+                    "required_tokens": required_tokens,
+                    "missing_required_tokens": missing_required_tokens,
+                },
             )
 
     @staticmethod
@@ -164,6 +181,35 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
 
     @classmethod
     def _parse_close_value(
+        cls,
+        text: str,
+        expected_close_date: str,
+        parse_strategy: str = "date_row_first",
+    ) -> Optional[Tuple[float, str, str]]:
+        parsers = {
+            "date_row_first": (
+                cls._parse_date_row_close_value,
+                cls._parse_labelled_close_value,
+            ),
+            "labelled_close_first": (
+                cls._parse_labelled_close_value,
+                cls._parse_date_row_close_value,
+            ),
+        }.get(
+            parse_strategy,
+            (
+                cls._parse_date_row_close_value,
+                cls._parse_labelled_close_value,
+            ),
+        )
+        for parser in parsers:
+            parsed = parser(text, expected_close_date)
+            if parsed is not None:
+                return parsed
+        return None
+
+    @classmethod
+    def _parse_date_row_close_value(
         cls,
         text: str,
         expected_close_date: str,
@@ -181,7 +227,14 @@ class MarketQuotePageProvider(Stage2StructuredProvider):
             if value is not None:
                 evidence = "{0}{1}".format(date_match.group(1), tail[:80]).strip()
                 return value, expected_close_date, evidence
+        return None
 
+    @classmethod
+    def _parse_labelled_close_value(
+        cls,
+        text: str,
+        expected_close_date: str,
+    ) -> Optional[Tuple[float, str, str]]:
         close_match = re.search(
             r"\b(?:previous\s+close|close)\s+([0-9][0-9,]*(?:\.\d+)?)\b",
             text,

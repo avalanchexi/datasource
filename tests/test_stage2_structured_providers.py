@@ -335,6 +335,31 @@ async def test_market_quote_page_provider_parses_gsg_stockanalysis_close():
 
 
 @pytest.mark.asyncio
+async def test_market_quote_page_provider_prefers_gsg_labelled_close():
+    html = """
+    <html><body>
+      <h1>iShares S&P GSCI Commodity-Indexed Trust</h1>
+      <section>
+        <span>Jun 09, 2026</span>
+        <span>Volume 637017</span>
+      </section>
+      <div>Previous Close 31.24</div>
+    </body></html>
+    """
+
+    async def fetch_text(url, params=None):
+        assert "stockanalysis.com/etf/gsg" in url
+        return html
+
+    provider = MarketQuotePageProvider(fetch_text=fetch_text)
+    result = await provider.fetch({"indicator_key": "GSG"}, {}, "2026-06-10")
+
+    extraction = result.to_extraction()
+    assert extraction["value"] == pytest.approx(31.24)
+    assert extraction["value"] != pytest.approx(637017)
+
+
+@pytest.mark.asyncio
 async def test_market_quote_page_provider_rejects_bcom_total_return_page():
     async def fetch_text(url, params=None):
         return "Bloomberg Commodity Total Return Index BCOMTR 295.44 Jun 09, 2026"
