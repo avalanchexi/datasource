@@ -6,6 +6,7 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterator, Optional, Union
 
@@ -17,6 +18,7 @@ class RunLockError(RuntimeError):
 _DASHED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _COMPACT_DATE_RE = re.compile(r"^\d{8}$")
 _CORRUPT_LOCK_MARKER = "__corrupt_lock__"
+_REQUIRED_LOCK_KEYS = {"owner", "pid", "hostname", "created_at", "token"}
 
 
 class _CorruptLockPayload(ValueError):
@@ -30,6 +32,12 @@ def run_dir_from_date(date_value: str, runs_root: Path = Path("data/runs")) -> P
         compact_date = date_value
     else:
         raise ValueError("date_value must use YYYY-MM-DD or YYYYMMDD")
+
+    try:
+        datetime.strptime(compact_date, "%Y%m%d")
+    except ValueError as exc:
+        raise ValueError("date_value must use YYYY-MM-DD or YYYYMMDD") from exc
+
     return Path(runs_root) / compact_date
 
 
@@ -176,6 +184,8 @@ class DailyRunLock:
         payload = json.loads(lock_path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise _CorruptLockPayload("run lock payload must be a JSON object")
+        if not _REQUIRED_LOCK_KEYS.issubset(payload):
+            raise _CorruptLockPayload("run lock payload is missing required fields")
         return payload
 
     @staticmethod

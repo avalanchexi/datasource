@@ -17,7 +17,9 @@ def test_run_dir_from_date_accepts_dashed_and_compact_dates(tmp_path):
     assert run_dir_from_date("20260610", runs_root=tmp_path) == tmp_path / "20260610"
 
 
-@pytest.mark.parametrize("date_value", ["2026-0610", "202-606-10"])
+@pytest.mark.parametrize(
+    "date_value", ["2026-0610", "202-606-10", "2026-99-99", "20269999"]
+)
 def test_run_dir_from_date_rejects_malformed_dates(tmp_path, date_value):
     with pytest.raises(ValueError, match="YYYY-MM-DD or YYYYMMDD"):
         run_dir_from_date(date_value, runs_root=tmp_path)
@@ -191,7 +193,7 @@ def test_daily_run_lock_does_not_unlink_same_text_replaced_corrupt_lock(
     assert lock_path.stat().st_mtime > stale_timestamp
 
 
-@pytest.mark.parametrize("payload_text", ["[]", '"x"'])
+@pytest.mark.parametrize("payload_text", ["[]", '"x"', "{}"])
 def test_daily_run_lock_rejects_fresh_schema_invalid_lock(tmp_path, payload_text):
     run_dir = tmp_path / "data" / "runs" / "20260610"
     run_dir.mkdir(parents=True)
@@ -205,7 +207,7 @@ def test_daily_run_lock_rejects_fresh_schema_invalid_lock(tmp_path, payload_text
     assert lock_path.read_text(encoding="utf-8") == payload_text
 
 
-@pytest.mark.parametrize("payload_text", ["[]", '"x"'])
+@pytest.mark.parametrize("payload_text", ["[]", '"x"', "{}"])
 def test_daily_run_lock_reclaims_stale_schema_invalid_lock(tmp_path, payload_text):
     run_dir = tmp_path / "data" / "runs" / "20260610"
     run_dir.mkdir(parents=True)
