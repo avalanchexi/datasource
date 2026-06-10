@@ -59,6 +59,7 @@ NON_MACRO_KEYS = {
     "000001", "399001", "399006", "000300", "000016",
 }
 DAILY_MACRO_KEYS = {"bdi"}
+MACRO_CHANGE_RATE_PERCENT_KEYS = {"bdi"}
 DAILY_POLICY_KEYS = {"dr007"}
 EVENTS_DIR = Path("data/trend_history/min/events")
 FX_ZERO_CHANGE_MISSING_MARKERS = (
@@ -164,6 +165,15 @@ def _stock_index_compat_symbol(value: Any) -> str:
 def _is_non_macro_key(key: Any) -> bool:
     text = str(key or "")
     return text in NON_MACRO_KEYS or _stock_index_compat_symbol(text) in STOCK_INDEX_COMPAT_KEYS
+
+
+def _macro_change_suffix_for_report(key: str, indicator: dict) -> str:
+    explicit = indicator.get("change_unit")
+    if explicit:
+        return str(explicit)
+    if key in MACRO_CHANGE_RATE_PERCENT_KEYS:
+        return "%"
+    return str(indicator.get("unit") or "")
 
 
 def _normalize_trend(trend: Any) -> Optional[str]:
@@ -1444,7 +1454,7 @@ def generate_report(market_data_path: Path, pring_result_path: Path, output_path
         prev_str = _fmt_val(prev, unit, allow_est=True)
 
         if change not in ('N/A', None):
-            suffix = unit
+            suffix = _macro_change_suffix_for_report(key, indicator)
             change_str = _fmt_val(f"{float(change):+.1f}", suffix, allow_est=True)
         else:
             change_str = NA_TEXT

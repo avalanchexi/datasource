@@ -48,6 +48,13 @@ def test_asset_summary_omits_unreliable_zero_forex_change():
     assert "+0.00%" not in summary
 
 
+def test_macro_change_suffix_renders_bdi_change_rate_as_percent():
+    from datasource.generators.simple_report import _macro_change_suffix_for_report
+
+    assert _macro_change_suffix_for_report("bdi", {"unit": "点", "change_rate": -3.36}) == "%"
+    assert _macro_change_suffix_for_report("industrial", {"unit": "%", "change_rate": 0.1}) == "%"
+
+
 @pytest.mark.parametrize("trend", ["横盘震荡", "flat", "sideways"])
 def test_asset_summary_omits_zero_derived_forex_trend_without_usable_change(trend):
     summary = simple_report._build_asset_summary(
@@ -478,7 +485,7 @@ def test_report_shows_bdi_estimated_date_instead_of_pending_websearch(tmp_path: 
     generate_report(m, p, out)
 
     text = out.read_text(encoding="utf-8")
-    assert "| BDI | 2017.0points(估) | 2031.0points(估) | -0.7points(估) | points | 2026-05-18 |" in text
+    assert "| BDI | 2017.0points(估) | 2031.0points(估) | -0.7%(估) | points | 2026-05-18 |" in text
     assert "N/A（待 WebSearch）" not in text
 
 
