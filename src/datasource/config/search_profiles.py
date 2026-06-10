@@ -1494,6 +1494,7 @@ def _apply_report_usage_profiles() -> None:
     SEARCH_PROFILES["BCOM"].update(
         {
             "max_query_candidates": 3,
+            "closing_date_lag_days": 1,
             "evidence_keywords": [
                 "BCOM:IND",
                 "Bloomberg Commodity Index",
@@ -1551,6 +1552,7 @@ def _apply_report_usage_profiles() -> None:
     SEARCH_PROFILES["GSG"].update(
         {
             "max_query_candidates": 3,
+            "closing_date_lag_days": 1,
             "evidence_keywords": ["GSG", "iShares S&P GSCI Commodity-Indexed Trust", "market price", "NAV"],
             "good_url_patterns": ["ishares.com/us/products", "blackrock.com", "investing.com/etfs"],
             "bad_url_patterns": ["fund flows", "net inflow", "net outflow", "AUM change", "holding", "portfolio"],

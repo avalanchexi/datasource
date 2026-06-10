@@ -13,7 +13,7 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -83,6 +83,7 @@ class Stage2TaskPlanner:
             logger.warning(f"[Stage2TaskPlanner] 不再支持 fund_flow_backend={backend}，已自动改为 tavily")
         self.fund_flow_backend = "tavily"
         self.query_context: Dict[str, object] = {}
+        self._query_payload: Dict[str, Any] = {}
 
     @staticmethod
     def _parse_date_value(value: Optional[str]) -> Optional[datetime]:
@@ -98,15 +99,33 @@ class Stage2TaskPlanner:
         except Exception:
             return None
 
-    def _build_query_context(self, payload: Dict[str, Any]) -> Dict[str, object]:
+    @staticmethod
+    def _apply_calendar_lag(dt: datetime, lag_days: int) -> datetime:
+        if lag_days <= 0:
+            return dt
+        return dt - timedelta(days=lag_days)
+
+    def _build_query_context(
+        self,
+        payload: Dict[str, Any],
+        profile: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, object]:
         meta = payload.get("metadata", {}) if isinstance(payload, dict) else {}
         date_val = meta.get("date") or meta.get("end_date") or meta.get("start_date")
         dt = self._parse_date_value(str(date_val)) if date_val else None
         if not dt:
             dt = datetime.now()
+        try:
+            closing_date_lag_days = int((profile or {}).get("closing_date_lag_days") or 0)
+        except (TypeError, ValueError):
+            closing_date_lag_days = 0
+        closing_dt = self._apply_calendar_lag(dt, closing_date_lag_days)
         ref_year = dt.year
         ref_month = dt.month
         ref_day = dt.day
+        closing_year = closing_dt.year
+        closing_month = closing_dt.month
+        closing_day = closing_dt.day
         if ref_month == 1:
             report_year, report_month = ref_year - 1, 12
         else:
@@ -120,8 +139,8 @@ class Stage2TaskPlanner:
             "ref_ym": f"{ref_year}{ref_month:02d}",
             "ref_date": dt.strftime("%Y-%m-%d"),
             "ref_date_label": f"{ref_year}年{ref_month}月{ref_day}日",
-            "closing_date": dt.strftime("%Y-%m-%d"),
-            "closing_date_label": f"{ref_year}年{ref_month}月{ref_day}日",
+            "closing_date": closing_dt.strftime("%Y-%m-%d"),
+            "closing_date_label": f"{closing_year}年{closing_month}月{closing_day}日",
             "report_year": report_year,
             "report_month": report_month,
             "report_month2": f"{report_month:02d}",
@@ -134,8 +153,12 @@ class Stage2TaskPlanner:
             "expected_period_range_label": f"{report_year}年1-{report_month}月",
         }
 
-    def _context_for_expected_period(self, expected_period: Optional[str]) -> Dict[str, object]:
-        context = dict(self.query_context or {})
+    def _context_for_expected_period(
+        self,
+        expected_period: Optional[str],
+        base_context: Optional[Dict[str, object]] = None,
+    ) -> Dict[str, object]:
+        context = dict(base_context or self.query_context or {})
         if not expected_period:
             return context
         match = re.search(r"(20\d{2})[-/年]?(\d{1,2})", str(expected_period))
@@ -533,7 +556,12 @@ class Stage2TaskPlanner:
     ) -> Dict[str, Any]:
         profile_key = get_profile_key(indicator_key)
         profile = SEARCH_PROFILES.get(profile_key, {})
-        task_context = self._context_for_expected_period(expected_period)
+        base_context = (
+            self._build_query_context(self._query_payload, profile=profile)
+            if self._query_payload
+            else dict(self.query_context or {})
+        )
+        task_context = self._context_for_expected_period(expected_period, base_context=base_context)
         query = self._apply_query_templates(profile.get("query"), task_context)
         queries = [self._apply_query_templates(q, task_context) for q in (profile.get("queries") or [])]
         queries = [q for q in queries if q]
@@ -609,6 +637,7 @@ class Stage2TaskPlanner:
                 payload=payload,
                 fallback_to_today=True,
             ).search_tasks_stage2
+        self._query_payload = payload
         self.query_context = self._build_query_context(payload)
         tasks = (
             self._scan_quality_gaps(payload)

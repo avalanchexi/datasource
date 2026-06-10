@@ -1192,6 +1192,26 @@ def test_realtime_quote_profiles_use_small_query_budget_with_usdcny_extract_exce
     assert usdcny["extract_policy"]["official_domains_only"] is True
 
 
+def test_daily_quote_context_can_use_completed_close_lag():
+    from datasource.engines.stage2_task_planner import Stage2TaskPlanner
+
+    planner = Stage2TaskPlanner()
+    payload = {"metadata": {"date": "2026-06-10"}}
+
+    context = planner._build_query_context(payload, profile={"closing_date_lag_days": 1})
+
+    assert context["ref_date"] == "2026-06-10"
+    assert context["closing_date"] == "2026-06-09"
+    assert context["closing_date_label"] == "2026年6月9日"
+
+
+def test_bcom_and_gsg_profiles_use_previous_completed_close():
+    from datasource.config.search_profiles import SEARCH_PROFILES
+
+    assert SEARCH_PROFILES["BCOM"]["closing_date_lag_days"] == 1
+    assert SEARCH_PROFILES["GSG"]["closing_date_lag_days"] == 1
+
+
 def test_high_gap_quote_profiles_have_report_quality_patterns():
     bcom = SEARCH_PROFILES["BCOM"]
     assert "BCOM:IND" in bcom["evidence_keywords"]
