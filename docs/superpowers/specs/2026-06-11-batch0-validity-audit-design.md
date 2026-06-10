@@ -33,6 +33,10 @@
 2. **运行时覆盖**:以 `data/runs/20260522/` 为夹具复制到一次性 scratch 目录 `data/runs/19990101/`,在 `coverage --parallel-mode` 下依次回放 Stage2.5 → Stage3 → Stage4 report generator,全部显式路径参数。**完全离线**:无网络调用、不触碰真实当日 run 目录、trend_history 用 `--trend-history-base-dir` 指向 scratch 副本。Stage1/Stage2 需网络,本批仅静态分析,运行时覆盖可在下一次正常每日流水线 opt-in 搭车(非本批范围)。
 3. **合并分级**:coverage 文件路径 ↔ 模块名映射后与可达集合并,产出四档 JSON 与人读报告。
 
+## 执行环境
+
+按 REFACTOR_PLAN §11.1 worktree 协议执行:专用 worktree `.worktrees/codex-batch0-validity-audit`(分支 `codex/batch0-validity-audit`)。`.env/.venv/data/logs/reports` 均被 gitignore,worktree 中不存在,由计划的 Task 0 置备(venv bootstrap + 数据夹具只读复制);scratch 与全部写操作发生在 worktree 内,主 checkout 物理隔离。
+
 ## 边界与错误处理
 
 - Stage3 回放若被 policy gate 阻断(夹具年代久导致 stale 判定漂移):回退方案是直接用 `20260522/market_data_complete.json` 原件作为 Stage3 输入,跳过 Stage2.5 重产物——审计要的是覆盖面,不是产物正确性。

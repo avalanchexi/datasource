@@ -244,7 +244,7 @@ TEST_PLAN 中 C1–C5 的验收依赖"mock Tavily/DeepSeek/Exa 网络层做 fixt
 |---|---|---|
 | Spec(设计) | Claude Code(brainstorming 技能) | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`,每个子项目一份,用户评审通过后进入 plan |
 | Plan(执行计划) | Claude Code(writing-plans 技能) | `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`;**该 PR 开工时从当时 HEAD 现生成**(行号/上下文保鲜);bite-sized 任务、TDD、精确路径/完整代码/精确命令+预期输出、无占位符 |
-| Execute(执行) | Codex(executing-plans 技能) | 在 `codex/<topic>` 分支执行;逐 checkbox 勾选;卡住即停并回报,不擅自改计划 |
+| Execute(执行) | Codex(executing-plans 技能) | 在 **git worktree**(`.worktrees/codex-<topic>`,分支 `codex/<topic>`)中执行;逐 checkbox 勾选;卡住即停并回报,不擅自改计划 |
 | Review(评审) | Claude Code | 两段式:① 计划符合度(每个任务是否按计划完成、有无越界改动);② 代码质量与行为冻结区检查(见 §10) |
 | Merge | 用户或 Claude Code(经用户确认) | 合入 main;下一个 PR 的 plan 才开始生成 |
 
@@ -256,3 +256,34 @@ TEST_PLAN 中 C1–C5 的验收依赖"mock Tavily/DeepSeek/Exa 网络层做 fixt
 - 硬约束:Tavily 每日一次,**任何验证不得重跑 Stage2 真实搜索**;不触碰真实 `data/runs/YYYYMMDD`(当日)与 `data/trend_history`(用 `--trend-history-base-dir` 隔离);不手删 `.run.lock`。
 - 行为冻结区清单:official manual override allowlist(mlf/USDCNY/BCOM 三项)、fund_flow 估算 gate、forex 零值防占位、Stage3 三路 gate——这些区域 diff 只允许 import/路径变化。
 - Commit 规范:Conventional(`feat:/fix:/refactor:/docs:/test:`),小步频提。
+
+### 11.1 Worktree 执行协议(2026-06-11 增补)
+
+每个 PR 在独立 git worktree 中执行(superpowers `using-git-worktrees` 约定;`.worktrees/` 已在 `.gitignore`)。**关键事实:本仓库 `.gitignore` 忽略 `.env`、`.venv/`、`data/`、`logs/`、`reports/`——新建 worktree 中这些全部不存在**,置备是每份 plan 的 Task 0,标准配方:
+
+```bash
+MAIN=/mnt/d/cursor/datasource            # 主 checkout(唯一持有 .env/.venv/data 的地方)
+BR=codex/<topic>
+WT="$MAIN/.worktrees/codex-<topic>"
+cd "$MAIN" && git worktree add "$WT" -b "$BR"
+cp "$MAIN/.env" "$WT/.env"
+mkdir -p "$WT/logs" "$WT/reports" "$WT/.venv"
+# <按 plan 声明复制该 PR 需要的 untracked 数据输入(只读源,绝对路径仅指向 $MAIN)>
+cd "$WT" && DATASOURCE_AUTO_VENV=1 DATASOURCE_INSTALL_DEV=1 bash run_clean.sh python -V   # 空 .venv 触发 bootstrap
+bash run_clean.sh python -m pytest -q    # baseline 必须与主 checkout 一致,否则停-回报
+```
+
+收尾:评审通过合入后由评审方 `git worktree remove "$WT"` + 删除分支;失败回滚 = 直接弃 worktree,主 checkout 零污染。
+
+### 11.2 Plan 精准性检查清单(writing plan 全盘思考规则,2026-06-11 增补)
+
+每份 per-PR plan 发布前,规划方必须以"零上下文 Codex 在干净 worktree 中执行"为视角逐条命令走查:
+
+1. **路径可达性**:命令引用的每个路径在 worktree 中存在吗?gitignored 资产(`.env/.venv/data/logs/reports`)默认**不存在**,所需项必须在 Task 0 置备;绝对路径只允许指向主 checkout 的只读源。
+2. **CWD 显式化**:所有命令默认从 worktree 根执行;任何例外单独注明。
+3. **失败分支**:每条命令有 Expected;可能失败的步骤写明"若失败→回退方案或停-回报",不留给执行者即兴判断。
+4. **验证离线**:所有验证命令零真实 API 调用;禁止以"重跑 Stage2"作为验证手段。
+5. **首尾完整**:首任务 = worktree 置备 + baseline 测试;尾任务 = 隔离断言(主 checkout 数据零变更)+ 临时产物清理 + 完成回报。
+6. **依赖封闭**:新增工具依赖(如 coverage)只装 `.venv`,不改 `requirements.txt`/`setup.py`,除非 plan 显式声明。
+7. **行号保鲜**:从当时 HEAD 现生成,不引用已漂移的行号;涉及搬移的代码块直接给完整代码,不写"同 Task N"。
+8. **writing-plans 自带三查**:spec 覆盖度、placeholder 扫描、跨任务类型/签名一致性。

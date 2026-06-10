@@ -14,11 +14,67 @@
 
 ## 环境头(必读,适用于本计划所有命令)
 
-- 本仓库在 Windows 磁盘上,但 `.venv` 是 **Linux venv**:所有命令必须在 WSL/Linux shell 中、于仓库根目录(`/mnt/d/cursor/datasource`)执行。若你在 Windows 侧,先 `wsl -e bash -lc '...'` 包装。
+- 本仓库在 Windows 磁盘上,但 venv 是 **Linux venv**:所有命令必须在 WSL/Linux shell 中执行。若你在 Windows 侧,先 `wsl -e bash -lc '...'` 包装。
+- **执行位置:Task 0 置备的 worktree**(`/mnt/d/cursor/datasource/.worktrees/codex-batch0-validity-audit`,分支 `codex/batch0-validity-audit`)。**Task 0 之后的所有命令都从 worktree 根目录执行**;主 checkout(`/mnt/d/cursor/datasource`)只作只读取材源,本计划用 `$MAIN` 指代它。
+- **关键事实:`.gitignore` 忽略 `.env`、`.venv/`、`data/`、`logs/`、`reports/`,新建 worktree 中这些不存在**——Task 0 负责置备,跳过 Task 0 后续必然失败。
 - 一切 Python 执行经 `bash run_clean.sh python ...`,**不直跑** `python`(包装器负责 venv、.env、代理清理、PYTHONPATH)。
-- **硬约束:** 不得调用任何真实网络 API(Tavily 每日一次,严禁触发);不得读写 `data/runs/2026*`(真实 run 目录,只读复制例外);不得写真实 `data/trend_history/`(只读复制例外);不得手动删除任何 `data/runs/2026*/.run.lock`。
+- **硬约束:** 不得调用任何真实网络 API(Tavily 每日一次,严禁触发;pip install 除外);不得写主 checkout 的 `data/`(只读复制例外);不得手动删除任何 `.run.lock`。
 - 本计划只新增文件 + 临时 scratch 目录,**不修改任何现有源码**。若发现必须改现有代码才能推进,停下回报,不要自行修改。
 - Commit 规范:Conventional(`test:/feat:/docs:`),按计划内 commit 步骤小步提交,消息末尾不加额外签名。
+
+---
+
+### Task 0: 置备 worktree 执行环境
+
+**Files:**
+- Create(临时): `/mnt/d/cursor/datasource/.worktrees/codex-batch0-validity-audit/`(worktree,评审合入后由评审方移除)
+
+- [ ] **Step 1: 创建 worktree 并置备 gitignored 资产**
+
+```bash
+MAIN=/mnt/d/cursor/datasource
+WT="$MAIN/.worktrees/codex-batch0-validity-audit"
+cd "$MAIN"
+git worktree add "$WT" -b codex/batch0-validity-audit
+cp "$MAIN/.env" "$WT/.env"
+mkdir -p "$WT/logs" "$WT/reports" "$WT/.venv"
+```
+
+Expected: `git worktree add` 输出 `Preparing worktree (new branch 'codex/batch0-validity-audit')`;无报错。
+
+- [ ] **Step 2: 复制本计划声明的 untracked 数据输入(只读取材)**
+
+```bash
+mkdir -p "$WT/data/runs/20260522" "$WT/data/trend_history"
+cp "$MAIN/data/runs/20260522/market_data_stage2.json" \
+   "$MAIN/data/runs/20260522/websearch_results_manual.json" \
+   "$MAIN/data/runs/20260522/market_data_complete.json" \
+   "$MAIN/data/runs/20260522/gap_monitor.json" \
+   "$WT/data/runs/20260522/"
+cp -r "$MAIN/data/trend_history/min" "$WT/data/trend_history/min"
+ls "$WT/data/runs/20260522"
+```
+
+Expected: 列出 4 个 json 文件(后两个仅供 Task 6 Step 4 的回退分支使用)。
+
+- [ ] **Step 3: bootstrap worktree 自己的 venv(空 `.venv` 自动触发)**
+
+```bash
+cd "$WT"
+DATASOURCE_AUTO_VENV=1 DATASOURCE_INSTALL_DEV=1 bash run_clean.sh python -V
+```
+
+Expected: 输出含 `[OK] .venv bootstrap complete`,随后打印 Python 版本。pip 安装需要网络,这是本计划唯一允许的网络操作。
+
+- [ ] **Step 4: baseline 测试**
+
+```bash
+bash run_clean.sh python -m pytest -q
+```
+
+Expected: 与主 checkout 相同的全绿基线。**若有失败:停止,原样回报失败清单,不要开工**(无法区分既有问题与新引入问题)。
+
+> 自此以下所有 Task 的命令都在 `$WT` 根目录执行。
 
 ---
 
@@ -639,13 +695,15 @@ Expected: 每个 watchlist 模块打印出档位,无 assert 失败。
 
 ### Task 8: 隔离断言 + 清理 scratch
 
-- [ ] **Step 1: 断言真实数据未被触碰**
+- [ ] **Step 1: 断言数据隔离(worktree 副本 + 主 checkout 双重检查)**
 
 ```bash
 find data/trend_history data/runs/2026* -newer /tmp/batch0_audit_marker -type f | head -20
+find /mnt/d/cursor/datasource/data/trend_history /mnt/d/cursor/datasource/data/runs/2026* \
+  -newer /tmp/batch0_audit_marker -type f | head -20
 ```
 
-Expected: **空输出**。若有任何文件列出,这是隔离失败——停止,不要清理现场,原样回报文件列表。
+Expected: 两条命令都是**空输出**(第一条查 worktree 内的只读副本,第二条查主 checkout 真实数据)。若有任何文件列出,这是隔离失败——停止,不要清理现场,原样回报文件列表。
 
 - [ ] **Step 2: 清理 scratch 与 coverage 中间文件**
 
@@ -674,6 +732,14 @@ git add optimization/20260610_refactor_plan/audit/
 git commit -m "docs: add batch-0 validity audit results (static reachability + offline coverage)"
 ```
 
-- [ ] **Step 3: 完成回报**
+- [ ] **Step 3: 完成回报(留在分支上,不自行合并)**
 
-向评审方(Claude Code)回报:四档计数、watchlist 各模块档位、以及 `unreachable` 全列表。批次 A 处置表的修订由评审方基于 `AUDIT_RESULTS.md` 执行,不在本计划范围。
+提交全部留在 `codex/batch0-validity-audit` 分支;**不要 merge 回 main,不要删除 worktree**。向评审方(Claude Code)回报:
+
+1. 四档计数(`runtime_used / imported_only / reachable_not_run / unreachable`);
+2. watchlist 各模块档位;
+3. `unreachable` 全列表;
+4. baseline 与最终 `pytest` 结果;
+5. 隔离断言(Task 8 Step 1)两条命令的输出(应为空)。
+
+后续(评审方动作,不在本计划范围):基于 `AUDIT_RESULTS.md` 修订批次 A 处置表 → 合入分支 → `git worktree remove`。
