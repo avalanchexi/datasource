@@ -168,9 +168,8 @@ def _is_non_macro_key(key: Any) -> bool:
 
 
 def _macro_change_suffix_for_report(key: str, indicator: dict) -> str:
-    explicit = indicator.get("change_unit")
-    if explicit:
-        return str(explicit)
+    if "change_unit" in indicator:
+        return str(indicator.get("change_unit"))
     if key in MACRO_CHANGE_RATE_PERCENT_KEYS:
         return "%"
     return str(indicator.get("unit") or "")

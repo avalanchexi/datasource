@@ -53,6 +53,8 @@ def test_macro_change_suffix_renders_bdi_change_rate_as_percent():
 
     assert _macro_change_suffix_for_report("bdi", {"unit": "点", "change_rate": -3.36}) == "%"
     assert _macro_change_suffix_for_report("industrial", {"unit": "%", "change_rate": 0.1}) == "%"
+    assert _macro_change_suffix_for_report("bdi", {"unit": "点", "change_rate": -3.36, "change_unit": ""}) == ""
+    assert _macro_change_suffix_for_report("bdi", {"unit": "点", "change_rate": -3.36, "change_unit": 0}) == "0"
 
 
 @pytest.mark.parametrize("trend", ["横盘震荡", "flat", "sideways"])
