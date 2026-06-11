@@ -93,7 +93,15 @@ CLAUDE.md 声称 "每个 `scripts/stageN_*.py` 只是薄入口,真正逻辑在 `
 
 ## 4. 批次 A — 仓库清理(P0,~0.5 天,1 个 PR)
 
-纯删除/移动,零行为风险。**前置:批次 0 审计结论。** 处置表:
+纯删除/移动,零行为风险。**前置:批次 0 审计结论。**
+
+批次 0 审计结果已合入: `runtime_used=29 / imported_only=4 / reachable_not_run=36 / unreachable=24`。批次 A 删除/移动必须遵守以下闸:
+
+- `unreachable` 只证明从顶层流水线入口不可达,不证明测试、示例或人工脚本未使用。删除/移动前必须对目标路径和 dotted module 跑 `rg` 复核 `tests/`、`examples/`、`scripts/`、`docs/`、`optimization/` 引用;发现有效引用时先更新/下线引用或延期。
+- Stage2 structured provider 集群经 `registry.py` 的 `import_module()` 动态加载,已被批次 0 修正为 `reachable_not_run`;批次 A 禁止删除 `src/datasource/providers/stage2_structured/*`。
+- 空 `__init__.py` 与纯 docstring 文件不再因 coverage 100% 视为运行时使用;批次 A 判断以 `AUDIT_RESULTS.md` 的四档结果为准。
+
+处置表:
 
 | 对象 | 处置 |
 |---|---|
@@ -103,8 +111,10 @@ CLAUDE.md 声称 "每个 `scripts/stageN_*.py` 只是薄入口,真正逻辑在 `
 | `data_quality_report.md`、`final_analysis_report.md` | 移入 `docs/history/` 或删除 |
 | `README_STAGE2_SNIPPET.md` | 内容并入 `SCRIPTS.md` 后删除 |
 | `archive/unused_py/` | 并入 `archive/py_unused/`,保留单一目录 |
-| `scripts/legacy/` + `src/datasource/mcp_adapter.py` + `utils/mcp_tools.py` | 确认 `tests/test_na_filling.py`、`tests/run_na_filling.py` 是否仍有效;一并移入 `archive/py_unused/` 并下线对应测试 |
-| `utils/yahoo_finance.py` vs `providers/stage2_structured/yahoo_finance.py` | 比对后保留 providers 版;若 adapters 仍引用 utils 版则本批只加 TODO,批次 C 处理 |
+| `scripts/legacy/` + MCP 链路(`src/datasource/mcp_adapter.py`,`src/datasource/utils/mcp_tools.py`) | 批次 0 定档 `unreachable`;删除/移动前先 `rg` 复核 `tests/`、`examples/` 和手工脚本引用,再移入 `archive/py_unused/` 并下线对应 legacy 测试 |
+| 批次 0 `unreachable` 源码集群:`agents/background_scan/`,`analyzers/`,`comparators/`,`mappers/`,`warnings/`,`trackers/`,`generators/report_generator.py`,`engines/data_engine.py`,`utils/data_completion.py`,`calculators/{bond_calculator,economic_cycle_analyzer,fund_flow_calculator}.py`,`calculators/pring/leading_indicator.py`,`models/pring_result_contract.py` | PR-A 删除/归档候选;每项先按路径+dotted module 跑 `rg` 覆盖 `tests/ examples/ scripts/ docs/ optimization/`,有引用则同步下线引用或延期,无引用再移入 `archive/py_unused/` |
+| `src/datasource/providers/stage2_structured/*` | **保留**。经动态 import 审计为 `reachable_not_run`,是 Stage2 structured-provider-first 生产路径,不得作为批次 A 删除候选 |
+| `utils/yahoo_finance.py` vs `providers/stage2_structured/yahoo_finance.py` | `utils/yahoo_finance.py` 为 `imported_only`,providers 版为动态可达;批次 A 不删除二者。仅记录 TODO,待批次 C 结合 adapter/fund_flow 路径收敛 |
 | `optimization/2025*`、`optimization/202601*`、`optimization/archive/` 等已完结目录 | 移入 `optimization/archive/`(目录已存在),只留 `20260427_refactor_plan`(含未完成 TODOS)与本计划 |
 | `logs/` | 加 `.gitignore` 规则(若未覆盖)+ 在 `run_clean.sh` 或日志初始化处加 30 天清理;历史文件一次性清空 |
 | `.pip-temp/`、`__pycache__/`(根) | 删除 + gitignore |

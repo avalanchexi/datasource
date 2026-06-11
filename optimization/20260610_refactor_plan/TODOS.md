@@ -9,14 +9,14 @@
 | 批次 | 内容 | PR 数 | 状态 | 前置 |
 |---|---|---|---|---|
 | 规划 | 方案 v2 + 工作流 | - | ✅ 完成 | - |
-| 批次 0 | 功能有效性审计 | 1 | 🔜 计划已就绪,待 Codex 执行 | - |
-| 批次 A | 仓库清理 | 1 | 未开始 | 批次 0 结论 |
+| 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
+| 批次 A | 仓库清理 | 1 | 待生成 PR-A 计划 | 批次 0 结论已合入 |
 | 批次 B | 脚本命名收敛 | 1 | 未开始 | A |
 | 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 未开始 | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:把 `docs/superpowers/plans/2026-06-11-batch0-validity-audit.md` 交给 Codex 执行。**
+**当前焦点:基于 `optimization/20260610_refactor_plan/audit/AUDIT_RESULTS.md` 生成 PR-A 执行计划。**
 
 ---
 
@@ -30,15 +30,16 @@
 
 ## 批次 0 — 功能有效性审计(REFACTOR_PLAN §3)
 
-- [ ] **PR-0**:Codex 在 worktree `codex/batch0-validity-audit` 执行审计计划(9+1 任务)
-  - [ ] Codex 执行完成并回报(四档计数 / watchlist 档位 / unreachable 列表 / 测试 / 隔离断言)
-  - [ ] Claude 评审(计划符合度 + 产物完整性)
-  - [ ] 合入 main + `git worktree remove`
-- [ ] 基于 `AUDIT_RESULTS.md` 修订批次 A 处置表(评审方动作)
+- [x] **PR-0**:Codex 在 worktree `codex/batch0-validity-audit` 执行审计计划(9+1 任务)
+  - [x] Codex 执行完成并回报(四档计数 / watchlist 档位 / unreachable 列表 / 测试 / 隔离断言)
+  - [x] Claude 评审(计划符合度 + 产物完整性),并修复动态 import 与零语句 coverage 盲区
+  - [x] 合入 main + `git worktree remove`
+- [x] 基于 `AUDIT_RESULTS.md` 修订批次 A 处置表(评审方动作)
 
 ## 批次 A — 仓库清理(§4,1 个 PR)
 
 - [ ] 生成 PR-A 执行计划(从当时 HEAD,过 §11.2 清单)
+- [x] 批次 A 处置表已按批次 0 审计结果修订:保护 Stage2 structured provider 动态加载集群,删除前增加 `tests/`/`examples/` 引用复核闸
 - [ ] **PR-A**:根目录散件 / archive 双目录合并 / legacy MCP 链路 / optimization 归档 / logs 治理 / 最小 pre-commit
   - [ ] Codex 执行 → Claude 评审 → 合入
 
