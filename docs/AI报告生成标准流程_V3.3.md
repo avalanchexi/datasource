@@ -32,13 +32,15 @@
 
 **命令**:
 ```bash
-python scripts/stage1_data_collector.py \
-  --date 2025-11-24 \
-  --output data/20251124_market_data.json
+DATE=2025-11-24
+DATE_NH=20251124
+bash run_clean.sh python scripts/stage1_data_collector.py \
+  --date "$DATE" \
+  --output "data/runs/${DATE_NH}/market_data.json"
 ```
 
 **输出**:
-- 文件: `data/YYYYMMDD_market_data.json`
+- 文件: `data/runs/YYYYMMDD/market_data.json`
 - 大小: ~15KB
 - 数据完整性: 25-42%（休市自动回退最近开市日；fx_daily/moneyflow_hsgt 回溯最近5个开市日）
 
@@ -53,22 +55,26 @@ python scripts/stage1_data_collector.py \
 
 **验证**:
 ```bash
-python -c "import json; data=json.load(open('data/20251114_market_data.json', encoding='utf-8')); print(f'Completeness: {data[\"metadata\"][\"data_completeness\"]:.1%}')"
+python -c "import json; data=json.load(open('data/runs/20251114/market_data.json', encoding='utf-8')); print(f'Completeness: {data[\"metadata\"][\"data_completeness\"]:.1%}')"
 ```
 
 ---
 
 ### Stage 2a: MCP Essential增强（已归档，不执行）
 
-**脚本**: `scripts/legacy/stage2a_mcp_enhancer.py` [ARCHIVED，不推荐]
+**脚本**: `archive/py_unused/legacy/stage2a_mcp_enhancer.py` [ARCHIVED，不推荐]
 
 **当前替代命令**:
 ```bash
 bash run_clean.sh python scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/${DATE_NH}/market_data.json \
-  --output data/runs/${DATE_NH}/market_data_stage2.json \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
   --phase all --execute-search \
-  --fund-flow-backend tavily
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 ```
 
 **输出**:
@@ -116,7 +122,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 
 #### Step 2: 创建WebSearch结果JSON
 
-基于WebSearch查询结果，创建 `data/websearch_results_YYYYMMDD.json`:
+基于WebSearch查询结果，创建 `data/runs/YYYYMMDD/websearch_results_manual.json`:
 
 ```json
 {
@@ -144,7 +150,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 }
 ```
 
-**完整模板参考**: `data/websearch_results_20251114_test.json`
+**完整模板参考**: `data/runs/templates/manual_template.json`（Stage2.5 manual 模板）
 
 #### Step 3: 运行数据注入脚本
 
@@ -195,7 +201,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 **验证**:
 ```bash
-python -c "import json; data=json.load(open('data/20251114_market_data_complete.json', encoding='utf-8')); print(f'Completeness: {data[\"metadata\"][\"data_completeness\"]:.1%}'); print('Macro:', {k: v.get('current_value') for k,v in data['macro_indicators'].items()})"
+python -c "import json; data=json.load(open('data/runs/20251114/market_data_complete.json', encoding='utf-8')); print(f'Completeness: {data[\"metadata\"][\"data_completeness\"]:.1%}'); print('Macro:', {k: v.get('current_value') for k,v in data['macro_indicators'].items()})"
 ```
 
 **标准化说明**:
@@ -215,7 +221,8 @@ python -c "import json; data=json.load(open('data/20251114_market_data_complete.
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 **输出**:
@@ -287,13 +294,14 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 **输出**:
 ```
 [SUCCESS] 报告生成完成！
-  - 输出文件: reports\20251124背景扫描120.md
+  - 输出文件: reports\2025-11-24-背景扫描120.md
   - 报告日期: 2025-11-10（示例回退至最近开市日）
   - 数据完整性: 100.0%
   - Pring阶段: 第Ⅱ阶段
@@ -319,7 +327,7 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 
 1. **文件大小检查**:
 ```bash
-powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
+powershell -Command "(Get-Item 'reports\2025-11-24-背景扫描120.md').Length"
 # 期望输出: 4800-5000 bytes
 ```
 
@@ -395,7 +403,7 @@ UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'
 **解决方案**:
 ```bash
 # 检查数据完整性
-python -c "import json; data=json.load(open('data/YYYYMMDD_market_data_complete.json', encoding='utf-8')); print({k: v.get('current_value') for k,v in data['macro_indicators'].items()})"
+python -c "import json; data=json.load(open('data/runs/YYYYMMDD/market_data_complete.json', encoding='utf-8')); print({k: v.get('current_value') for k,v in data['macro_indicators'].items()})"
 
 # 应输出: {'ppi': -2.1, 'pmi': 49.0, 'industrial': 6.5, 'bdi': 2104.0, 'cpi': 0.2}
 # 如果有None值，需要重新执行AI补全步骤
@@ -413,31 +421,55 @@ python -c "import json; data=json.load(open('data/YYYYMMDD_market_data_complete.
 ## 完整执行示例 (2025-11-24)
 
 ```bash
+DATE=2025-11-24
+DATE_NH=20251124
+
 # Stage 1
-python scripts/stage1_data_collector.py --date 2025-11-24 --output data/20251124_market_data.json
+bash run_clean.sh python scripts/stage1_data_collector.py \
+  --date "$DATE" \
+  --output "data/runs/${DATE_NH}/market_data.json"
 # ✅ Output: ~18KB, 40% completeness（休市自动回退）
 
 # Stage 2 unified
-bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data data/runs/20251124/market_data.json --output data/runs/20251124/market_data_stage2.json --phase all --execute-search --fund-flow-backend tavily
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 # ✅ Output: market_data_stage2.json
 
 # AI补全 (Manual WebSearch + Injection)
 # 1. Execute 14 WebSearch queries
-# 2. Create websearch_results_20251114.json
+# 2. Create data/runs/${DATE_NH}/websearch_results_manual.json
 # 3. Inject data
-bash run_clean.sh python scripts/stage2_5_injector.py data/runs/20251124/market_data_stage2.json data/runs/20251124/websearch_results_manual.json data/runs/20251124/market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 # ✅ Output: 21 items injected, 100.0% completeness
 
 # Stage 3
-bash run_clean.sh python scripts/stage3_pring_analyzer.py --market-data data/runs/20251124/market_data_complete.json --output data/runs/20251124/pring_result.json --allow-estimated
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated \
+  --skip-fund-flow-check
 # ✅ Output: Stage=第Ⅱ阶段, Confidence=85%
 
 # Stage 4
-bash run_clean.sh python scripts/stage4_report_generator.py --market-data data/runs/20251124/market_data_complete.json --pring-result data/runs/20251124/pring_result.json --output reports/2025-11-24-背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 # ✅ Output: 9 sections, no N/A, completeness 100%
 
 # 验证
-powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
+powershell -Command "(Get-Item 'reports\2025-11-24-背景扫描120.md').Length"
 # ✅ Output: 4849 bytes
 ```
 
@@ -450,7 +482,7 @@ powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
 | 脚本 | 状态 | 说明 |
 |------|------|------|
 | `stage1_data_collector.py` | ✅ ACTIVE | API数据收集 |
-| `scripts/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | 旧 MCP flow，不推荐 |
+| `archive/py_unused/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | 旧 MCP flow，不推荐 |
 | `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage2.5 WebSearch/manual 数据注入 |
 | `run_pring_analysis.py` | ⚠️ LEGACY / 不推荐 | 旧 root Pring 分析入口 |
 | `generate_simple_report.py` | ⚠️ LEGACY / 不推荐 | 旧 root 报告生成入口 |
@@ -461,18 +493,18 @@ powershell -Command "(Get-Item 'reports\20251114背景扫描120.md').Length"
 
 | 阶段 | 文件名 | 说明 |
 |------|--------|------|
-| Stage 1 | `YYYYMMDD_market_data.json` | API原始数据 |
+| Stage 1 | `data/runs/YYYYMMDD/market_data.json` | API原始数据 |
 | Stage 2 | `data/runs/YYYYMMDD/market_data_stage2.json` | Stage2 unified 增强数据 |
-| AI补全 | `websearch_results_YYYYMMDD.json` | WebSearch结果 |
-| AI补全 | `YYYYMMDD_market_data_complete.json` | 完整数据 |
-| Stage 2 | `YYYYMMDD_pring_result.json` | Pring分析结果 |
-| Stage 3 | `YYYYMMDD背景扫描120.md` | 最终报告 |
+| Stage 2.5 manual | `data/runs/YYYYMMDD/websearch_results_manual.json` | Stage2.5 manual/WebSearch 结果 |
+| Stage 2.5 complete | `data/runs/YYYYMMDD/market_data_complete.json` | 完整数据 |
+| Stage 3 | `data/runs/YYYYMMDD/pring_result.json` | Pring分析结果 |
+| Stage 4 | `reports/YYYY-MM-DD-背景扫描120.md` | 最终报告 |
 
 ### C. 参考资源
 
 - **CLAUDE.md**: 完整技术文档
-- **docs/Stage2数据获取设计分析.md**: 历史问题分析
-- **data/websearch_results_20251114_test.json**: WebSearch结果模板
+- **docs/archive/legacy/Stage2数据获取设计分析.md**: 历史问题分析
+- **data/runs/templates/manual_template.json**: Stage2.5 manual 模板
 - **inject_websearch_data.py**: LEGACY/已归档数据注入脚本源码，不推荐；当前使用 `scripts/stage2_5_injector.py`
 - **run_pring_analysis.py**: LEGACY/已归档Pring分析脚本源码，不推荐；当前使用 `scripts/stage3_pring_analyzer.py`
 - **generate_simple_report.py**: LEGACY/已归档报告生成脚本源码，不推荐；当前使用 `scripts/stage4_report_generator.py`

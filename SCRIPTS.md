@@ -24,17 +24,18 @@
 
 **使用**:
 ```bash
-PYTHONPATH=./src \
-TAVILY_API_KEY=xxx DEEPSEEK_API_KEY=yyy \
-python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/YYYYMMDD/market_data.json \
-  --output data/runs/YYYYMMDD/market_data_stage2.json \
+DATE=$(date +%Y-%m-%d)
+DATE_NH=${DATE//-/}
+bash run_preflight.sh
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
   --execute-search \
   --fund-flow-backend tavily \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
-  --log-output logs/runs/YYYYMMDD/stage2_unified_log.json \
-  --gap-monitor data/runs/YYYYMMDD/gap_monitor.json \
-  --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json"
 ```
 队列默认开启；如需显式配置可追加 `--queue-concurrency 3 --deepseek-max-concurrency 3`，串行排查传 `--no-use-queue`
 
@@ -83,9 +84,11 @@ python3 scripts/stage2_unified_enhancer.py \
 
 **使用**:
 ```bash
-python scripts/stage1_data_collector.py \
-  --date 2025-11-14 \
-  --output data/runs/20251114/market_data.json
+DATE=$(date +%Y-%m-%d)
+DATE_NH=${DATE//-/}
+bash run_clean.sh python scripts/stage1_data_collector.py \
+  --date "$DATE" \
+  --output "data/runs/${DATE_NH}/market_data.json"
 ```
 
 **输出**: `data/runs/YYYYMMDD/market_data.json` (~15KB)
@@ -142,7 +145,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 **输入**: `market_data_complete.json` (需95%数据)
@@ -176,7 +180,8 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 **输入**:
@@ -200,8 +205,8 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 
 ### 5. fill_market_data_from_yahoo.py ⚠️ LEGACY
 
-**位置**: `scripts/legacy/fill_market_data_from_yahoo.py`  
-**用途**: 历史 Yahoo 诊断脚本；仅用于事故复盘或离线排查，不作为最终补数入口
+**位置**: 已归档至 `archive/py_unused/legacy/fill_market_data_from_yahoo.py`（原路径 `scripts/legacy/fill_market_data_from_yahoo.py`）
+**用途**: 历史 Yahoo 诊断脚本；仅用于事故复盘或离线排查，不在当前流程执行，也不作为最终补数入口
 
 **依赖**:
 ```bash
@@ -209,11 +214,10 @@ pip install yfinance pandas
 ```
 > 当前生产口径禁止 Yahoo 直接写最终值。若应急排查中得到可用数据，必须转换为 Stage2.5 WebSearch/manual JSON，并通过 `scripts/stage2_5_injector.py` 注入。
 
-**应急诊断（legacy-only）**:
-```bash
-PYTHONPATH=. python3 scripts/legacy/fill_market_data_from_yahoo.py \
-  --input data/runs/${DATE_NH}/market_data_stage2.json \
-  --output data/runs/${DATE_NH}/legacy_yahoo_diagnostic.json
+**历史诊断参考（已归档，不在当前流程执行）**:
+```text
+原路径: scripts/legacy/fill_market_data_from_yahoo.py
+归档路径: archive/py_unused/legacy/fill_market_data_from_yahoo.py
 ```
 
 **转换后注入**:
@@ -238,8 +242,9 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 **使用**:
 ```bash
-python scripts/sanitize_market_data.py data/20251117_market_data_stage2.json \
-  --output data/20251117_market_data_stage2_clean.json
+bash run_clean.sh python scripts/sanitize_market_data.py \
+  data/runs/YYYYMMDD/market_data_stage2.json \
+  --output data/runs/YYYYMMDD/market_data_stage2_clean.json
 ```
 
 **行为**:
@@ -255,9 +260,9 @@ python scripts/sanitize_market_data.py data/20251117_market_data_stage2.json \
 
 ### 7. stage2a_mcp_enhancer.py ⚠️ DEPRECATED
 
-**位置**: `scripts/legacy/stage2a_mcp_enhancer.py`
+**位置**: 已归档至 `archive/py_unused/legacy/stage2a_mcp_enhancer.py`（原路径 `scripts/legacy/stage2a_mcp_enhancer.py`）
 **用途**: 旧 Stage 2a MCP shim，仅保留历史兼容
-**状态**: ⚠️ 已归档，不是 root `scripts/` 运行入口，不推荐执行
+**状态**: ⚠️ 已归档，不是 root `scripts/` 运行入口，不在当前流程执行
 
 **替代流程**:
 - Stage2: `scripts/stage2_unified_enhancer.py`（`--fund-flow-backend tavily`）
@@ -305,7 +310,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 **注意事项**:
@@ -317,8 +323,8 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 ### 7. legacy report/test entrypoints ⚠️ LEGACY
 
 **位置**: `generate_simple_report.py`, `tests/scripts/generate_simple_report_test.py`
-**用途**: 历史兼容入口
-**状态**: ⚠️ 不作为推荐主路径
+**用途**: 本地/CI legacy 验证
+**状态**: ⚠️ 不作为报告入口；正式报告只使用 `scripts/stage4_report_generator.py`
 
 当前推荐使用 `scripts/stage4_report_generator.py`，并通过 `--market-data`、`--pring-result`、`--output` 显式传参。
 
@@ -326,10 +332,11 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ## 实用工具脚本
 
-### 8. scripts/utility/get_real_economic_data.py
+### 8. get_real_economic_data.py（已移除）
 
-**用途**: 获取实时经济数据
-**状态**: ✅ 可用
+**位置**: 已移除（原 `scripts/utility/get_real_economic_data.py`）
+**用途**: 历史实时经济数据获取入口
+**状态**: 已移除，不在当前流程执行；当前补数使用 Stage2/Stage2.5 口径
 
 ### 9. scripts/utility/calculate_na_data.py
 
@@ -372,13 +379,15 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 
 # Stage 4: 报告生成
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 
 # 验证
 powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
@@ -395,9 +404,7 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 | `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage 2.5 | 必须 |
 | `scripts/stage3_pring_analyzer.py` | ✅ RECOMMENDED | Stage 3 | 必须 |
 | `scripts/stage4_report_generator.py` | ✅ RECOMMENDED | Stage 4 | 必须 |
-| `scripts/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | Stage 2a | 不推荐 |
-| `inject_websearch_data.py` | ⚠️ LEGACY | AI补全 | 不推荐 |
-| `run_pring_analysis.py` | ⚠️ LEGACY | Pring分析 | 不推荐 |
+| `archive/py_unused/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | Stage 2a | 不在当前流程执行 |
 | `generate_simple_report.py` | ⚠️ LEGACY | 报告生成 | 不推荐 |
 
 ---
@@ -433,7 +440,7 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 
 - **CLAUDE.md**: 完整技术文档和架构说明
 - **docs/AI报告生成标准流程_V3.3.md**: 详细执行指南
-- **docs/Stage2数据获取设计分析.md**: 历史问题分析
+- **docs/archive/legacy/Stage2数据获取设计分析.md**: 历史问题分析
 
 ---
 
@@ -442,22 +449,21 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 
 ### Stage2：统一增强（默认）
 默认 structured-provider-first：已知官方或结构化指标先尝试可信结构化源（Trading Economics、Stooq GSG、ChinaMoney JSON、NBS/PBC 详情页等），同一 key 支持 provider 级顺序兜底；全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。真实命中率优先看 `stage2_effective_hit_rate`。
+以下片段默认已设置 `DATE=$(date +%Y-%m-%d)` 与 `DATE_NH=${DATE//-/}`，并已执行 `bash run_preflight.sh`。
 
-`python scripts/stage2_unified_enhancer.py --market-data data/runs/YYYYMMDD/market_data.json --output data/runs/YYYYMMDD/market_data_stage2.json --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json --log-output logs/runs/YYYYMMDD/stage2_unified_log.json --gap-monitor data/runs/YYYYMMDD/gap_monitor.json`
+`bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data "data/runs/${DATE_NH}/market_data.json" --output "data/runs/${DATE_NH}/market_data_stage2.json" --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"`
 
 ### Stage2：高命中率（直连 + 低并发 + 易失败串行）
 ```bash
-PYTHONPATH=. source .venv/bin/activate && source .env && \
-env -u http_proxy -u https_proxy -u HTTP_PROXY -u HTTPS_PROXY \
-python scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/YYYYMMDD/market_data.json \
-  --output data/runs/YYYYMMDD/market_data_stage2.json \
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
   --execute-search \
   --fund-flow-backend tavily \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
-  --websearch-results data/runs/YYYYMMDD/websearch_results_auto.json \
-  --log-output logs/runs/YYYYMMDD/stage2_unified_log.json \
-  --gap-monitor data/runs/YYYYMMDD/gap_monitor.json \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
   --deepseek-max-concurrency 1 --deepseek-timeout 25 --max-retries 3 \
   --deepseek-serial-keys BCOM,GSG,USDCNY,USDCNH \
   --extraction-backend regex
@@ -465,4 +471,65 @@ python scripts/stage2_unified_enhancer.py \
 说明：默认仍先跑 structured-provider；如需只诊断原搜索链路，追加 `--disable-structured-providers`。搜索链路直连 Tavily，串行 DeepSeek，regex 兜底；资金流向搜索默认仍走 tavily，失败再转 Stage2.5 人工补数。
 
 ### Stage2：只跑指定任务
-`python scripts/stage2_unified_enhancer.py --market-data data/runs/YYYYMMDD/market_data.json --output data/runs/YYYYMMDD/market_data_stage2.json --tasks task1,task2 --execute-search --fund-flow-backend tavily`
+`bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data "data/runs/${DATE_NH}/market_data.json" --output "data/runs/${DATE_NH}/market_data_stage2.json" --tasks task1,task2 --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"`
+
+---
+
+## Stage2 快速运行说明（structured-provider-first + Tavily + DeepSeek / Regex 快速模式）
+
+## 依赖
+- Python 3.10+
+- 必需环境变量：`TAVILY_API_KEY`、`DEEPSEEK_API_KEY`
+- 推荐入口：`bash run_clean.sh python ...`
+
+## 典型命令
+```bash
+DATE=$(date +%Y-%m-%d)
+DATE_NH=${DATE//-/}
+bash run_preflight.sh
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --execute-search \
+  --fund-flow-backend tavily \
+  --extraction-backend regex \
+  --disable-extract \
+  --deepseek-timeout 8 \
+  --llm-hard-timeout 10 \
+  --deepseek-max-concurrency 0 \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --task-log "logs/runs/${DATE_NH}/stage_task_log.jsonl"
+```
+  - 速度优先：保持 `--extraction-backend regex --disable-extract`，约 30–60 秒。
+  - 精度优先：改为 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro --deepseek-timeout 30 --llm-hard-timeout 35 --deepseek-max-concurrency 3 --queue-concurrency 3`（默认启用 queue）。
+  - 默认先尝试 structured-provider：已知官方或结构化指标成功后不进入搜索；同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索。
+  - 排障：追加 `--disable-structured-providers` 可只跑原 Tavily/Exa/DeepSeek 搜索链路。
+  - Tavily extract 422/配额压力：保留 `--disable-extract` 或收紧 `--extract-topk 1`，先 search-only 再 regex 兜底。
+  - LangChain 默认禁用，如需实验需显式加 `--allow-langchain`。
+
+## 关键默认值
+- `--fund-flow-backend` 默认 `tavily`
+- Stage2 uses structured-provider-first for known official or structured indicators, including Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages; then it falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
+- `--deepseek-model` 默认 `deepseek-v4-pro`
+- `--deepseek-timeout` 默认 `30s`
+- `--llm-hard-timeout` 默认 `35s`
+- `--deepseek-max-concurrency` 默认 `3`，Stage2 extraction queue 默认开启，`--queue-concurrency` 默认 `3`
+- Tavily extract 默认启用，可用 `--disable-extract` 或遇 422 自动回退 search-only（有计数）
+- 实时类查询：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
+- 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
+- LangChain 默认禁用，如需实验需加 `--allow-langchain`；示例不再提供 langchain 选项。
+
+## 观测指标（summary/log）
+- score_filtered_drop、domain_filtered_drop、extract_calls、tavily_extract_calls、tavily_extract_422_count
+- timeout_count、retry_count、cache_hit_rate、avg_elapsed_ms、p50_elapsed_ms、p95_elapsed_ms
+- success_by_category / total_by_category
+- Stage2 总命中率：优先看 `stage2_effective_hit_rate`，并用 `stage2_effective_success/stage2_effective_failure/stage2_effective_denominator` 审计分子分母；它包含 structured-provider 成功和搜索抽取成功，不包含 `task_skipped_existing` 或 Stage2.5 manual 注入
+- 搜索链路命中率：看 `task_search_success`、`task_search_failed`、`search_success_rate_incremental`；该口径只诊断 Tavily/Exa 搜索链路
+- 若 `search_success_rate_incremental=0.0` 且 `task_structured_success` 或 `structured_provider_success_count` 大于 0，说明 Stage2 成功主要来自结构化源，不代表 Stage2 总命中率为 0
+
+## 兼容提醒
+- 无 MCP 跳过逻辑；资金流搜索后端统一 Tavily，ETF structured provider 默认不释放全市场 ETF gate，零值且无方向直接标人工。
+- 默认禁用 LangChain；需显式传 `--extraction-backend langchain` 且依赖齐全才启用。

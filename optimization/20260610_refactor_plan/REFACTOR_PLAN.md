@@ -22,8 +22,8 @@ CLAUDE.md 声称 "每个 `scripts/stageN_*.py` 只是薄入口,真正逻辑在 `
 ### 1.2 死代码与散落产物(用户问题 1 其余部分)
 
 - 根目录:`generate_report_simple.py`(15KB 旧版报告脚本)、`generate_simple_report.py`(2 行 re-export shim)、`update_fund_flow_20251112.bat`(2025-11 一次性脚本)、`diff_latest.txt`(0 字节)、`data_quality_report.md` / `final_analysis_report.md`(历史一次性报告)、`restore_env_vars.ps1`、`README_STAGE2_SNIPPET.md`。
-- `archive/py_unused/` 与 `archive/unused_py/` 两个互为颠倒命名的死代码目录并存。
-- `scripts/legacy/mcp_data_enhancer.py` 为旧 MCP 补数链路残留;`src/datasource/mcp_adapter.py` + `utils/mcp_tools.py` 仅被该 legacy 脚本与测试引用(CLAUDE.md 已声明"当前流程不使用旧版外部补数链路")。
+- `archive/unused_py/` 已随 PR-A 合并至 `archive/py_unused/`,当前保留单一死代码归档目录。
+- 原 `scripts/legacy/mcp_data_enhancer.py` 已随 PR-A 归档至 `archive/py_unused/legacy/mcp_data_enhancer.py`;MCP adapter/tools 仍延期,`src/datasource/mcp_adapter.py` + `utils/mcp_tools.py` 仅被归档 legacy 脚本与测试引用(CLAUDE.md 已声明"当前流程不使用旧版外部补数链路")。
 - `utils/yahoo_finance.py` 与 `providers/stage2_structured/yahoo_finance.py` 双份并存,需确认归属后删一份或合并。
 - `optimization/` 下 10 个历史目录(2025-11 至 2026-04)全部摊在工作区。
 
@@ -110,9 +110,10 @@ CLAUDE.md 声称 "每个 `scripts/stageN_*.py` 只是薄入口,真正逻辑在 `
 | `update_fund_flow_20251112.bat`、`diff_latest.txt`、`restore_env_vars.ps1` | 删除 |
 | `data_quality_report.md`、`final_analysis_report.md` | 移入 `docs/history/` 或删除 |
 | `README_STAGE2_SNIPPET.md` | 内容并入 `SCRIPTS.md` 后删除 |
-| `archive/unused_py/` | 并入 `archive/py_unused/`,保留单一目录 |
-| `scripts/legacy/` + MCP 链路(`src/datasource/mcp_adapter.py`,`src/datasource/utils/mcp_tools.py`) | 批次 0 定档 `unreachable`;删除/移动前先 `rg` 复核 `tests/`、`examples/` 和手工脚本引用,再移入 `archive/py_unused/` 并下线对应 legacy 测试 |
-| 批次 0 `unreachable` 源码集群:`agents/`(含 `background_scan/`),`analyzers/`,`comparators/`,`mappers/`,`warnings/`,`trackers/`,`generators/report_generator.py`,`engines/data_engine.py`,`utils/data_completion.py`,`calculators/{bond_calculator,economic_cycle_analyzer,fund_flow_calculator}.py`,`calculators/pring/leading_indicator.py` | PR-A 删除/归档候选;每项先按路径+dotted module 跑 `rg` 覆盖 `tests/ examples/ scripts/ docs/ optimization/`,有引用则同步下线引用或延期,无引用再移入 `archive/py_unused/` |
+| `archive/unused_py/` | ✅ PR-A 已并入 `archive/py_unused/`,保留单一目录 |
+| `scripts/legacy/` | ✅ PR-A 已归档至 `archive/py_unused/legacy/` |
+| MCP 链路(`src/datasource/mcp_adapter.py`,`src/datasource/utils/mcp_tools.py`) | **延期**:虽经批次 0 定档 `unreachable`,但 `tests/test_fund_flow_pipeline.py` 是混合测试(活的 Stage1 资金流用例 + 两处 MCPToolAdapter 用例),PR-A 不做测试手术;待该测试 MCP 段独立下线后再归档 |
+| 批次 0 `unreachable` 源码集群:`agents/`(含 `background_scan/`),`analyzers/`,`comparators/`,`mappers/`,`warnings/`,`trackers/`,`generators/report_generator.py`,`engines/data_engine.py`,`utils/data_completion.py`,`calculators/{bond_calculator,economic_cycle_analyzer,fund_flow_calculator}.py`,`calculators/pring/leading_indicator.py` | ✅ PR-A 已归档至 `archive/py_unused/datasource/`;MCP adapter/tools 延期项见上行,不包含在本归档集群 |
 | `models/pring_result_contract.py` | **保留,不进删除候选**。虽经批次 0 审计为 `unreachable`(当前仅 legacy 脚本引用),但批次 D2 计划将其接线为 `pring_result.json` 写盘校验(见 §7);提前删除会让 D2 计划踩空 |
 | `src/datasource/providers/stage2_structured/*` | **保留**。经动态 import 审计为 `reachable_not_run`,是 Stage2 structured-provider-first 生产路径,不得作为批次 A 删除候选 |
 | `utils/yahoo_finance.py` vs `providers/stage2_structured/yahoo_finance.py` | `utils/yahoo_finance.py` 为 `imported_only`,providers 版为动态可达;批次 A 不删除二者。仅记录 TODO,待批次 C 结合 adapter/fund_flow 路径收敛 |

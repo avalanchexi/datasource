@@ -13,6 +13,11 @@ fi
 # shellcheck disable=SC1091
 source scripts/runtime_env.sh
 
+# Rotate local logs older than 30 days; must never fail the wrapper.
+if [ -d logs ]; then
+  find logs -type f -mtime +30 -delete 2>/dev/null || true
+fi
+
 if [ "${1:-}" = "python" ]; then
   set -- "$DATASOURCE_PYTHON" "${@:2}"
 fi

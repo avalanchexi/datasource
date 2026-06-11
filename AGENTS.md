@@ -15,14 +15,14 @@
 - Logs: `logs/runs/YYYYMMDD/observability.json`。
 - Tests: `tests/`，fixtures in `tests/test_data_sources/`，helpers in `tests/test_datasource.py`。
 - Templates: `templates/`；generated reports: `reports/`（合并前需复核）。
-- Long jobs: `scripts/`（含 `trend_history_scan.py`, `trend_history_backfill.py`, `run_snapshot.py`）；历史/低频脚本放 `scripts/legacy/` 或 `scripts/archive/`。
+- Long jobs: `scripts/`（含 `trend_history_scan.py`, `trend_history_backfill.py`, `run_snapshot.py`）；历史/低频脚本已归档至 `archive/py_unused/legacy/`，当前保留但不属于 Stage1-4 主流程的手工辅助脚本见 `scripts/utility/`；`scripts/archive/` 为归档/手工分析脚本，不跑正常 Stage1-4。
 - Diagnostics: `scripts/stage2_health_check.py`, `scripts/stage2_low_score_audit.py`, `scripts/compare_stage2_runs.py`。
 
 ## 2. 不可破坏约束
 - 严禁从历史 `reports/*.md` 抓取或复用数据；报告只能来自 TuShare、Tavily/AI WebSearch 实时获取结果或各 stage 计算产出。
 - `trend_history` 禁止从 `reports/*.md` 反向回填；只允许 Stage1/Stage2.5 写入或 TuShare 回补。
 - 当日 Stage2 Tavily search/extract 只跑 1 次。Stage2 默认先跑 structured-provider；结构化源失败、超时、解析失败或质量 gate 阻断后才进入 Tavily-first 搜索。Tavily quota/rate/payment 类失败且配置 `EXA_API_KEY` 时可同轮切换 Exa；422、低分或网络类错误不要反复消耗 Tavily，缺口转 Stage2.5 `_manual.json` 注入。
-- 采集优先级固定：TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover + DeepSeek/regex) -> Stage2.5(manual/WebSearch 注入)。排障可传 `--disable-structured-providers` 只跑原搜索链路；旧版 Yahoo/AKShare 外部补数链路仅作为 legacy 应急。
+- 采集优先级固定：TuShare(Stage1) -> Stage2(structured-provider-first + Tavily-first，必要时 Exa quota failover + DeepSeek/regex) -> Stage2.5(manual/WebSearch 注入)。排障可传 `--disable-structured-providers` 只跑原搜索链路；旧版 Yahoo/AKShare 外部补数链路已归档，仅作历史应急参考，不在当前流程执行。
 - Stage2.5、Stage3、Stage4 会对 `data/runs/YYYYMMDD/.run.lock` 加写锁；同一日期不得并行运行这些写产物阶段。遇到 live owner 锁时先确认/停止并行会话，不手动删除；只有 stale/dead pid 或 stale corrupt lock 才允许自动回收。
 - BCOM/GSG 等美股/海外收盘类 daily quote 的搜索 `closing_date` 使用报告日前最近一个已完成交易日候选；结构化 quote 页面的 `as_of_date` 必须来自日期行或 labelled close 附近的显式页面日期，不能把周末/节假日的 `reference_date - 1` 伪造成收盘日期。报告 `ref_date` 仍保持当日报告日；不要用“今日”概念页或盘中快照替代目标收盘。
 - 手工填写的数值必须有实时来源证据；`_manual.json` 中凡填写数值的条目必须带 `source_url`，或在 `source`/`note` 中包含 URL。
@@ -83,7 +83,7 @@
 - `lower_snake_case` for modules/vars/functions; `CamelCase` classes; constants `UPPER_SNAKE_CASE`。
 - 配置优先放 `indices_config.py`, `search_profiles.py`, `config/*.yaml/json`；只为非显然意图写注释。
 - Smoke: `pytest -q` 或 `datasource-test`。
-- Focused: `python tests/test_datasource.py`, `python tests/simple_test.py`, `python tests/test_na_filling.py`。
+- Focused: `python tests/test_datasource.py`, `python tests/simple_test.py`。
 - 质量命令：`black src/ tests/ scripts/`, `flake8 src/`, `mypy src/datasource/...`；如跳过需说明原因。
 - Commit 使用 Conventional Commits: `feat:`, `fix:`, `refactor:`，一个 commit 一个逻辑变化。
 - Review 若 `HEAD` 相对基线无代码差异，结论必须写明“无可审查代码差异、无可执行问题”，不得臆造问题。若 review 识别出流程或口径问题，需同步更新本文件对应章节。
@@ -335,7 +335,7 @@ if comp < 0.8:
 - TuShare first: Stage1 优先采 TuShare 可得字段（宏观、股指日线、两融余额等）。
 - Stage2 structured/search second: TuShare 不可得或缺失字段统一走 Stage2；已知官方或结构化指标先尝试 structured-provider，失败后再走 Tavily-first 搜索与 Exa quota failover。
 - Stage2.5 last resort: 用 `data/runs/${DATE_NH}/websearch_results_manual.json` 或手工 `_manual.json` 注入。
-- Market fallback: legacy-only path，必要时运行 `scripts/legacy/fill_market_data_from_yahoo.py`，再通过 Stage2.5 注入补 commodities/bonds/forex 缺口。
+- Market fallback: legacy-only path 已归档至 `archive/py_unused/legacy/fill_market_data_from_yahoo.py`，仅作历史应急参考，不在当前流程执行；当前缺口仍通过 Stage2.5 注入补 commodities/bonds/forex 缺口。
 - `fund_flow.etf`: Stage1/Stage2 均可用 TuShare `etf_share_size.total_size` 计算全市场规模窗口变化，`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`；latest complete 121 交易日窗口中 SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析，且每个交易所当日可用行数通过候选窗口内的自适应完整性下限时，才可作为非估算 Tier2 结构化窗口值。该口径是 ETF 规模 delta，不等同于新闻口径净流入。若 TuShare 不可得、窗口不完整、partial/truncated response、窗口内部缺口或质量阻断，继续 Stage2 搜索或 Stage2.5 补数，并保持 estimated 或 fail closed。
 - `reverse_repo` 的 PBoC 结构化公告必须匹配任务 `ref_date`；`mlf` 至少匹配 `ref_date` 所在月份。公告正文和 URL 都解析不出操作日期，或期次不匹配时，不得回退为官方非估算值。
 - `DXY`: Stage1 可探测 TuShare `fx_obasic` 的 `FX_BASKET`/`USDOLLAR.FXCM` 并用 `fx_daily` 取数；报告必须标注为 TuShare `USDOLLAR` proxy，不得写成 ICE DXY。若不可得或不完整，继续 Stage2/Stage2.5。

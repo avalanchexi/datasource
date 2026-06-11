@@ -1,0 +1,13 @@
+# Minimal no-format quality gate (refactor batch A, 2026-06).
+# flake8 hook deliberately deferred: src/ has ~3500 pre-existing violations;
+# add it after a dedicated lint-cleanup pass (tracked in
+# optimization/20260610_refactor_plan/TODOS.md).
+repos:
+  - repo: local
+    hooks:
+      - id: py-compile
+        name: compileall src/datasource + scripts
+        entry: bash run_clean.sh python -m compileall -q src/datasource scripts
+        language: system
+        pass_filenames: false
+        files: \.py$

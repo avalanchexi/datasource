@@ -9,7 +9,7 @@
 | 状态 | REVIEWED — 已按 2026-04-27 二次工程评审修订，执行前仍需与 4/9 方案对账 |
 
 > **重要前置事项**：本计划尚未与项目内已有的两份相关文档对账：
-> 1. `optimization/20260409_plan_a_refactor/ANALYSIS.md`（4/9 已开工的 Plan A 重构包）
+> 1. `optimization/archive/20260409_plan_a_refactor/ANALYSIS.md`（4/9 已开工的 Plan A 重构包）
 > 2. `docs/报告生成流程重构方案.md`（标题直接命中"重构方案"）
 >
 > 在执行 PR1 之前，必须先打开这两份并与本计划对账，避免重复劳动或方向冲突。
@@ -435,19 +435,19 @@ Launch PR1, PR2, and PR5 in parallel worktrees if needed. Do not parallelize PR1
 
 ### 最高优先级 — 疑似已开工的相关重构
 
-- **`optimization/20260409_plan_a_refactor/ANALYSIS.md`** ← **执行 PR1 前必读**
-- `optimization/20260409_plan_a_refactor/CODEX_EXECUTE.md`
-- `optimization/20260409_plan_a_refactor/ITERATION_LOG.md`
+- **`optimization/archive/20260409_plan_a_refactor/ANALYSIS.md`** ← **执行 PR1 前必读**
+- `optimization/archive/20260409_plan_a_refactor/CODEX_EXECUTE.md`
+- `optimization/archive/20260409_plan_a_refactor/ITERATION_LOG.md`
 - `docs/报告生成流程重构方案.md` ← 名字直接命中"重构方案"
 - `docs/2026-04-08_市场背景扫描工具优化改造计划.md`
 
 ### 近期活跃的优化项目（参考其工作流）
 
-- `optimization/20260409_output_layout_reorg/{README, CHANGELOG, TODOS}.md`
-- `optimization/20260107_daily_report_optimization/{需求, todos, 复盘模板}.md`
-- `optimization/20251219_exa_fallback/`
-- `optimization/20251211_search_profiles/`
-- `optimization/20251124_tavily_efficiency/`
+- `optimization/archive/20260409_output_layout_reorg/{README, CHANGELOG, TODOS}.md`
+- `optimization/archive/20260107_daily_report_optimization/{需求, todos, 复盘模板}.md`
+- `optimization/archive/20251219_exa_fallback/`
+- `optimization/archive/20251211_search_profiles/`
+- `optimization/archive/20251124_tavily_efficiency/`
 
 ### 已归档（仅作历史背景）
 
@@ -486,7 +486,7 @@ Launch PR1, PR2, and PR5 in parallel worktrees if needed. Do not parallelize PR1
 - pre-commit 质量门禁。
 - Stage2 / Stage2.5 大文件拆分。
 
-本计划与 `optimization/20260409_plan_a_refactor/ANALYSIS.md`、`docs/报告生成流程重构方案.md` 的对账仍是 PR1 前置动作。
+本计划与 `optimization/archive/20260409_plan_a_refactor/ANALYSIS.md`、`docs/报告生成流程重构方案.md` 的对账仍是 PR1 前置动作。
 
 ---
 
@@ -507,7 +507,7 @@ Launch PR1, PR2, and PR5 in parallel worktrees if needed. Do not parallelize PR1
 
 ## 下一步
 
-1. **打开 `optimization/20260409_plan_a_refactor/ANALYSIS.md` + `docs/报告生成流程重构方案.md`** — 与本计划对账
+1. **打开 `optimization/archive/20260409_plan_a_refactor/ANALYSIS.md` + `docs/报告生成流程重构方案.md`** — 与本计划对账
 2. 如果方向重合，把本文档合并到 20260409 包；如果方向不同，本目录独立推进
 3. 对账完成后，从 **PR1**（语义分层 utils/coercion + json_io + text_markers，不含 pre-commit）启动
 4. 并行可开 **PR2**（Pring golden）与 **PR5**（run_paths 契约验收）

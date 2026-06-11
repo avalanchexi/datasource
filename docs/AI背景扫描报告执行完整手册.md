@@ -463,8 +463,8 @@ V3.1引入了**模块化三阶段流水线架构**，将原有的单体报告生
 
 **使用方式**:
 ```bash
-python scripts/stage1_data_collector.py \
-    --date 2025-11-10 \
+bash run_clean.sh python scripts/stage1_data_collector.py \
+  --date "$DATE" \
   --output "data/runs/${DATE_NH}/market_data.json"
 ```
 
@@ -489,7 +489,8 @@ python scripts/stage1_data_collector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 **核心特性**:
@@ -515,7 +516,8 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 **核心特性**:
@@ -537,7 +539,11 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
   --market-data "data/runs/${DATE_NH}/market_data.json" \
   --output "data/runs/${DATE_NH}/market_data_stage2.json" \
   --phase all --execute-search \
-  --fund-flow-backend tavily
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 
 bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/market_data_stage2.json" \
@@ -547,12 +553,14 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 ### AI执行建议
@@ -587,10 +595,10 @@ bash run_clean.sh python scripts/stage4_report_generator.py \
 ```bash
 # 当前方式：按 AGENTS.md 运行 Stage1 -> Stage4
 bash run_clean.sh python scripts/stage1_data_collector.py --date "$DATE" --output "data/runs/${DATE_NH}/market_data.json"
-bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data "data/runs/${DATE_NH}/market_data.json" --output "data/runs/${DATE_NH}/market_data_stage2.json" --phase all --execute-search --fund-flow-backend tavily
+bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data "data/runs/${DATE_NH}/market_data.json" --output "data/runs/${DATE_NH}/market_data_stage2.json" --phase all --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 bash run_clean.sh python scripts/stage2_5_injector.py "data/runs/${DATE_NH}/market_data_stage2.json" "data/runs/${DATE_NH}/websearch_results_manual.json" "data/runs/${DATE_NH}/market_data_complete.json"
-bash run_clean.sh python scripts/stage3_pring_analyzer.py --market-data "data/runs/${DATE_NH}/market_data_complete.json" --output "data/runs/${DATE_NH}/pring_result.json" --allow-estimated
-bash run_clean.sh python scripts/stage4_report_generator.py --market-data "data/runs/${DATE_NH}/market_data_complete.json" --pring-result "data/runs/${DATE_NH}/pring_result.json" --output "reports/${DATE}-背景扫描120.md"
+bash run_clean.sh python scripts/stage3_pring_analyzer.py --market-data "data/runs/${DATE_NH}/market_data_complete.json" --output "data/runs/${DATE_NH}/pring_result.json" --allow-estimated --skip-fund-flow-check
+bash run_clean.sh python scripts/stage4_report_generator.py --market-data "data/runs/${DATE_NH}/market_data_complete.json" --pring-result "data/runs/${DATE_NH}/pring_result.json" --output "reports/${DATE}-背景扫描120.md" --allow-fund-flow-downgrade
 ```
 
 **高级用法**:
@@ -1087,12 +1095,14 @@ python scripts/utility/data_completion_checker.py
    bash run_clean.sh python scripts/stage3_pring_analyzer.py \
      --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
      --output "data/runs/${DATE_NH}/pring_result.json" \
-     --allow-estimated
+     --allow-estimated \
+     --skip-fund-flow-check
 
    bash run_clean.sh python scripts/stage4_report_generator.py \
      --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
      --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-     --output "reports/${DATE}-背景扫描120.md"
+     --output "reports/${DATE}-背景扫描120.md" \
+     --allow-fund-flow-downgrade
    ```
 
 #### 🎯 PHASE 5.3: 优化验证循环
@@ -1255,12 +1265,14 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 
 # 验证结果
 Read reports/${DATE}-背景扫描120.md
@@ -1307,7 +1319,8 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 ---

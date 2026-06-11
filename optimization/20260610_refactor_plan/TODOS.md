@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | 规划 | 方案 v2 + 工作流 | - | ✅ 完成 | - |
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
-| 批次 A | 仓库清理 | 1 | 待生成 PR-A 计划 | 批次 0 结论已合入 |
+| 批次 A | 仓库清理 | 1 | PR-A 执行中 | 批次 0 结论已合入 |
 | 批次 B | 脚本命名收敛 | 1 | 未开始 | A |
 | 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 未开始 | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
@@ -40,8 +40,9 @@
 
 - [x] 生成 PR-A 执行计划(从 HEAD 8759371,过 §11.2 清单):`docs/superpowers/plans/2026-06-11-batch-a-repo-cleanup.md`;规划期已定死全部判断(MCP 链路因混合测试依赖延期、新增 pytest.ini 防 archive 测试被收集、pre-commit 仅 compileall——flake8 现存 ~3500 违规)
 - [x] 批次 A 处置表已按批次 0 审计结果修订:保护 Stage2 structured provider 动态加载集群,删除前增加 `tests/ examples/ scripts/ docs/ optimization/` 引用复核闸;`pring_result_contract` 因批次 D2 依赖移出删除候选(评审修正)
-- [ ] **PR-A**:根目录散件 / archive 双目录合并 / legacy MCP 链路 / optimization 归档 / logs 治理 / 最小 pre-commit
-  - [ ] Codex 执行 → Claude 评审 → 合入
+- [~] **PR-A**:根目录散件 / archive 双目录合并 / legacy 脚本归档 / MCP 链路延期 / optimization 归档 / logs 治理 / 最小 pre-commit
+  - [~] Codex 执行 → Claude 评审 → 合入
+- [ ] MCP 链路(mcp_adapter/mcp_tools)归档延期:依赖 test_fund_flow_pipeline.py MCP 段下线(PR-A 评审记录)
 
 ## 批次 B — 脚本命名收敛(§5,1 个 PR)
 

@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -9,6 +10,21 @@ TEMPLATE = (
 FUND_FLOW_GUIDE = Path(__file__).resolve().parents[1] / "docs/手动更新资金流向数据指南.md"
 CLAUDE_GUIDE = Path(__file__).resolve().parents[1] / "CLAUDE.md"
 LC_PIPELINE = Path(__file__).resolve().parents[1] / "src/datasource/engines/stage2_lc_pipeline.py"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+CURRENT_STAGE_RUNBOOKS = [
+    _REPO_ROOT / "README.md",
+    _REPO_ROOT / "SCRIPTS.md",
+    _REPO_ROOT / "docs/AI报告生成标准流程_V3.3.md",
+    _REPO_ROOT / "docs/AI背景扫描报告执行完整手册.md",
+    _REPO_ROOT / "templates/AI_EXECUTION_CHECKLIST.md",
+]
+DIRECT_STAGE_COMMAND_RE = re.compile(
+    r"(?m)^\s*(?:PYTHONPATH=[^\n]*\s+)?python3?\s+scripts/"
+    r"(stage1_data_collector|stage2_unified_enhancer)\.py\b"
+)
+STAGE2_RUN_CLEAN_RE = re.compile(
+    r"bash run_clean\.sh python scripts/stage2_unified_enhancer\.py[^\n`]*"
+)
 
 
 def _walk_values(value: Any) -> Iterable[dict]:
@@ -118,6 +134,43 @@ def test_claude_daily_pipeline_uses_run_clean_contract() -> None:
     assert "bash run_clean.sh python scripts/stage2_unified_enhancer.py" in text
     assert "source .venv/bin/activate && source .env" not in text
     assert "PYTHONPATH=./src python scripts/stage2_unified_enhancer.py" not in text
+
+
+def test_current_runbooks_use_run_clean_for_stage1_stage2() -> None:
+    offenders = []
+    for path in CURRENT_STAGE_RUNBOOKS:
+        text = path.read_text(encoding="utf-8")
+        for match in DIRECT_STAGE_COMMAND_RE.finditer(text):
+            line_no = text[: match.start()].count("\n") + 1
+            offenders.append(f"{path}:{line_no}:{match.group(0).strip()}")
+
+    assert offenders == []
+
+
+def test_current_stage2_runbook_commands_write_standard_outputs() -> None:
+    required_flags = (
+        "--output",
+        "--websearch-results",
+        "--log-output",
+        "--gap-monitor",
+    )
+    offenders = []
+    for path in CURRENT_STAGE_RUNBOOKS:
+        text = (
+            path.read_text(encoding="utf-8")
+            .replace("\\\r\n", " ")
+            .replace("\\\n", " ")
+        )
+        for match in STAGE2_RUN_CLEAN_RE.finditer(text):
+            command = match.group(0)
+            if "--help" in command:
+                continue
+            missing = [flag for flag in required_flags if flag not in command]
+            if missing:
+                line_no = text[: match.start()].count("\n") + 1
+                offenders.append(f"{path}:{line_no}: missing {missing}")
+
+    assert offenders == []
 
 
 def test_lc_pipeline_passes_indicator_key_to_fund_flow_validation() -> None:

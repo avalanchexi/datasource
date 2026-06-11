@@ -54,24 +54,25 @@ pip install -e ".[dev]"  # 包含测试、格式化、类型检查工具
 ```bash
 cp .env.example .env
 # 编辑 .env 文件，填入你的 TuShare Token、TAVILY_API_KEY 与 DEEPSEEK_API_KEY
-# 可运行 `python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
+# 可运行 `bash run_clean.sh python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
 ```
 
 ## 快速运行 Stage2（structured-provider-first + Tavily + DeepSeek/Regex）
-- 运行前：`bash run_preflight.sh`；可选健康检查 `PYTHONPATH=./src python3 scripts/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
+- 运行前：`bash run_preflight.sh`；可选健康检查 `bash run_clean.sh python scripts/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
+- 下列示例默认已设置 `DATE=$(date +%Y-%m-%d)` 与 `DATE_NH=${DATE//-/}`。
 - Stage2 uses structured-provider-first for known official or structured indicators, with provider-level fallback for the same key, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction. Current structured sources include Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages. 排障可加 `--disable-structured-providers` 回到原搜索链路。
 - 速度优先（regex，无 LLM）：
 ```bash
-PYTHONPATH=./src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/${DATE_NH}/market_data.json \
-  --output data/runs/${DATE_NH}/market_data_stage2.json \
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
   --execute-search --phase all --fund-flow-backend tavily \
   --extraction-backend regex --disable-extract \
   --deepseek-timeout 8 --llm-hard-timeout 10 --deepseek-max-concurrency 0 \
   --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
-  --log-output logs/runs/${DATE_NH}/stage2_unified_log.json \
-  --gap-monitor data/runs/${DATE_NH}/gap_monitor.json \
-  --websearch-results data/runs/${DATE_NH}/websearch_results_auto.json
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json" \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json"
 ```
 - 精度模式：保留 structured-provider-first，改用 `--extraction-backend deepseek --deepseek-model deepseek-v4-pro`；LangChain 默认禁用，如需实验需加 `--allow-langchain`。
 - Tavily extract 422/配额：可保留 `--disable-extract` 或调低 `--extract-topk 1`，先 search-only 再 regex 兜底。
@@ -83,7 +84,7 @@ pytest -q
 python tests/test_datasource.py
 ```
 
-历史专项脚本已迁入 `scripts/legacy/`；当前主路径优先使用 Stage1-4 脚本。
+历史专项脚本已归档至 `archive/py_unused/legacy/`，仅作历史参考，不在当前 Stage1-4 流程执行；当前主路径优先使用 Stage1-4 脚本。
 
 快速测试脚本示例
 
@@ -92,13 +93,15 @@ python tests/test_datasource.py
 bash run_clean.sh python scripts/stage3_pring_analyzer.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --output "data/runs/${DATE_NH}/pring_result.json" \
-  --allow-estimated
+  --allow-estimated \
+  --skip-fund-flow-check
 
 # 正式报告生成
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 
@@ -163,30 +166,50 @@ asyncio.run(get_daily_data())
 bash run_clean.sh python scripts/stage4_report_generator.py \
   --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
   --pring-result "data/runs/${DATE_NH}/pring_result.json" \
-  --output "reports/${DATE}-背景扫描120.md"
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 
-# 历史简单报告脚本：generate_report_simple.py（诊断/回溯用，不在当前流程执行）
+# 历史简单报告脚本已归档：archive/py_unused/root/generate_report_simple.py（诊断/回溯用，不在当前流程执行）
 
-# 历史扫描器（已迁入 legacy，如需回溯老流程）
-python scripts/legacy/market_scanner_unified.py
+# 历史扫描器已归档，仅历史参考，不在当前 Stage1-4 流程执行
+# 原路径: scripts/legacy/market_scanner_unified.py
+# 归档路径: archive/py_unused/legacy/market_scanner_unified.py
 
 # Stage2 一体化增强（structured-provider-first + Tavily + DeepSeek 骨架）
-python scripts/stage2_unified_enhancer.py --market-data data/runs/${DATE_NH}/market_data.json --phase all --execute-search \
-  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 
 # 重跑指定缺口（示例）
-PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/${DATE_NH}/market_data.json \
-  --resume-from-task-file data/runs/${DATE_NH}/search_tasks_stage2.jsonl \
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --resume-from-task-file "data/runs/${DATE_NH}/search_tasks_stage2.jsonl" \
   --tasks industrial,bdi \
-  --execute-search
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 
 # 仅补资金流向（选择 Tavily 后端）
-PYTHONPATH=src python3 scripts/stage2_unified_enhancer.py \
-  --market-data data/runs/${DATE_NH}/market_data.json \
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
   --tasks northbound,southbound,etf \
+  --phase all --execute-search \
   --fund-flow-backend tavily \
-  --execute-search
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 
 # 资金流向为零值时：写入 Stage2.5 manual/WebSearch JSON 后注入
 bash run_clean.sh python scripts/stage2_5_injector.py \
@@ -195,7 +218,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/market_data_complete.json"
 
 # 工具脚本 (移动到 scripts/utility/)
-python scripts/utility/get_real_economic_data.py     # 获取最新经济数据用于库存周期验证
+# scripts/utility/get_real_economic_data.py 已移除，不再作为可执行工具命令
 python scripts/utility/calculate_na_data.py         # 基于最新数据计算NA值填充
 # scripts/utility/generate_background_scan.py  # 历史/诊断背景扫描，不在当前流程执行
 # scripts/utility/background_scan_120d_generator.py  # 历史/手工分析用，不作为补数入口
@@ -323,39 +346,25 @@ datasource/
 │   ├── calculators/               # 技术指标/债券/资金流/普林格分析
 │   ├── engines/                   # 数据引擎
 │   └── generators/                # 报告生成器
-├── docs/                          # 📚 文档中心（已优化）
+├── docs/                          # 📚 文档中心
 │   ├── README.md                  # 文档导航索引
-│   ├── 系统技术文档.md             # 完整技术参考（1600+行，整合5个技术文档）
-│   ├── 开发文档.md                 # 开发指引（320+行，整合开发相关文档）
-│   ├── 报告样例大全.md             # 完整样例集合（730+行，整合4个样例文档）
-│   ├── 工作流模板.md               # 统一工作流指南（900+行，整合4个工作流文档）
-│   └── archive/                   # 归档系统
-│       ├── original_files/        # 原始文件归档（已整合的原始文档）
-│       └── README.md              # 归档说明
-├── reports/                       # 📊 报告系统
-│   ├── README.md                  # 报告系统说明
-│   └── archive/                   # 历史报告归档
-│       ├── README.md              # 历史报告说明
-│       └── [历史报告文件]          # 项目发展记录和验证案例
-├── tests/                         # 🧪 测试和示例
-│   ├── example.py                 # 使用示例
-│   ├── run_na_filling.py          # 报告生成入口
+│   ├── 系统技术文档.md             # 完整技术参考
+│   ├── history/                   # 历史报告/分析文档
+│   └── archive/                   # 历史文档归档
+├── reports/                       # 📊 生成报告输出目录
+├── tests/                         # 🧪 默认 pytest 测试集
 │   ├── simple_test.py             # 简单测试
-│   ├── test_datasource.py         # 集成测试
-│   ├── test_na_filling.py         # N/A填充测试
-│   └── integration/               # 🆕 集成测试目录
-│       ├── test_enhanced_pring.py # 增强Pring分析测试
-│       ├── test_120d_integration.py # 120日集成测试
-│       └── test_background_scan_agent.py # 背景扫描代理测试
-├── scripts/                       # 🔧 独立脚本
-│   ├── market_scanner_unified.py  # 🆕 统一市场扫描器（V2.0重构）
-│   ├── enhanced_market_scan.py    # 增强市场扫描脚本（保留）
-│   ├── utility/                   # 🆕 工具脚本目录
-│   │   ├── calculate_na_data.py   # NA数据计算工具
-│   │   ├── get_real_economic_data.py # 经济数据获取工具
-│   │   ├── generate_background_scan.py # 背景扫描生成工具
-│   │   └── background_scan_120d_generator.py # 历史/手工分析用，不作为补数入口
-│   └── archive/                   # 🆕 已归档脚本
+│   ├── test_datasource.py         # 集成测试入口
+│   ├── test_fund_flow_pipeline.py # 当前资金流/MCP 混合测试
+│   └── integration/               # 保留的集成测试
+├── scripts/                       # 🔧 Stage1-4 与诊断脚本
+│   ├── stage1_data_collector.py
+│   ├── stage2_unified_enhancer.py
+│   ├── stage2_5_injector.py
+│   ├── stage3_pring_analyzer.py
+│   ├── stage4_report_generator.py
+│   ├── utility/                   # 当前保留的手工/辅助工具
+│   └── archive/                   # 归档/手工分析脚本，不跑正常 Stage1-4
 ├── templates/                     # 📝 报告模板
 ├── assets/                        # 🖼️ 图片和静态资源
 ├── data/                          # 💾 数据文件和样本
@@ -410,14 +419,13 @@ datasource/
 
 ## 📖 文档导航
 
-文档已完成整合优化，从28个分散文件减少到12个（减少57%），提供清晰的导航结构。
+文档中心保留当前流程说明、技术参考和历史归档入口。
 
-### 🎯 核心文档（优化后）
+### 🎯 核心文档
 - **[文档索引](docs/README.md)** - 完整的文档导航中心
-- **[系统技术文档](docs/系统技术文档.md)** - 完整技术参考（1600+行，整合5个技术文档）
-- **[开发文档](docs/开发文档.md)** - 开发指引和项目结构（320+行）
-- **[报告样例大全](docs/报告样例大全.md)** - 完整样例集合（730+行）
-- **[工作流模板](docs/工作流模板.md)** - 统一工作流指南（900+行）
+- **[系统技术文档](docs/系统技术文档.md)** - 完整技术参考
+- **[AI报告生成标准流程](docs/AI报告生成标准流程_V3.3.md)** - 报告生成流程
+- **[AI背景扫描报告执行完整手册](docs/AI背景扫描报告执行完整手册.md)** - 背景扫描执行手册
 
 ### 📚 技术参考
 系统技术文档包含：
@@ -428,7 +436,7 @@ datasource/
 - 报告生成流程和文件关系
 
 ### 🔧 开发支持
-开发文档包含：
+开发支持内容覆盖：
 - Claude Code开发规范
 - 项目架构说明
 - 文件分类和组织结构
@@ -437,15 +445,15 @@ datasource/
 ### 📊 实用资源
 - **[测试脚本](tests/)** - 功能测试和使用示例
 - **[独立脚本](scripts/)** - 增强功能和工具脚本
-- **[历史报告](reports/archive/)** - 项目发展记录和验证案例
-- **[原始文档](docs/archive/original_files/)** - 已整合文档的原始版本
+- **[历史报告/分析文档](docs/history/)** - 项目发展记录和历史分析
+- **[归档文档](docs/archive/)** - 历史文档归档
 
 ### 🚀 快速入门路径
 1. 📚 **项目概况**: 阅读本README了解整体功能
-2. 🔧 **开发环境**: 查看[开发文档](docs/开发文档.md)设置环境
+2. 🔧 **开发环境**: 查看[文档索引](docs/README.md)设置环境
 3. 📖 **技术深度**: 参考[系统技术文档](docs/系统技术文档.md)理解架构
-4. 📋 **工作流程**: 使用[工作流模板](docs/工作流模板.md)执行任务
-5. 💡 **样例参考**: 浏览[报告样例大全](docs/报告样例大全.md)查看效果
+4. 📋 **工作流程**: 使用[AI报告生成标准流程](docs/AI报告生成标准流程_V3.3.md)执行任务
+5. 💡 **样例参考**: 查看[历史报告/分析文档](docs/history/)了解输出形态
 
 ## 许可证
 

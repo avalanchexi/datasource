@@ -13,7 +13,8 @@ def test_claude_stage4_command_uses_named_args():
     assert "--market-data" in text
     assert "--pring-result" in text
     assert "--output" in text
-    assert "兼容入口：tests/scripts/generate_simple_report_test.py" in text
+    assert "正式入口只使用 `scripts/stage4_report_generator.py`" in text
+    assert "`tests/scripts/generate_simple_report_test.py` 仅作本地/CI legacy 验证，不作为报告入口" in text
 
 
 def test_stage4_mlf_non_unified_rate_display():

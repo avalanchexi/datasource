@@ -9,13 +9,13 @@
 
 ### 用户指令
 ```
-执行背景扫描报告生成：YYYYMMDD
+执行背景扫描报告生成：YYYY-MM-DD
 ```
 
 ### 执行计划
 - **数据窗口**: 120个自然日
 - **预期时间**: 3-5分钟
-- **输出文件**: `reports/YYYYMMDD背景扫描120.md`
+- **输出文件**: `reports/YYYY-MM-DD-背景扫描120.md`
 
 ---
 
@@ -25,12 +25,15 @@
 
 **命令**:
 ```bash
-DATE=YYYYMMDD
-python scripts/stage1_data_collector.py --date $DATE --output data/${DATE}_market_data.json
+DATE=YYYY-MM-DD
+DATE_NH=${DATE//-/}
+bash run_clean.sh python scripts/stage1_data_collector.py \
+  --date "$DATE" \
+  --output "data/runs/${DATE_NH}/market_data.json"
 ```
 
 **检查点**:
-- [ ] 输出文件 `data/${DATE}_market_data.json` 存在
+- [ ] 输出文件 `data/runs/${DATE_NH}/market_data.json` 存在
 - [ ] A股指数数据（000001, 000300, 000016, 399001, 399006, 000905）
 - [ ] 美股指数数据（SPX, DJI, IXIC）
 - [ ] 基础汇率/债券占位符已创建
@@ -41,43 +44,43 @@ python scripts/stage1_data_collector.py --date $DATE --output data/${DATE}_marke
 
 **命令**:
 ```bash
-PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
-  --market-data data/${DATE}_market_data.json \
-  --output data/${DATE}_market_data_stage2.json \
-  --execute-search --fund-flow-backend tavily \
-  --cache-backend sqlite --cache-path reports/tavily_cache.sqlite \
-  --websearch-results reports/websearch_results_${DATE}_auto.json \
-  --gap-monitor reports/gap_monitor_${DATE}.json
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --extraction-backend deepseek \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 ```
 
 **快速模式（可选，30-60s）**:
 ```bash
-PYTHONPATH=. python scripts/stage2_unified_enhancer.py \
-  --market-data data/${DATE}_market_data.json \
-  --output data/${DATE}_market_data_stage2.json \
-  --execute-search --extraction-backend regex --disable-extract
+bash run_clean.sh python scripts/stage2_unified_enhancer.py \
+  --market-data "data/runs/${DATE_NH}/market_data.json" \
+  --output "data/runs/${DATE_NH}/market_data_stage2.json" \
+  --phase all --execute-search \
+  --fund-flow-backend tavily \
+  --extraction-backend regex --disable-extract \
+  --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite \
+  --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" \
+  --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" \
+  --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"
 ```
 
 **检查点**:
-- [ ] 输出文件 `data/${DATE}_market_data_stage2.json` 存在
-- [ ] `reports/websearch_results_${DATE}_auto.json` 生成
-- [ ] 检查 `reports/gap_monitor_${DATE}.json` 是否有缺口
+- [ ] 输出文件 `data/runs/${DATE_NH}/market_data_stage2.json` 存在
+- [ ] `data/runs/${DATE_NH}/websearch_results_auto.json` 生成
+- [ ] 检查 `data/runs/${DATE_NH}/gap_monitor.json` 是否有缺口
 - [ ] 优先查看 `stage2_effective_hit_rate`；结构化源同一 key 会顺序兜底，排障时可追加 `--disable-structured-providers`
 
 ---
 
 ### Stage 2+ (可选): 价格兜底
 
-**命令**:
-```bash
-PYTHONPATH=. python scripts/fill_market_data_from_yahoo.py \
-  --input data/${DATE}_market_data_stage2.json \
-  --output data/${DATE}_market_data_stage2_filled.json
-```
-
-**检查点**:
-- [ ] 商品价格已填充（Gold, Oil, Copper等）
-- [ ] 债券收益率已填充
+旧 Yahoo fallback 已归档至 `archive/py_unused/legacy/`，不属于当前 Stage1-4 流程。价格/债券缺口优先通过 Stage2 structured-provider-first、Stage2 搜索链路或 Stage2.5 manual/WebSearch 注入处理。
 
 ---
 
@@ -85,14 +88,15 @@ PYTHONPATH=. python scripts/fill_market_data_from_yahoo.py \
 
 **命令**:
 ```bash
-python inject_websearch_data_test.py \
-  data/${DATE}_market_data_stage2_filled.json \
-  reports/websearch_results_${DATE}_auto.json \
-  data/${DATE}_market_data_complete.json
+bash run_clean.sh python scripts/stage2_5_injector.py \
+  "data/runs/${DATE_NH}/market_data_stage2.json" \
+  "data/runs/${DATE_NH}/websearch_results_manual.json" \
+  "data/runs/${DATE_NH}/market_data_complete.json"
 ```
 
 **检查点**:
-- [ ] `data/${DATE}_market_data_complete.json` 生成
+- [ ] `data/runs/${DATE_NH}/websearch_results_manual.json` 已按缺口补充
+- [ ] `data/runs/${DATE_NH}/market_data_complete.json` 生成
 - [ ] 注入数据项 > 0
 - [ ] `metadata.data_completeness` >= 0.8
 
@@ -102,13 +106,15 @@ python inject_websearch_data_test.py \
 
 **命令**:
 ```bash
-PYTHONPATH=. python scripts/stage3_pring_analyzer.py \
-  --market-data data/${DATE}_market_data_complete.json \
-  --output data/${DATE}_pring_result.json
+bash run_clean.sh python scripts/stage3_pring_analyzer.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --output "data/runs/${DATE_NH}/pring_result.json" \
+  --allow-estimated \
+  --skip-fund-flow-check
 ```
 
 **检查点**:
-- [ ] `data/${DATE}_pring_result.json` 生成
+- [ ] `data/runs/${DATE_NH}/pring_result.json` 生成
 - [ ] Pring阶段已判定（Stage I-VI）
 - [ ] 库存周期评分已计算
 
@@ -118,14 +124,15 @@ PYTHONPATH=. python scripts/stage3_pring_analyzer.py \
 
 **命令**:
 ```bash
-PYTHONPATH=. python tests/scripts/generate_simple_report_test.py \
-  data/${DATE}_market_data_complete.json \
-  data/${DATE}_pring_result.json \
-  reports/${DATE}背景扫描120.md
+bash run_clean.sh python scripts/stage4_report_generator.py \
+  --market-data "data/runs/${DATE_NH}/market_data_complete.json" \
+  --pring-result "data/runs/${DATE_NH}/pring_result.json" \
+  --output "reports/${DATE}-背景扫描120.md" \
+  --allow-fund-flow-downgrade
 ```
 
 **检查点**:
-- [ ] `reports/${DATE}背景扫描120.md` 生成
+- [ ] `reports/${DATE}-背景扫描120.md` 生成
 - [ ] 文件大小约 4800-5200 bytes
 
 ---
@@ -134,7 +141,8 @@ PYTHONPATH=. python tests/scripts/generate_simple_report_test.py \
 
 **命令**:
 ```bash
-cat reports/gap_monitor_${DATE}.json  # 应为 [] 或 {}
+cat "data/runs/${DATE_NH}/gap_monitor.json"  # 应无 pending_tasks/manual_required
+test -s "reports/${DATE}-背景扫描120.md"
 ```
 
 **最终检查**:
