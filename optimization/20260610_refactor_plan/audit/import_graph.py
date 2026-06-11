@@ -3,12 +3,15 @@
 One-off tool for optimization/20260610_refactor_plan (REFACTOR_PLAN section 3).
 Parses src/datasource/** and scripts/*.py with ast, then computes which
 datasource modules are reachable from non-legacy script entry points.
-Known blind spot: importlib/__import__ dynamic imports are not detected.
+``importlib.import_module`` calls with literal or f-string module names are
+detected by regex (f-string static prefix expands to all known submodules);
+other dynamic forms (``__import__``, computed strings) remain blind spots.
 """
 
 import argparse
 import ast
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -67,6 +70,29 @@ def extract_import_candidates(source, module_name=None, is_package=False):
     return candidates
 
 
+DYNAMIC_IMPORT_RE = re.compile(r"""import_module\(\s*f?["']([\w.]+)(\{)?""")
+
+
+def extract_dynamic_import_targets(source, known):
+    """Known modules referenced via ``import_module`` literals or f-strings.
+
+    ``import_module("pkg.mod")`` resolves exactly; for
+    ``import_module(f"pkg.sub.{name}")`` every known module under the static
+    prefix is returned (the registry pattern: all providers loadable).
+    """
+    out = set()
+    for match in DYNAMIC_IMPORT_RE.finditer(source):
+        prefix, has_brace = match.group(1), match.group(2)
+        if has_brace:
+            head = prefix.rstrip(".")
+            for name in known:
+                if name == head or name.startswith(head + "."):
+                    out.add(name)
+        elif prefix in known:
+            out.add(prefix)
+    return sorted(out)
+
+
 def _filter_known(candidates, known):
     """Map each candidate to its longest known module prefix."""
     out = set()
@@ -89,16 +115,20 @@ def build_graph():
     edges = {}
     for name, path in known.items():
         is_pkg = path.name == "__init__.py"
-        cands = extract_import_candidates(
-            path.read_text(encoding="utf-8"), name, is_pkg
-        )
-        edges[name] = _filter_known(cands, known)
+        source = path.read_text(encoding="utf-8")
+        cands = extract_import_candidates(source, name, is_pkg)
+        deps = set(_filter_known(cands, known))
+        deps.update(extract_dynamic_import_targets(source, known))
+        edges[name] = sorted(deps)
     entries = {}
-    for path in sorted(SCRIPTS_DIR.glob("*.py")):  # top-level only: excludes scripts/legacy/
+    for path in sorted(SCRIPTS_DIR.glob("*.py")):  # top-level only: excludes legacy/utility/archive subdirs
         if path.name == "__init__.py":
             continue
-        cands = extract_import_candidates(path.read_text(encoding="utf-8"))
-        entries["scripts/" + path.name] = _filter_known(cands, known)
+        source = path.read_text(encoding="utf-8")
+        cands = extract_import_candidates(source)
+        deps = set(_filter_known(cands, known))
+        deps.update(extract_dynamic_import_targets(source, known))
+        entries["scripts/" + path.name] = sorted(deps)
     return known, edges, entries
 
 

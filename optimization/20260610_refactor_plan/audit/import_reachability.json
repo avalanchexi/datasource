@@ -460,7 +460,7 @@
     },
     "datasource.providers.stage2_structured.cdb_estimator": {
       "file": "src/datasource/providers/stage2_structured/cdb_estimator.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.chinabond",
@@ -469,7 +469,7 @@
     },
     "datasource.providers.stage2_structured.chinabond": {
       "file": "src/datasource/providers/stage2_structured/chinabond.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",
@@ -478,7 +478,7 @@
     },
     "datasource.providers.stage2_structured.eastmoney_etf": {
       "file": "src/datasource/providers/stage2_structured/eastmoney_etf.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",
@@ -487,12 +487,12 @@
     },
     "datasource.providers.stage2_structured.http_fetcher": {
       "file": "src/datasource/providers/stage2_structured/http_fetcher.py",
-      "reachable": false,
+      "reachable": true,
       "imports": []
     },
     "datasource.providers.stage2_structured.market_quote_pages": {
       "file": "src/datasource/providers/stage2_structured/market_quote_pages.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",
@@ -501,7 +501,7 @@
     },
     "datasource.providers.stage2_structured.official_china": {
       "file": "src/datasource/providers/stage2_structured/official_china.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",
@@ -513,17 +513,30 @@
       "file": "src/datasource/providers/stage2_structured/registry.py",
       "reachable": true,
       "imports": [
-        "datasource.providers.stage2_structured.base"
+        "datasource.providers.stage2_structured",
+        "datasource.providers.stage2_structured.base",
+        "datasource.providers.stage2_structured.cdb_estimator",
+        "datasource.providers.stage2_structured.chinabond",
+        "datasource.providers.stage2_structured.eastmoney_etf",
+        "datasource.providers.stage2_structured.http_fetcher",
+        "datasource.providers.stage2_structured.market_quote_pages",
+        "datasource.providers.stage2_structured.official_china",
+        "datasource.providers.stage2_structured.registry",
+        "datasource.providers.stage2_structured.source_tiers",
+        "datasource.providers.stage2_structured.stooq",
+        "datasource.providers.stage2_structured.trading_economics",
+        "datasource.providers.stage2_structured.tushare_etf",
+        "datasource.providers.stage2_structured.yahoo_finance"
       ]
     },
     "datasource.providers.stage2_structured.source_tiers": {
       "file": "src/datasource/providers/stage2_structured/source_tiers.py",
-      "reachable": false,
+      "reachable": true,
       "imports": []
     },
     "datasource.providers.stage2_structured.stooq": {
       "file": "src/datasource/providers/stage2_structured/stooq.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",
@@ -532,7 +545,7 @@
     },
     "datasource.providers.stage2_structured.trading_economics": {
       "file": "src/datasource/providers/stage2_structured/trading_economics.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",
@@ -541,7 +554,7 @@
     },
     "datasource.providers.stage2_structured.tushare_etf": {
       "file": "src/datasource/providers/stage2_structured/tushare_etf.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.source_tiers"
@@ -549,7 +562,7 @@
     },
     "datasource.providers.stage2_structured.yahoo_finance": {
       "file": "src/datasource/providers/stage2_structured/yahoo_finance.py",
-      "reachable": false,
+      "reachable": true,
       "imports": [
         "datasource.providers.stage2_structured.base",
         "datasource.providers.stage2_structured.http_fetcher",

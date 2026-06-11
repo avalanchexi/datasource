@@ -48,8 +48,14 @@ def coverage_by_module(coverage_payload):
     out = {}
     for file_key, info in coverage_payload.get("files", {}).items():
         name = import_graph.module_name_for(import_graph.ROOT / file_key)
-        if name:
-            out[name] = info.get("summary", {}).get("percent_covered")
+        if not name:
+            continue
+        summary = info.get("summary", {})
+        if not summary.get("num_statements"):
+            # 零语句文件(空 __init__.py、纯 docstring 桩)恒为 100%,
+            # 是空洞证据;按"无运行时证据"处理,落回静态档
+            continue
+        out[name] = summary.get("percent_covered")
     return out
 
 
@@ -75,18 +81,28 @@ def build_rows(reachability_payload, cov_map):
     return rows
 
 
-def render_markdown(rows):
+def render_markdown(rows, entries=None):
     counts = {tier: 0 for tier in TIER_ORDER}
     for row in rows.values():
         counts[row["tier"]] += 1
     lines = [
         "# 批次 0 功能有效性审计结果",
         "",
-        "- 口径:coverage >= %.0f%% 记为 runtime_used(启发式,边缘值人工复核)"
+        "- 口径:coverage >= %.0f%% 记为 runtime_used(启发式,边缘值人工复核);"
+        "零语句文件(空 __init__/纯 docstring)无运行时证据,按静态档分级"
         % RUNTIME_USED_THRESHOLD,
         "- 运行时证据仅来自离线回放 Stage2.5 -> Stage3 -> Stage4 report;"
         "Stage1/Stage2 专属模块最高只能定为 reachable_not_run",
-        "- 局限:importlib/动态导入静态不可见",
+        "- 静态图覆盖 ast import + importlib.import_module 字面量/f-string 前缀"
+        "(如 stage2_structured registry 动态加载);"
+        "局限:__import__、运行期拼接字符串仍不可见",
+    ]
+    if entries:
+        lines.append(
+            "- 入口集:scripts/*.py 顶层共 %d 个(不含 legacy/utility/archive 子目录),"
+            "清单见 import_reachability.json entries" % len(entries)
+        )
+    lines += [
         "",
         "## 总览",
         "",
@@ -137,7 +153,9 @@ def main():
     Path(args.output_json).write_text(
         json.dumps(rows, indent=2, ensure_ascii=False), encoding="utf-8"
     )
-    Path(args.output_md).write_text(render_markdown(rows), encoding="utf-8")
+    Path(args.output_md).write_text(
+        render_markdown(rows, reachability.get("entries")), encoding="utf-8"
+    )
     summary = {tier: 0 for tier in TIER_ORDER}
     for row in rows.values():
         summary[row["tier"]] += 1

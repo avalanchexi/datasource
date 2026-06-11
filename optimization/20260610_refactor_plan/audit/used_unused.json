@@ -14,8 +14,8 @@
   },
   "datasource.adapters": {
     "file": "src/datasource/adapters/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.adapters.exa_client": {
@@ -98,8 +98,8 @@
   },
   "datasource.cache": {
     "file": "src/datasource/cache/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.cache.memory_cache": {
@@ -123,8 +123,8 @@
   },
   "datasource.calculators": {
     "file": "src/datasource/calculators/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.calculators.bond_calculator": {
@@ -151,16 +151,16 @@
   },
   "datasource.calculators.pring": {
     "file": "src/datasource/calculators/pring/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": [
       "datasource.calculators.pring_analyzer"
     ]
   },
   "datasource.calculators.pring.leading_indicator": {
     "file": "src/datasource/calculators/pring/leading_indicator.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "unreachable",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.calculators.pring.scoring": {
@@ -255,8 +255,8 @@
   },
   "datasource.engines": {
     "file": "src/datasource/engines/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.engines.data_engine": {
@@ -294,8 +294,8 @@
   },
   "datasource.generators": {
     "file": "src/datasource/generators/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.generators.report_generator": {
@@ -353,8 +353,8 @@
   },
   "datasource.models": {
     "file": "src/datasource/models/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.models.base": {
@@ -393,8 +393,8 @@
   },
   "datasource.providers": {
     "file": "src/datasource/providers/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.providers.stage2_structured": {
@@ -402,6 +402,7 @@
     "tier": "reachable_not_run",
     "coverage_percent": 0.0,
     "imported_by": [
+      "datasource.providers.stage2_structured.registry",
       "scripts/stage2_unified_enhancer.py"
     ]
   },
@@ -425,33 +426,39 @@
   },
   "datasource.providers.stage2_structured.cdb_estimator": {
     "file": "src/datasource/providers/stage2_structured/cdb_estimator.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.chinabond": {
     "file": "src/datasource/providers/stage2_structured/chinabond.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
     "imported_by": [
-      "datasource.providers.stage2_structured.cdb_estimator"
+      "datasource.providers.stage2_structured.cdb_estimator",
+      "datasource.providers.stage2_structured.registry"
     ]
   },
   "datasource.providers.stage2_structured.eastmoney_etf": {
     "file": "src/datasource/providers/stage2_structured/eastmoney_etf.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.http_fetcher": {
     "file": "src/datasource/providers/stage2_structured/http_fetcher.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
     "imported_by": [
       "datasource.providers.stage2_structured.chinabond",
       "datasource.providers.stage2_structured.eastmoney_etf",
       "datasource.providers.stage2_structured.market_quote_pages",
       "datasource.providers.stage2_structured.official_china",
+      "datasource.providers.stage2_structured.registry",
       "datasource.providers.stage2_structured.stooq",
       "datasource.providers.stage2_structured.trading_economics",
       "datasource.providers.stage2_structured.yahoo_finance"
@@ -459,27 +466,32 @@
   },
   "datasource.providers.stage2_structured.market_quote_pages": {
     "file": "src/datasource/providers/stage2_structured/market_quote_pages.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.official_china": {
     "file": "src/datasource/providers/stage2_structured/official_china.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.registry": {
     "file": "src/datasource/providers/stage2_structured/registry.py",
     "tier": "reachable_not_run",
     "coverage_percent": 0.0,
     "imported_by": [
-      "datasource.providers.stage2_structured"
+      "datasource.providers.stage2_structured",
+      "datasource.providers.stage2_structured.registry"
     ]
   },
   "datasource.providers.stage2_structured.source_tiers": {
     "file": "src/datasource/providers/stage2_structured/source_tiers.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
     "imported_by": [
       "datasource.providers.stage2_structured.cdb_estimator",
@@ -487,6 +499,7 @@
       "datasource.providers.stage2_structured.eastmoney_etf",
       "datasource.providers.stage2_structured.market_quote_pages",
       "datasource.providers.stage2_structured.official_china",
+      "datasource.providers.stage2_structured.registry",
       "datasource.providers.stage2_structured.stooq",
       "datasource.providers.stage2_structured.trading_economics",
       "datasource.providers.stage2_structured.tushare_etf",
@@ -495,27 +508,35 @@
   },
   "datasource.providers.stage2_structured.stooq": {
     "file": "src/datasource/providers/stage2_structured/stooq.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.trading_economics": {
     "file": "src/datasource/providers/stage2_structured/trading_economics.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.tushare_etf": {
     "file": "src/datasource/providers/stage2_structured/tushare_etf.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.providers.stage2_structured.yahoo_finance": {
     "file": "src/datasource/providers/stage2_structured/yahoo_finance.py",
-    "tier": "unreachable",
+    "tier": "reachable_not_run",
     "coverage_percent": 0.0,
-    "imported_by": []
+    "imported_by": [
+      "datasource.providers.stage2_structured.registry"
+    ]
   },
   "datasource.trackers": {
     "file": "src/datasource/trackers/__init__.py",
@@ -533,8 +554,8 @@
   },
   "datasource.utils": {
     "file": "src/datasource/utils/__init__.py",
-    "tier": "runtime_used",
-    "coverage_percent": 100.0,
+    "tier": "reachable_not_run",
+    "coverage_percent": null,
     "imported_by": []
   },
   "datasource.utils.coercion": {
