@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-import scripts.fix_estimated_verified as fixer
+import scripts.tools.estimated_fix_verified as fixer
 
 
 def test_fix_estimated_verified_updates_all_layers(tmp_path: Path, monkeypatch):

@@ -156,7 +156,7 @@ class TestFundFlowPipeline(unittest.TestCase):
 
     def test_manual_updater_script_exists(self):
         """测试手动更新工具脚本存在"""
-        updater_path = PROJECT_ROOT / "scripts" / "utility" / "manual_fund_flow_updater.py"
+        updater_path = PROJECT_ROOT / "scripts" / "tools" / "fund_flow_manual_updater.py"
         self.assertTrue(updater_path.exists(), f"手动更新工具不存在: {updater_path}")
 
         # 验证脚本可导入
@@ -196,8 +196,8 @@ class TestFundFlowPipeline(unittest.TestCase):
             json.dump(market_data, f, ensure_ascii=False, indent=2)
 
         # 导入更新函数
-        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "utility"))
-        from manual_fund_flow_updater import update_fund_flow
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+        from fund_flow_manual_updater import update_fund_flow
 
         with self.assertRaisesRegex(RuntimeError, "stage2_5_injector"):
             update_fund_flow(
@@ -236,8 +236,8 @@ class TestFundFlowPipeline(unittest.TestCase):
         with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(market_data, f, ensure_ascii=False, indent=2)
 
-        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "utility"))
-        from manual_fund_flow_updater import update_fund_flow
+        sys.path.insert(0, str(PROJECT_ROOT / "scripts" / "tools"))
+        from fund_flow_manual_updater import update_fund_flow
 
         with self.assertRaisesRegex(RuntimeError, "stage2_5_injector"):
             update_fund_flow(
