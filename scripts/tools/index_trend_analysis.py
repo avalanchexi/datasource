@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 
 # 添加项目根目录到路径
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(project_root, 'src'))
 
 from datasource import get_manager
