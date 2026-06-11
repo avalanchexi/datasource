@@ -16,7 +16,7 @@
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:基于 `optimization/20260610_refactor_plan/audit/AUDIT_RESULTS.md` 生成 PR-A 执行计划。**
+**当前焦点:把 `docs/superpowers/plans/2026-06-11-batch-a-repo-cleanup.md` 交给 Codex 执行(worktree 分支 `codex/batch-a-repo-cleanup`)。**
 
 ---
 
@@ -38,7 +38,7 @@
 
 ## 批次 A — 仓库清理(§4,1 个 PR)
 
-- [ ] 生成 PR-A 执行计划(从当时 HEAD,过 §11.2 清单)
+- [x] 生成 PR-A 执行计划(从 HEAD 8759371,过 §11.2 清单):`docs/superpowers/plans/2026-06-11-batch-a-repo-cleanup.md`;规划期已定死全部判断(MCP 链路因混合测试依赖延期、新增 pytest.ini 防 archive 测试被收集、pre-commit 仅 compileall——flake8 现存 ~3500 违规)
 - [x] 批次 A 处置表已按批次 0 审计结果修订:保护 Stage2 structured provider 动态加载集群,删除前增加 `tests/ examples/ scripts/ docs/ optimization/` 引用复核闸;`pring_result_contract` 因批次 D2 依赖移出删除候选(评审修正)
 - [ ] **PR-A**:根目录散件 / archive 双目录合并 / legacy MCP 链路 / optimization 归档 / logs 治理 / 最小 pre-commit
   - [ ] Codex 执行 → Claude 评审 → 合入
