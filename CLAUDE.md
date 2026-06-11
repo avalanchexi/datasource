@@ -221,14 +221,14 @@ if comp < 0.8:
 
 每个 `scripts/stageN_*.py` 只是薄入口，真正逻辑在 `src/datasource/` 下：
 
-- **Stage1 采集** (`stage1_data_collector.py`) → `manager.py`（singleton 故障转移）+ `adapters/`（`tushare_adapter`、`international_finance_adapter`）
+- **Stage1 采集** (`stage1_data_collector.py`) → `manager.py`（singleton 故障转移）+ `adapters/`（`tushare_adapter`、`international_finance_adapter`）+ `calculators/technical_indicators`（入口直接导入）
 - **Stage2 增强** (`stage2_unified_enhancer.py`) → `engines/`（`stage2_lc_pipeline` 搜索-抽取主流程、`stage2_task_planner` 质量缺口任务规划、`deepseek_reasoner`）+ `adapters/`（`tavily_client`、`exa_client`）+ `providers/stage2_structured/`（structured-provider-first 源：`stooq`/`trading_economics`/`official_china`/`chinabond`/`eastmoney_etf`/`tushare_etf`/`cdb_estimator`，经 `registry.py` + `source_tiers.py` 调度）+ `config/search_profiles.py`
 - **Stage2.5 注入** (`stage2_5_injector.py`) → `utils/`（`missing_items` canonical/兼容同步、`trend_history_store`、`key_aliases`、`quality_metrics`、`pipeline_quality_state` 等）;`utils/data_completion.py` 经批次 0 审计为流水线入口不可达,不是 Stage2.5 主链依赖
-- **Stage3 Pring 分析** (`stage3_pring_analyzer.py`) → `calculators/pring_analyzer.py` + `calculators/pring/` 子包中实际被导入的 scoring/stage/summaries + gate 在 `utils/pipeline_gate`、`utils/policy_rules`、`utils/pipeline_quality_state`;`economic_cycle_analyzer`、`fund_flow_calculator`、`bond_calculator`、`trackers/policy_tracker` 经批次 0 审计为流水线入口不可达
+- **Stage3 Pring 分析** (`stage3_pring_analyzer.py`) → `calculators/pring_analyzer.py` + `calculators/pring/` 子包中实际被导入的 `scoring`/`stage_allocations`/`summaries` + gate 在 `utils/pipeline_gate`、`utils/policy_rules`、`utils/pipeline_quality_state`；`economic_cycle_analyzer`、`fund_flow_calculator`、`bond_calculator`、`trackers/policy_tracker` 经批次 0 审计为流水线入口不可达
 - **Stage4 报告** (`stage4_report_generator.py`) → `generators/simple_report.py` + gate/路径工具;`generators/report_generator.py`、`comparators/`、`mappers/`、`analyzers/` 经批次 0 审计为流水线入口不可达
 - **120 日背景扫描 agent** → `agents/background_scan/` 当前未接入 Stage1-4 流水线,经批次 0 审计为 `unreachable`
 
-跨阶段公共件：`models/`（`market_data_contract`、`pring_result_contract` 数据契约）；`utils/` 横切工具（`coercion`/`json_io` 数值与 IO、`run_paths` 路径契约、`quality_metrics`/`observability` 指标、`source_trust`/`source_priority`/`source_conflicts` 来源信任、`text_markers` MLF marker、`gate_formatting`）。
+跨阶段公共件：`models/market_data_contract` 数据契约（`models/pring_result_contract` 经批次 0 审计为 `unreachable`，当前无流水线引用；按重构批次 D2 计划接线写盘校验，不作删除候选）；`utils/` 横切工具（`coercion`/`json_io` 数值与 IO、`run_paths` 路径契约、`quality_metrics`/`observability` 指标、`source_trust`/`source_priority`/`source_conflicts` 来源信任、`text_markers` MLF marker、`gate_formatting`）。
 
 ### Key Pattern
 

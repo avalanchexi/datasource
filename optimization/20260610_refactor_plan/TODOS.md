@@ -39,7 +39,7 @@
 ## 批次 A — 仓库清理(§4,1 个 PR)
 
 - [ ] 生成 PR-A 执行计划(从当时 HEAD,过 §11.2 清单)
-- [x] 批次 A 处置表已按批次 0 审计结果修订:保护 Stage2 structured provider 动态加载集群,删除前增加 `tests/`/`examples/` 引用复核闸
+- [x] 批次 A 处置表已按批次 0 审计结果修订:保护 Stage2 structured provider 动态加载集群,删除前增加 `tests/ examples/ scripts/ docs/ optimization/` 引用复核闸;`pring_result_contract` 因批次 D2 依赖移出删除候选(评审修正)
 - [ ] **PR-A**:根目录散件 / archive 双目录合并 / legacy MCP 链路 / optimization 归档 / logs 治理 / 最小 pre-commit
   - [ ] Codex 执行 → Claude 评审 → 合入
 
