@@ -257,8 +257,8 @@ TEST_PLAN 中 C1–C5 的验收依赖"mock Tavily/DeepSeek/Exa 网络层做 fixt
 | Spec(设计) | Claude Code(brainstorming 技能) | `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md`,每个子项目一份,用户评审通过后进入 plan |
 | Plan(执行计划) | Claude Code(writing-plans 技能) | `docs/superpowers/plans/YYYY-MM-DD-<topic>.md`;**该 PR 开工时从当时 HEAD 现生成**(行号/上下文保鲜);bite-sized 任务、TDD、精确路径/完整代码/精确命令+预期输出、无占位符 |
 | Execute(执行) | Codex(executing-plans 技能) | 在 **git worktree**(`.worktrees/codex-<topic>`,分支 `codex/<topic>`)中执行;逐 checkbox 勾选;卡住即停并回报,不擅自改计划 |
-| Review(评审) | Claude Code | 两段式:① 计划符合度(每个任务是否按计划完成、有无越界改动);② 代码质量与行为冻结区检查(见 §10) |
-| Merge | 用户或 Claude Code(经用户确认) | 合入 main;下一个 PR 的 plan 才开始生成 |
+| Review(评审) | Claude Code | 两段式:① 计划符合度(每个任务是否按计划完成、有无越界改动);② 代码质量与行为冻结区检查(见 §10);**并独立验证执行者自报的偏差清单,不只信回报摘要**(批次 A 实例:自报"若干质量修复"实为 18 个计划外 commit) |
+| Merge | 用户或 Claude Code(经用户确认) | **默认 squash 合入**(批次 A 实证:25 个 commit 含 3 个中间态测试断链);合入前验证分支与合入内容零 diff;下一个 PR 的 plan 才开始生成 |
 
 **每份 plan 必须包含统一环境头**(Codex 零上下文,不依赖其主动读 CLAUDE.md):
 
