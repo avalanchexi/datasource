@@ -60,7 +60,7 @@ def main() -> int:
     parser.parse_args()
 
     print(
-        "[ARCHIVED] scripts/utility/manual_fund_flow_updater.py is disabled: "
+        "[ARCHIVED] scripts/tools/fund_flow_manual_updater.py is disabled: "
         "direct market_data.json writes are prohibited. Use "
         "websearch_results_manual.json plus scripts/stage2_5_injector.py.",
         file=sys.stderr,
