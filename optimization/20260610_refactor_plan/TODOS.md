@@ -54,7 +54,9 @@
 
 ## 批次 C — 巨石拆分(§6,5–7 个 PR,核心)
 
-- [ ] **PR-C-0.5**:Stage2 replay harness(mock Tavily/DeepSeek/Exa + 夹具 + byte-stable 验证)— **任何搬移前的硬前置**
+- [x] PR-C-0.5 spec + 执行计划已生成(2026-06-12,可与批次 B 并行执行,零文件交叠):`docs/superpowers/plans/2026-06-12-batch-c05-stage2-replay-harness.md`
+- [ ] **PR-C-0.5**:Stage2 replay harness(replay fakes + 录制 oracle + golden byte-stable)— **任何搬移前的硬前置**
+  - [ ] Codex 执行 → Claude 评审(重点:VOLATILE_FIELDS 实证、oracle 覆盖)→ 合入
 - [ ] **PR-C0**:forex 证据判定族合一(先 characterization tests,后合一;两侧语义差异记录在 PR)
 - [ ] **PR-C1**:Stage2 拆分 — errors / snippet_filters / evidence / regex_extraction
 - [ ] **PR-C2**:Stage2 拆分 — extraction_apply / structured_runner / query_planner / diagnostics / validation / cli
