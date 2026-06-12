@@ -7,6 +7,7 @@ refresh command becomes useful after those tests exist:
 STAGE2_REPLAY_UPDATE_GOLDEN=1 pytest tests/test_stage2_replay_harness.py
 """
 
+import itertools
 import json
 import os
 from pathlib import Path
@@ -296,4 +297,113 @@ def assert_or_update_golden(payload, name):
     assert golden.exists(), f"golden missing: {golden}; update with: {update_cmd}"
     assert text == golden.read_text(encoding="utf-8"), (
         f"golden mismatch: {golden}; update with: {update_cmd}"
+    )
+
+
+def _load_tasks():
+    lines = (FIXTURES / "tasks.jsonl").read_text(encoding="utf-8").splitlines()
+    return [json.loads(ln) for ln in lines if ln.strip()]
+
+
+class Level1ReplayRegistry(ReplayRegistry):
+    """Replay structured records through the current post-writeback gates."""
+
+    def __init__(self):
+        super().__init__()
+        self._by_key = load_recordings()
+
+    async def fetch(self, task, market_payload, reference_date):
+        from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
+
+        self.calls += 1
+        key = task["indicator_key"]
+        spec = self._spec[key]
+        if spec["behavior"] == "parse_error":
+            raise StructuredProviderError(
+                provider="replay-fixture",
+                indicator_key=key,
+                reason="parse_error",
+                message="replay fixture parse error",
+            )
+
+        rec = self._by_key.get(key) or {}
+        payload = dict(spec["payload"])
+        if key in {"USDCNY", "DXY"}:
+            # Historical structured recordings predate the current forex zero-evidence
+            # gate. These additions only let replay exercise today's gate; they do
+            # not claim the original recording contained the fields.
+            payload.setdefault("issuer_match", True)
+            payload.setdefault("daily_change", 0.0)
+            payload.setdefault("change_120d", 0.0)
+            payload.setdefault("daily_change_window_evidence", "direct_daily_series")
+            payload.setdefault("change_120d_window_evidence", "direct_window")
+
+        return StructuredResult(
+            provider=rec.get("provider") or "replay-fixture",
+            indicator_key=key,
+            category=task.get("category"),
+            payload=payload,
+            source=spec["source"],
+            source_url=spec["source_url"],
+            source_tier=spec["source_tier"],
+            as_of_date=rec.get("as_of_date") or reference_date,
+            confidence=spec["confidence"],
+            diagnostics=rec.get("diagnostics") or {},
+        )
+
+
+def test_replay_execute_tasks_chains(tmp_path, monkeypatch):
+    import asyncio
+
+    import scripts.stage2_unified_enhancer as stage2
+
+    market = json.loads((FIXTURES / "market_data_input.json").read_text(encoding="utf-8"))
+    # Stabilize replay timing fields; this does not alter business behavior.
+    counter = itertools.count()
+    monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
+
+    completed, failures, websearch = asyncio.run(stage2._execute_tasks(
+        _load_tasks(), market,
+        client=ReplayTavilyClient(), exa_client=None,
+        extractor=ReplayDeepSeek(), task_log_path=tmp_path / "task_log.jsonl",
+        cache_ttl=None, structured_registry=Level1ReplayRegistry(),
+    ))
+
+    websearch_sorted = sort_results(websearch)
+    produced_by_key = {
+        item.get("indicator_key") or item.get("task", {}).get("indicator_key"): item
+        for item in websearch_sorted
+    }
+    outcome = {item.get("indicator_key") or item.get("task", {}).get("indicator_key"):
+               item.get("result_type") for item in websearch_sorted}
+
+    # 四链路覆盖(spec 验收 #4)
+    have = set(outcome.values())
+    for rt in ("structured_success", "search_success", "manual_required", "skipped_existing"):
+        assert rt in have, f"missing result_type {rt}; outcome={outcome}"
+
+    # oracle:录制任务的 result_type 与录制一致(parse_error 合成项除外)
+    recorded = load_recordings()
+    for key, rec in recorded.items():
+        if key == PARSE_ERROR_KEY:
+            continue
+        assert outcome.get(key) == rec.get("result_type"), f"{key}: {outcome.get(key)} != {rec.get('result_type')}"
+        extraction = rec.get("extraction")
+        if extraction and extraction.get("value") is not None:
+            got = produced_by_key.get(key)
+            assert got is not None, f"{key}: missing produced replay result"
+            got_extraction = got.get("extraction") or {}
+            assert got_extraction.get("value") == extraction.get("value"), (
+                f"{key}: extraction.value "
+                f"{got_extraction.get('value')} != {extraction.get('value')}"
+            )
+            assert got_extraction.get("source_url") == extraction.get("source_url"), (
+                f"{key}: extraction.source_url "
+                f"{got_extraction.get('source_url')} != {extraction.get('source_url')}"
+            )
+
+    assert_or_update_golden(
+        {"outcome": outcome, "completed": len(completed), "failures": len(failures),
+         "websearch": websearch_sorted},
+        "level1_outcome.json",
     )
