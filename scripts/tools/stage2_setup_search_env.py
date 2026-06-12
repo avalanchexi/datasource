@@ -3,7 +3,7 @@
 """
 Quick validator for Stage2 Tavily/DeepSeek environment.
 用法:
-    python scripts/setup_stage2_search_env.py
+    python scripts/tools/stage2_setup_search_env.py
 检查项:
 - 环境变量 TAVILY_API_KEY / DEEPSEEK_API_KEY 是否存在
 - Tavily API 基础连通性 (POST /search)

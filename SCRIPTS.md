@@ -237,7 +237,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 ### 6. market_data_sanitize.py（原 sanitize_market_data.py）✅ SUPPORT
 
-**位置**: `scripts/tools/market_data_sanitize.py`  
+**位置**: `scripts/tools/market_data_sanitize.py`
 **用途**: 清理历史 `market_data*.json` 中残留的 `7.13/0` 占位值（商品/债券）
 
 **使用**:
