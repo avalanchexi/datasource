@@ -1,0 +1,220 @@
+{
+  "indicator_key": "BZ=F",
+  "category": "commodities",
+  "task": {
+    "task_id": "04de584a-e817-4f7e-9dd6-acf0f3acc7a3",
+    "stage_phase": "assets",
+    "indicator_key": "BZ=F",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "BZ=F",
+    "preferred_domains": [
+      "investing.com",
+      "ice.com",
+      "tradingeconomics.com",
+      "jin10.com",
+      "eastmoney.com"
+    ],
+    "exclude_domains": [
+      "reuters.com",
+      "marketwatch.com",
+      "news.yahoo.com"
+    ],
+    "time_range": "day",
+    "max_age_days": 5,
+    "query": "布伦特原油期货 价格 今日收盘 美元/桶 BZ=F Brent crude futures price",
+    "queries": [
+      "BZ=F Brent crude futures price",
+      "布伦特原油期货 最新价格 美元/桶",
+      "Brent crude futures quote"
+    ],
+    "query_families": [
+      {
+        "name": "dated_market_quote",
+        "queries": [
+          "Brent crude futures BZ=F price 2026-05-27 closing",
+          "ICE Brent crude futures settlement price 2026年5月27日",
+          "site:tradingeconomics.com brent crude oil 2026-05-27 price"
+        ],
+        "preferred_domains": [
+          "investing.com",
+          "ice.com",
+          "tradingeconomics.com",
+          "jin10.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "brent",
+          "ice",
+          "布伦特"
+        ],
+        "exclude_keywords": [
+          "contract specifications",
+          "fact card",
+          "settlement procedures",
+          "contract specs"
+        ]
+      },
+      {
+        "name": "official_quote",
+        "queries": [
+          "ICE Brent crude futures settlement price latest 2026-05-27",
+          "ICE布伦特原油期货 主力合约 最新结算价 美元/桶 2026-05-27"
+        ],
+        "preferred_domains": [
+          "ice.com",
+          "investing.com",
+          "tradingeconomics.com"
+        ],
+        "required_keywords": [
+          "brent",
+          "ice",
+          "布伦特"
+        ],
+        "exclude_keywords": [
+          "wti"
+        ]
+      },
+      {
+        "name": "ticker_quote",
+        "queries": [
+          "BZ=F Brent crude futures quote latest 2026-05-27",
+          "Brent crude front month last price 2026-05-27"
+        ],
+        "required_keywords": [
+          "brent",
+          "bz",
+          "ice"
+        ],
+        "exclude_keywords": [
+          "wti"
+        ]
+      }
+    ],
+    "query_candidates_expanded": [
+      "Brent crude futures BZ=F price 2026-05-27 closing",
+      "ICE Brent crude futures settlement price 2026年5月27日",
+      "site:tradingeconomics.com brent crude oil 2026-05-27 price",
+      "ICE Brent crude futures settlement price latest 2026-05-27",
+      "ICE布伦特原油期货 主力合约 最新结算价 美元/桶 2026-05-27",
+      "BZ=F Brent crude futures quote latest 2026-05-27",
+      "Brent crude front month last price 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "$/barrel",
+    "issuer": "ICE",
+    "issuer_aliases": [
+      "ICE",
+      "洲际交易所"
+    ],
+    "required_keywords": [
+      "brent",
+      "ice",
+      "布伦特"
+    ],
+    "exclude_keywords": [
+      "wti"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [],
+    "evidence_keywords": [],
+    "good_url_patterns": [],
+    "bad_url_patterns": [
+      "contract specifications",
+      "fact card",
+      "settlement procedures",
+      "contract specs"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 5,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": true,
+      "extract_topk": 2
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "布伦特原油期货 价格 今日收盘 美元/桶 BZ=F Brent crude futures price"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/commodity/brent-crude-oil",
+  "source_tier": "tier2",
+  "as_of_date": "2026-05-27",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 99.0523,
+    "unit": "$/barrel"
+  },
+  "diagnostics": {
+    "label": "Brent Crude Oil",
+    "evidence_text": "Brent Crude Oil 99.0523 $/barrel"
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/brent-crude-oil",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "extraction": {
+    "value": 99.0523,
+    "unit": "$/barrel",
+    "indicator_key": "BZ=F",
+    "category": "commodities",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/commodity/brent-crude-oil",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 缺少发布机构(ICE)",
+    "as_of_date": "2026-05-27",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "Brent Crude Oil",
+      "evidence_text": "Brent Crude Oil 99.0523 $/barrel"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/brent-crude-oil",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "commodities",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 1590,
+  "force_refresh": false
+}

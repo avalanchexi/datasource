@@ -1,0 +1,142 @@
+{
+  "task": {
+    "task_id": "11bef2d0-e710-4782-a1a1-76e4922e41a8",
+    "stage_phase": "assets",
+    "indicator_key": "northbound",
+    "search_backend": "tavily",
+    "fund_flow_backend": null,
+    "query_template_id": "northbound",
+    "preferred_domains": [
+      "eastmoney.com",
+      "data.eastmoney.com",
+      "10jqka.com.cn",
+      "cls.cn",
+      "cs.com.cn",
+      "hkex.com.hk",
+      "macromicro.me"
+    ],
+    "exclude_domains": [],
+    "time_range": "month",
+    "max_age_days": 45,
+    "query": "northbound capital flow 北向资金 沪深港通 月度净流入 HKEX",
+    "queries": [
+      "Stock Connect northbound monthly flow",
+      "HKEX northbound trading statistics",
+      "2026年5月 北向资金 净买入",
+      "北向资金 累计净买入 沪股通 深股通",
+      "northbound net inflow monthly"
+    ],
+    "query_families": [
+      {
+        "name": "default",
+        "queries": [
+          "northbound capital flow 北向资金 沪深港通 月度净流入 HKEX",
+          "Stock Connect northbound monthly flow",
+          "HKEX northbound trading statistics",
+          "2026年5月 北向资金 净买入",
+          "北向资金 累计净买入 沪股通 深股通",
+          "northbound net inflow monthly"
+        ],
+        "required_keywords": [],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "northbound capital flow 北向资金 沪深港通 月度净流入 HKEX",
+      "Stock Connect northbound monthly flow",
+      "HKEX northbound trading statistics",
+      "2026年5月 北向资金 净买入",
+      "北向资金 累计净买入 沪股通 深股通",
+      "northbound net inflow monthly"
+    ],
+    "field_queries": {
+      "recent_5d": [
+        "北向资金 近5日 净流入 合计 亿元 东方财富",
+        "2026年5月 北向资金 近5日 沪深港通 净买入 合计 亿元"
+      ],
+      "total_120d": [
+        "北向资金 近120日 累计净流入 合计 亿元 东方财富",
+        "2026年 北向资金 120日 累计净买入 沪深港通 亿元"
+      ]
+    },
+    "unit": "亿元",
+    "issuer": "沪深港通",
+    "issuer_aliases": [
+      "沪股通",
+      "深股通",
+      "港交所",
+      "HKEX",
+      "Stock Connect",
+      "Hong Kong Exchanges"
+    ],
+    "required_keywords": [],
+    "exclude_keywords": [],
+    "strict_required_keywords": false,
+    "strict_issuer_match": false,
+    "required_output_fields": [
+      "recent_5d",
+      "total_120d",
+      "trend"
+    ],
+    "evidence_keywords": [
+      "北向资金",
+      "沪深港通",
+      "近5日",
+      "近120日",
+      "累计",
+      "合计",
+      "净流入",
+      "净买入"
+    ],
+    "good_url_patterns": [
+      "data.eastmoney.com",
+      "hkex.com.hk"
+    ],
+    "bad_url_patterns": [
+      "个股",
+      "十大活跃股",
+      "龙虎榜"
+    ],
+    "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 6,
+    "search_depth": "advanced",
+    "chunks_per_source": 3,
+    "auto_parameters": false,
+    "days": 45,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {},
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "monthly_period",
+    "expected_period": null,
+    "expected_period_tokens": [
+      "2026年4月",
+      "2026年1-4月",
+      "2026年04月",
+      "2026-04"
+    ],
+    "ref_date": null,
+    "retry_count": 0,
+    "created_at": 1779843176
+  },
+  "extraction": {
+    "value": 183.96,
+    "unit": "亿元",
+    "note": "existing_value",
+    "confidence": 1.0,
+    "source_url": null
+  },
+  "extraction_backend": "deepseek",
+  "raw_results": [],
+  "manual_required": false,
+  "result_type": "skipped_existing",
+  "force_refresh": false
+}

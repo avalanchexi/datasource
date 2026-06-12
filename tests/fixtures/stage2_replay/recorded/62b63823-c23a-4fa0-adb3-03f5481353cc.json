@@ -1,0 +1,289 @@
+{
+  "task": {
+    "task_id": "62b63823-c23a-4fa0-adb3-03f5481353cc",
+    "stage_phase": "assets",
+    "indicator_key": "etf",
+    "search_backend": "exa",
+    "fund_flow_backend": "tavily",
+    "query_template_id": "etf",
+    "preferred_domains": [
+      "data.eastmoney.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "day",
+    "max_age_days": 1,
+    "query": "A股ETF 全市场 近5日 近120日 资金净流入 合计 亿元 东方财富",
+    "queries": [],
+    "query_families": [
+      {
+        "name": "all_market_windows",
+        "queries": [
+          "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+          "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+          "A股ETF 全市场 近5日 近120日 资金流向 合计"
+        ],
+        "preferred_domains": [
+          "data.eastmoney.com"
+        ],
+        "required_keywords": [
+          "etf",
+          "全市场",
+          "合计"
+        ]
+      }
+    ],
+    "query_candidates_expanded": [
+      "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+      "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+      "A股ETF 全市场 近5日 近120日 资金流向 合计"
+    ],
+    "field_queries": {
+      "recent_5d": [
+        "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+        "2026年5月 A股ETF 全市场 近5日 资金流向 净流入 合计"
+      ],
+      "total_120d": [
+        "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+        "2026年 A股ETF 全市场 120日 累计资金净流入 合计"
+      ]
+    },
+    "unit": "亿元",
+    "issuer": "沪深交易所",
+    "issuer_aliases": [
+      "ETF",
+      "交易所"
+    ],
+    "required_keywords": [
+      "etf",
+      "全市场",
+      "合计"
+    ],
+    "exclude_keywords": [],
+    "strict_required_keywords": false,
+    "strict_issuer_match": false,
+    "required_output_fields": [
+      "recent_5d",
+      "total_120d",
+      "trend"
+    ],
+    "evidence_keywords": [
+      "全市场",
+      "A股ETF",
+      "近5日",
+      "近120日",
+      "净流入",
+      "净流出",
+      "累计",
+      "合计",
+      "资金流向"
+    ],
+    "good_url_patterns": [
+      "data.eastmoney.com"
+    ],
+    "bad_url_patterns": [
+      "caifuhao.eastmoney.com",
+      "/news/",
+      "data.eastmoney.com/stockdata/",
+      "/stockdata/",
+      "个股",
+      "单只",
+      "十大持仓",
+      "费率",
+      "规模创新高"
+    ],
+    "report_usage": "Stage4 fund_flow table requires recent_5d, total_120d, trend, source_url",
+    "language": "chinese",
+    "topic": "news",
+    "max_results": 6,
+    "search_depth": "advanced",
+    "chunks_per_source": 3,
+    "auto_parameters": false,
+    "days": 1,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": true,
+      "extract_topk": 2,
+      "field_retry": true
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "quality_gap",
+    "force_refresh": true,
+    "quality_gap_category": "fund_flow",
+    "quality_gap_reason": "fund_flow_window_missing",
+    "quality_gap_details": [
+      {
+        "field": "recent_5d"
+      },
+      {
+        "field": "total_120d"
+      }
+    ],
+    "time_context_type": "monthly_period",
+    "expected_period": null,
+    "expected_period_tokens": [
+      "2026年4月",
+      "2026年1-4月",
+      "2026年04月",
+      "2026-04"
+    ],
+    "ref_date": null,
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "structured_provider_attempted": true,
+    "structured_provider_fallback_reason": "policy_gate_blocked",
+    "structured_provider_latency_ms": 83257,
+    "structured_provider_diagnostics": {
+      "source_url": "https://tushare.pro/document/2",
+      "window_evidence": "direct_balance_delta",
+      "exchange_count": 2,
+      "terminal_structured_provider_error": true,
+      "missing_trade_date": "20260527",
+      "missing_exchange": "SSE",
+      "date_count": 121,
+      "row_count": 172192,
+      "structured_provider_attempts": [
+        {
+          "source_url": "https://tushare.pro/document/2",
+          "window_evidence": "direct_balance_delta",
+          "exchange_count": 2,
+          "terminal_structured_provider_error": true,
+          "missing_trade_date": "20260527",
+          "missing_exchange": "SSE",
+          "date_count": 121,
+          "row_count": 172192,
+          "structured_provider": "tushare_etf",
+          "structured_provider_indicator_key": "etf",
+          "structured_provider_error": "policy_gate_blocked",
+          "structured_provider_message": "TuShare ETF share-size window is missing exchange data"
+        }
+      ],
+      "structured_provider": "tushare_etf",
+      "structured_provider_indicator_key": "etf",
+      "structured_provider_error": "policy_gate_blocked",
+      "structured_provider_message": "TuShare ETF share-size window is missing exchange data"
+    },
+    "structured_provider_name": "tushare_etf",
+    "tavily_http_status": 432,
+    "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
+    "search_backend_state": "exa_active",
+    "failover_reason": "quota_or_rate_limit",
+    "request_id": null,
+    "exa_request_id": null,
+    "query_used": "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+    "query_family_used": "all_market_windows",
+    "field_scope": null,
+    "query_attempts": [
+      {
+        "query": "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+        "family": "all_market_windows",
+        "field_scope": null,
+        "search_backend": "exa",
+        "result_count": 6,
+        "usable_count": 0,
+        "trusted_count": 6,
+        "issuer_hit": false,
+        "period_hit": false,
+        "score_max": null,
+        "quality_score": -1.0,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 0,
+        "good_url_hit_count": 0,
+        "bad_url_hit_count": 5,
+        "unusable_reason": "search_result_scope_mismatch",
+        "exa_query": "A股ETF 全市场 近5日 资金净流入 合计 亿元 东方财富",
+        "exa_result_count": 6,
+        "exa_request_id": null,
+        "request_id": null
+      },
+      {
+        "query": "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+        "family": "all_market_windows",
+        "field_scope": null,
+        "search_backend": "exa",
+        "result_count": 1,
+        "usable_count": 0,
+        "trusted_count": 1,
+        "issuer_hit": false,
+        "period_hit": false,
+        "score_max": null,
+        "quality_score": -1.0,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 0,
+        "good_url_hit_count": 0,
+        "bad_url_hit_count": 1,
+        "unusable_reason": "search_result_scope_mismatch",
+        "exa_query": "A股ETF 全市场 近120日 累计净流入 合计 亿元 东方财富",
+        "exa_result_count": 1,
+        "exa_request_id": null,
+        "request_id": null
+      },
+      {
+        "query": "A股ETF 全市场 近5日 近120日 资金流向 合计",
+        "family": "all_market_windows",
+        "field_scope": null,
+        "search_backend": "exa",
+        "result_count": 2,
+        "usable_count": 0,
+        "trusted_count": 2,
+        "issuer_hit": false,
+        "period_hit": false,
+        "score_max": null,
+        "quality_score": -1.0,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 0,
+        "good_url_hit_count": 0,
+        "bad_url_hit_count": 2,
+        "unusable_reason": "search_result_scope_mismatch",
+        "exa_query": "A股ETF 全市场 近5日 近120日 资金流向 合计",
+        "exa_result_count": 2,
+        "exa_request_id": null,
+        "request_id": null
+      }
+    ],
+    "score_stats": {
+      "score_count": 0,
+      "score_min": null,
+      "score_p50": null,
+      "score_p95": null,
+      "score_max": null
+    },
+    "score_low_all": false,
+    "score_low_threshold": 0.2,
+    "usable_count_before_extract": 0,
+    "trusted_count": 0,
+    "issuer_hit": false,
+    "period_hit": false,
+    "selected_reason": "trusted=0 usable=0 issuer_hit=False period_hit=False usage_evidence=0 value_evidence=0 good_url=0 bad_url=0 score_max=None reason=search_result_scope_mismatch",
+    "usage_evidence_score": 0,
+    "value_evidence_score": 0,
+    "good_url_hit_count": 0,
+    "bad_url_hit_count": 0,
+    "score_filtered_drop": 0,
+    "domain_filtered_drop": 0,
+    "extraction_skipped_reason": "search_result_scope_mismatch",
+    "extract_skipped_reason": null,
+    "search_note": "exa_failover"
+  },
+  "extraction": {
+    "value": null,
+    "unit": "亿元",
+    "note": "skipped_deepseek:search_result_scope_mismatch stale_refresh_failed",
+    "source_url": null,
+    "confidence": 0.0,
+    "llm_error": "skipped_deepseek:search_result_scope_mismatch",
+    "llm_timeout": false,
+    "llm_latency_ms": 0,
+    "manual_required": true,
+    "manual_reason": "skipped_deepseek:search_result_scope_mismatch stale_refresh_failed"
+  },
+  "extraction_backend": "deepseek",
+  "raw_results": [],
+  "search_backend": "exa",
+  "note": "exa_failover",
+  "manual_required": true,
+  "manual_reason": "skipped_deepseek:search_result_scope_mismatch stale_refresh_failed",
+  "force_refresh": true,
+  "result_type": "manual_required"
+}

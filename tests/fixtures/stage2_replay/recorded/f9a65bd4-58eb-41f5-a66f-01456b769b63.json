@@ -1,0 +1,247 @@
+{
+  "indicator_key": "DXY",
+  "category": "forex",
+  "task": {
+    "task_id": "f9a65bd4-58eb-41f5-a66f-01456b769b63",
+    "stage_phase": "assets",
+    "indicator_key": "DXY",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "DXY",
+    "preferred_domains": [
+      "theice.com",
+      "investing.com",
+      "tradingeconomics.com",
+      "eastmoney.com",
+      "jin10.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "day",
+    "max_age_days": 3,
+    "query": "DXY US dollar index 美元指数 最新",
+    "queries": [
+      "DXY dollar index today",
+      "US Dollar Index quote latest",
+      "DXY index value tradingeconomics",
+      "Dollar Index value today",
+      "DXY index value",
+      "美元指数 DXY 实时点位"
+    ],
+    "query_families": [
+      {
+        "name": "dated_index_quote",
+        "queries": [
+          "DXY US Dollar Index 2026-05-27 closing level",
+          "US Dollar Index DXY current quote 2026-05-27",
+          "ICE US Dollar Index DXY latest level 2026年5月27日"
+        ],
+        "preferred_domains": [
+          "theice.com",
+          "investing.com",
+          "tradingeconomics.com",
+          "eastmoney.com",
+          "jin10.com"
+        ],
+        "required_keywords": [
+          "dxy",
+          "美元指数",
+          "dollar index"
+        ],
+        "exclude_keywords": [
+          "forecast",
+          "analysis",
+          "outlook",
+          "opinion",
+          "technical analysis"
+        ]
+      },
+      {
+        "name": "index_current_quote",
+        "queries": [
+          "US Dollar Index DXY current quote latest 2026-05-27",
+          "DXY US Dollar Index latest value Investing.com 2026-05-27",
+          "ICE US Dollar Index DXY latest level 2026-05-27"
+        ],
+        "preferred_domains": [
+          "investing.com",
+          "tradingeconomics.com",
+          "theice.com",
+          "marketwatch.com"
+        ],
+        "required_keywords": [
+          "DXY",
+          "US Dollar Index"
+        ],
+        "exclude_keywords": [
+          "DXY news",
+          "forecast",
+          "analysis",
+          "outlook"
+        ]
+      },
+      {
+        "name": "default",
+        "queries": [
+          "DXY US dollar index 美元指数 最新 2026-05-27",
+          "DXY dollar index today 2026-05-27",
+          "US Dollar Index quote latest 2026-05-27",
+          "DXY index value tradingeconomics 2026-05-27",
+          "Dollar Index value today 2026-05-27",
+          "DXY index value 2026-05-27",
+          "美元指数 DXY 实时点位 2026-05-27"
+        ],
+        "required_keywords": [],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "DXY US Dollar Index 2026-05-27 closing level",
+      "US Dollar Index DXY current quote 2026-05-27",
+      "ICE US Dollar Index DXY latest level 2026年5月27日",
+      "US Dollar Index DXY current quote latest 2026-05-27",
+      "DXY US Dollar Index latest value Investing.com 2026-05-27",
+      "ICE US Dollar Index DXY latest level 2026-05-27",
+      "DXY US dollar index 美元指数 最新 2026-05-27",
+      "DXY dollar index today 2026-05-27",
+      "US Dollar Index quote latest 2026-05-27",
+      "DXY index value tradingeconomics 2026-05-27",
+      "Dollar Index value today 2026-05-27",
+      "DXY index value 2026-05-27",
+      "美元指数 DXY 实时点位 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "点",
+    "issuer": "ICE",
+    "issuer_aliases": [
+      "Intercontinental Exchange",
+      "ICE Futures U.S.",
+      "US Dollar Index",
+      "Dollar Index",
+      "美元指数",
+      "DXY",
+      "Investing.com",
+      "Trading Economics"
+    ],
+    "required_keywords": [
+      "dxy",
+      "美元指数",
+      "dollar index"
+    ],
+    "exclude_keywords": [],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [
+      "current_value"
+    ],
+    "evidence_keywords": [
+      "DXY",
+      "US Dollar Index",
+      "latest",
+      "last",
+      "level"
+    ],
+    "good_url_patterns": [
+      "investing.com/indices/us-dollar-index",
+      "tradingeconomics.com",
+      "marketwatch.com/investing/index/dxy"
+    ],
+    "bad_url_patterns": [
+      "forecast",
+      "analysis",
+      "outlook",
+      "opinion",
+      "technical analysis",
+      "DXY news"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 3,
+    "low_score_threshold": 0.05,
+    "allow_low_score_extract": true,
+    "extract_policy": {
+      "use_tavily_extract": false,
+      "extract_topk": 0
+    },
+    "max_query_candidates": 3,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "DXY US dollar index 美元指数 最新"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/united-states/currency",
+  "source_tier": "tier2",
+  "as_of_date": "2026-05-27",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 99.08124,
+    "unit": "points"
+  },
+  "diagnostics": {
+    "label": "US Dollar Index",
+    "evidence_text": "US Dollar Index 99.08124 points"
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/united-states/currency",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "extraction": {
+    "value": 99.08124,
+    "unit": "points",
+    "indicator_key": "DXY",
+    "category": "forex",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/united-states/currency",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 缺少发布机构(ICE)",
+    "as_of_date": "2026-05-27",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "US Dollar Index",
+      "evidence_text": "US Dollar Index 99.08124 points"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/united-states/currency",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "forex",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 6062,
+  "force_refresh": false
+}

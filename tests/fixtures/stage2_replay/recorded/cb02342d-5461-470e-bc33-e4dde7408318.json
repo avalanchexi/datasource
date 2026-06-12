@@ -1,0 +1,219 @@
+{
+  "indicator_key": "GC=F",
+  "category": "commodities",
+  "task": {
+    "task_id": "cb02342d-5461-470e-bc33-e4dde7408318",
+    "stage_phase": "assets",
+    "indicator_key": "GC=F",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "GC=F",
+    "preferred_domains": [
+      "investing.com",
+      "cmegroup.com",
+      "tradingeconomics.com",
+      "jin10.com",
+      "eastmoney.com"
+    ],
+    "exclude_domains": [
+      "reuters.com",
+      "marketwatch.com",
+      "news.yahoo.com"
+    ],
+    "time_range": "day",
+    "max_age_days": 5,
+    "query": "COMEX黄金期货 价格 今日收盘 美元/盎司 GC=F gold futures price",
+    "queries": [
+      "GC=F gold futures price",
+      "GC gold futures settlement price",
+      "COMEX黄金期货 最新价格 美元/盎司",
+      "gold futures price per ounce"
+    ],
+    "query_families": [
+      {
+        "name": "dated_market_quote",
+        "queries": [
+          "COMEX gold futures GC=F price 2026-05-27 closing",
+          "COMEX gold futures settlement price 2026年5月27日",
+          "site:tradingeconomics.com gold futures 2026-05-27 price"
+        ],
+        "preferred_domains": [
+          "investing.com",
+          "cmegroup.com",
+          "tradingeconomics.com",
+          "jin10.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "gold",
+          "黄金",
+          "comex"
+        ],
+        "exclude_keywords": [
+          "contract specifications",
+          "fact card",
+          "settlement procedures",
+          "contract specs"
+        ]
+      },
+      {
+        "name": "official_quote",
+        "queries": [
+          "CME COMEX gold futures settlement price latest 2026-05-27",
+          "COMEX黄金期货 主力合约 最新结算价 美元/盎司 2026-05-27"
+        ],
+        "preferred_domains": [
+          "cmegroup.com",
+          "investing.com",
+          "tradingeconomics.com"
+        ],
+        "required_keywords": [
+          "gold",
+          "黄金",
+          "comex"
+        ],
+        "exclude_keywords": []
+      },
+      {
+        "name": "ticker_quote",
+        "queries": [
+          "GC=F gold futures quote latest 2026-05-27",
+          "GC gold futures last price 2026-05-27"
+        ],
+        "required_keywords": [
+          "gc",
+          "gold",
+          "黄金"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "COMEX gold futures GC=F price 2026-05-27 closing",
+      "COMEX gold futures settlement price 2026年5月27日",
+      "site:tradingeconomics.com gold futures 2026-05-27 price",
+      "CME COMEX gold futures settlement price latest 2026-05-27",
+      "COMEX黄金期货 主力合约 最新结算价 美元/盎司 2026-05-27",
+      "GC=F gold futures quote latest 2026-05-27",
+      "GC gold futures last price 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "$/oz",
+    "issuer": "COMEX/CME",
+    "issuer_aliases": [
+      "CME",
+      "COMEX",
+      "芝商所"
+    ],
+    "required_keywords": [
+      "gold",
+      "黄金",
+      "comex"
+    ],
+    "exclude_keywords": [
+      "gsg",
+      "bcom"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [],
+    "evidence_keywords": [],
+    "good_url_patterns": [],
+    "bad_url_patterns": [
+      "contract specifications",
+      "fact card",
+      "settlement procedures",
+      "contract specs"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 5,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": true,
+      "extract_topk": 2
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "COMEX黄金期货 价格 今日收盘 美元/盎司 GC=F gold futures price"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/commodity/gold",
+  "source_tier": "tier2",
+  "as_of_date": "2026-05-27",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 4517.8,
+    "unit": "$/oz"
+  },
+  "diagnostics": {
+    "label": "Gold",
+    "evidence_text": "Gold 4517.8 $/oz"
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/gold",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "extraction": {
+    "value": 4517.8,
+    "unit": "$/oz",
+    "indicator_key": "GC=F",
+    "category": "commodities",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/commodity/gold",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 缺少发布机构(COMEX/CME)",
+    "as_of_date": "2026-05-27",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "Gold",
+      "evidence_text": "Gold 4517.8 $/oz"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/gold",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "commodities",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 1433,
+  "force_refresh": false
+}

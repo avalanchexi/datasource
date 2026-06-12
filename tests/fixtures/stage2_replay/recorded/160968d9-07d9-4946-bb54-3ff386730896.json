@@ -1,0 +1,341 @@
+{
+  "task": {
+    "task_id": "160968d9-07d9-4946-bb54-3ff386730896",
+    "stage_phase": "assets",
+    "indicator_key": "BCOM",
+    "search_backend": "exa",
+    "fund_flow_backend": null,
+    "query_template_id": "BCOM",
+    "preferred_domains": [
+      "bloomberg.com",
+      "tradingeconomics.com",
+      "investing.com",
+      "stockcharts.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "day",
+    "max_age_days": 7,
+    "query": "彭博商品指数 BCOM 最新点位 BCOM Index level Bloomberg Commodity Index",
+    "queries": [
+      "BCOM index level",
+      "BCOM:IND Bloomberg Commodity Index level",
+      "Bloomberg Commodity Index value today",
+      "Bloomberg Commodity Index level",
+      "彭博商品指数 BCOM 点位"
+    ],
+    "query_families": [
+      {
+        "name": "investing_historical_close",
+        "queries": [
+          "Bloomberg Commodity Index historical data close 2026-05-27",
+          "Bloomberg Commodity historical data last price 2026-05-27",
+          "Investing Bloomberg Commodity Index historical data 2026年5月27日"
+        ],
+        "preferred_domains": [
+          "investing.com",
+          "ca.investing.com"
+        ],
+        "required_keywords": [
+          "Bloomberg Commodity Index",
+          "historical data"
+        ],
+        "exclude_keywords": [
+          "BCOMTR",
+          "BCOMX",
+          "GCOM",
+          "GSG",
+          "GSCI",
+          "Bloomberg Commodity Index Total Return",
+          "total return",
+          "total-return",
+          "methodology",
+          "weights",
+          "sub-index",
+          "subindex"
+        ]
+      },
+      {
+        "name": "bloomberg_index_quote",
+        "queries": [
+          "BCOM:IND Bloomberg Commodity Index quote latest level 2026-05-27",
+          "Bloomberg Commodity Index BCOM latest level 2026-05-27",
+          "BCOM Bloomberg Commodity Index current quote 2026-05-27"
+        ],
+        "preferred_domains": [
+          "bloomberg.com",
+          "tradingeconomics.com",
+          "stockcharts.com"
+        ],
+        "required_keywords": [
+          "BCOM",
+          "Bloomberg Commodity Index"
+        ],
+        "exclude_keywords": [
+          "BCOMX",
+          "GCOM",
+          "GSG",
+          "GSCI",
+          "Bloomberg Commodity Index Total Return",
+          "total return",
+          "total-return",
+          "sub-index",
+          "subindex"
+        ]
+      },
+      {
+        "name": "dated_index_quote",
+        "queries": [
+          "Bloomberg Commodity Index BCOM level 2026-05-27",
+          "BCOM:IND Bloomberg Commodity Index quote 2026-05-27",
+          "Bloomberg Commodity Index current level 2026年5月27日"
+        ],
+        "preferred_domains": [
+          "bloomberg.com",
+          "tradingeconomics.com",
+          "investing.com",
+          "stockcharts.com"
+        ],
+        "required_keywords": [
+          "bcom",
+          "bloomberg commodity index",
+          "彭博商品指数"
+        ],
+        "exclude_keywords": [
+          "target weights",
+          "annual rebalance",
+          "2026 weights",
+          "index methodology"
+        ]
+      },
+      {
+        "name": "official_index",
+        "queries": [
+          "Bloomberg Commodity Index BCOM level latest 2026-05-27",
+          "BCOM:IND Bloomberg Commodity Index quote 2026-05-27"
+        ],
+        "preferred_domains": [
+          "bloomberg.com",
+          "tradingeconomics.com",
+          "stockcharts.com"
+        ],
+        "required_keywords": [
+          "bcom",
+          "bloomberg commodity index",
+          "彭博商品指数"
+        ],
+        "exclude_keywords": [
+          "gsci",
+          "gsg"
+        ]
+      }
+    ],
+    "query_candidates_expanded": [
+      "Bloomberg Commodity Index historical data close 2026-05-27",
+      "Bloomberg Commodity historical data last price 2026-05-27",
+      "Investing Bloomberg Commodity Index historical data 2026年5月27日",
+      "BCOM:IND Bloomberg Commodity Index quote latest level 2026-05-27",
+      "Bloomberg Commodity Index BCOM latest level 2026-05-27",
+      "BCOM Bloomberg Commodity Index current quote 2026-05-27",
+      "Bloomberg Commodity Index BCOM level 2026-05-27",
+      "BCOM:IND Bloomberg Commodity Index quote 2026-05-27",
+      "Bloomberg Commodity Index current level 2026年5月27日",
+      "Bloomberg Commodity Index BCOM level latest 2026-05-27",
+      "BCOM:IND Bloomberg Commodity Index quote 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "点",
+    "issuer": "Bloomberg",
+    "issuer_aliases": [
+      "彭博"
+    ],
+    "required_keywords": [
+      "bcom",
+      "bloomberg commodity index",
+      "彭博商品指数"
+    ],
+    "exclude_keywords": [
+      "BCOMTR",
+      "BCOMX",
+      "GCOM",
+      "gsci",
+      "gsg",
+      "Bloomberg Commodity Index Total Return",
+      "total return",
+      "total-return"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [],
+    "evidence_keywords": [
+      "BCOM:IND",
+      "Bloomberg Commodity Index",
+      "BCOM",
+      "level",
+      "last price",
+      "historical data",
+      "close",
+      "points"
+    ],
+    "good_url_patterns": [
+      "bloomberg.com/quote/BCOM:IND",
+      "tradingeconomics.com",
+      "stockcharts.com",
+      "investing.com/indices/bloomberg-commodity-historical-data",
+      "ca.investing.com/indices/bloomberg-commodity-historical-data"
+    ],
+    "bad_url_patterns": [
+      "target weights",
+      "annual rebalance",
+      "2026 weights",
+      "index methodology",
+      "BCOMTR",
+      "BCOMX",
+      "GCOM",
+      "GSG",
+      "GSCI",
+      "Bloomberg Commodity Index Total Return",
+      "total return",
+      "total-return",
+      "sub-index",
+      "subindex",
+      "weights",
+      "methodology"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 5,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false,
+      "extract_topk": 0
+    },
+    "max_query_candidates": 3,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "tavily_http_status": 432,
+    "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
+    "search_backend_state": "exa_active",
+    "failover_reason": "quota_or_rate_limit",
+    "request_id": null,
+    "exa_request_id": null,
+    "query_used": "Bloomberg Commodity Index historical data close 2026-05-27",
+    "query_family_used": "investing_historical_close",
+    "field_scope": null,
+    "query_attempts": [
+      {
+        "query": "Bloomberg Commodity Index historical data close 2026-05-27",
+        "family": "investing_historical_close",
+        "field_scope": null,
+        "search_backend": "exa",
+        "result_count": 3,
+        "usable_count": 0,
+        "trusted_count": 3,
+        "issuer_hit": false,
+        "period_hit": false,
+        "score_max": null,
+        "quality_score": -1.0,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 0,
+        "good_url_hit_count": 0,
+        "bad_url_hit_count": 0,
+        "unusable_reason": "strict_keyword_miss",
+        "exa_query": "Bloomberg Commodity Index historical data close 2026-05-27",
+        "exa_result_count": 3,
+        "exa_request_id": null,
+        "request_id": null
+      },
+      {
+        "query": "Bloomberg Commodity historical data last price 2026-05-27",
+        "family": "investing_historical_close",
+        "field_scope": null,
+        "search_backend": "exa",
+        "result_count": 3,
+        "usable_count": 0,
+        "trusted_count": 3,
+        "issuer_hit": true,
+        "period_hit": false,
+        "score_max": null,
+        "quality_score": -1.0,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 0,
+        "good_url_hit_count": 0,
+        "bad_url_hit_count": 0,
+        "unusable_reason": "strict_keyword_miss",
+        "exa_query": "Bloomberg Commodity historical data last price 2026-05-27",
+        "exa_result_count": 3,
+        "exa_request_id": null,
+        "request_id": null
+      },
+      {
+        "query": "Investing Bloomberg Commodity Index historical data 2026年5月27日",
+        "family": "investing_historical_close",
+        "field_scope": null,
+        "search_backend": "exa",
+        "manual_required": true,
+        "manual_reason": "exa_empty",
+        "exa_error_tag": "empty_results",
+        "exa_query": "Investing Bloomberg Commodity Index historical data 2026年5月27日",
+        "exa_result_count": 0
+      }
+    ],
+    "score_stats": {
+      "score_count": 0,
+      "score_min": null,
+      "score_p50": null,
+      "score_p95": null,
+      "score_max": null
+    },
+    "score_low_all": false,
+    "score_low_threshold": 0.2,
+    "usable_count_before_extract": 0,
+    "trusted_count": 0,
+    "issuer_hit": false,
+    "period_hit": false,
+    "selected_reason": "trusted=0 usable=0 issuer_hit=False period_hit=False usage_evidence=0 value_evidence=0 good_url=0 bad_url=0 score_max=None reason=strict_keyword_miss",
+    "usage_evidence_score": 0,
+    "value_evidence_score": 0,
+    "good_url_hit_count": 0,
+    "bad_url_hit_count": 0,
+    "score_filtered_drop": 0,
+    "domain_filtered_drop": 0,
+    "extraction_skipped_reason": "strict_keyword_miss",
+    "extract_skipped_reason": null,
+    "search_note": "exa_failover"
+  },
+  "extraction": {
+    "value": null,
+    "unit": "点",
+    "note": "skipped_deepseek:strict_keyword_miss",
+    "source_url": null,
+    "confidence": 0.0,
+    "llm_error": "skipped_deepseek:strict_keyword_miss",
+    "llm_timeout": false,
+    "llm_latency_ms": 0,
+    "manual_required": true,
+    "manual_reason": "skipped_deepseek:strict_keyword_miss"
+  },
+  "extraction_backend": "deepseek",
+  "raw_results": [],
+  "search_backend": "exa",
+  "note": "exa_failover",
+  "manual_required": true,
+  "manual_reason": "skipped_deepseek:strict_keyword_miss",
+  "force_refresh": false,
+  "result_type": "manual_required"
+}

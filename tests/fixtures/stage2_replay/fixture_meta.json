@@ -1,0 +1,28 @@
+{
+  "search_key": "rrr",
+  "parse_error_key": "reverse_repo",
+  "structured_keys": [
+    "BZ=F",
+    "CL=F",
+    "DXY",
+    "GC=F",
+    "GSG",
+    "HG=F",
+    "USDCNY",
+    "bdi",
+    "industrial",
+    "industrial_sales",
+    "mlf",
+    "reserve_ratio",
+    "reverse_repo"
+  ],
+  "manual_keys": [
+    "BCOM",
+    "CN10Y_CDB",
+    "etf"
+  ],
+  "skip_keys": [
+    "northbound",
+    "southbound"
+  ]
+}

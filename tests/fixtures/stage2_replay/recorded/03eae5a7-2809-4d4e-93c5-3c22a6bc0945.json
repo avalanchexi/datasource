@@ -1,0 +1,224 @@
+{
+  "indicator_key": "HG=F",
+  "category": "commodities",
+  "task": {
+    "task_id": "03eae5a7-2809-4d4e-93c5-3c22a6bc0945",
+    "stage_phase": "assets",
+    "indicator_key": "HG=F",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "HG=F",
+    "preferred_domains": [
+      "investing.com",
+      "cmegroup.com",
+      "tradingeconomics.com",
+      "jin10.com",
+      "eastmoney.com"
+    ],
+    "exclude_domains": [
+      "reuters.com",
+      "marketwatch.com",
+      "news.yahoo.com"
+    ],
+    "time_range": "day",
+    "max_age_days": 5,
+    "query": "COMEX铜期货 价格 今日收盘 美元/磅 HG=F copper futures price",
+    "queries": [
+      "HG=F copper futures price",
+      "COMEX铜期货 最新价格 美元/磅",
+      "copper futures quote"
+    ],
+    "query_families": [
+      {
+        "name": "dated_market_quote",
+        "queries": [
+          "COMEX copper futures HG=F price 2026-05-27 closing",
+          "COMEX copper futures settlement price 2026年5月27日",
+          "site:tradingeconomics.com copper futures 2026-05-27 price"
+        ],
+        "preferred_domains": [
+          "investing.com",
+          "cmegroup.com",
+          "tradingeconomics.com",
+          "jin10.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "copper",
+          "铜",
+          "comex"
+        ],
+        "exclude_keywords": [
+          "contract specifications",
+          "fact card",
+          "settlement procedures",
+          "contract specs"
+        ]
+      },
+      {
+        "name": "official_quote",
+        "queries": [
+          "COMEX copper futures settlement price latest 2026-05-27",
+          "COMEX铜期货 主力合约 最新结算价 美元/磅 2026-05-27"
+        ],
+        "preferred_domains": [
+          "cmegroup.com",
+          "investing.com",
+          "tradingeconomics.com"
+        ],
+        "required_keywords": [
+          "copper",
+          "铜",
+          "comex"
+        ],
+        "exclude_keywords": [
+          "micro copper",
+          "mini copper"
+        ]
+      },
+      {
+        "name": "ticker_quote",
+        "queries": [
+          "HG=F copper futures quote latest 2026-05-27",
+          "HG COMEX copper futures last price 2026-05-27"
+        ],
+        "required_keywords": [
+          "hg",
+          "copper",
+          "铜"
+        ],
+        "exclude_keywords": [
+          "micro copper",
+          "mini copper"
+        ]
+      }
+    ],
+    "query_candidates_expanded": [
+      "COMEX copper futures HG=F price 2026-05-27 closing",
+      "COMEX copper futures settlement price 2026年5月27日",
+      "site:tradingeconomics.com copper futures 2026-05-27 price",
+      "COMEX copper futures settlement price latest 2026-05-27",
+      "COMEX铜期货 主力合约 最新结算价 美元/磅 2026-05-27",
+      "HG=F copper futures quote latest 2026-05-27",
+      "HG COMEX copper futures last price 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "$/lb",
+    "issuer": "COMEX/CME",
+    "issuer_aliases": [
+      "COMEX",
+      "CME",
+      "芝商所"
+    ],
+    "required_keywords": [
+      "copper",
+      "铜",
+      "comex"
+    ],
+    "exclude_keywords": [
+      "micro copper",
+      "mini copper"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [],
+    "evidence_keywords": [],
+    "good_url_patterns": [],
+    "bad_url_patterns": [
+      "contract specifications",
+      "fact card",
+      "settlement procedures",
+      "contract specs"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 5,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": true,
+      "extract_topk": 2
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "COMEX铜期货 价格 今日收盘 美元/磅 HG=F copper futures price"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/commodity/copper",
+  "source_tier": "tier2",
+  "as_of_date": "2026-05-27",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 6.4192,
+    "unit": "$/lb"
+  },
+  "diagnostics": {
+    "label": "Copper",
+    "evidence_text": "Copper 6.4192 $/lb"
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/copper",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "extraction": {
+    "value": 6.4192,
+    "unit": "$/lb",
+    "indicator_key": "HG=F",
+    "category": "commodities",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/commodity/copper",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 缺少发布机构(COMEX/CME)",
+    "as_of_date": "2026-05-27",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "Copper",
+      "evidence_text": "Copper 6.4192 $/lb"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/copper",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-27"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "commodities",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 1409,
+  "force_refresh": false
+}

@@ -1,0 +1,212 @@
+{
+  "indicator_key": "industrial_sales",
+  "category": "macro_indicators",
+  "task": {
+    "task_id": "2d3ecbea-8798-46a3-bca3-2438034a2385",
+    "stage_phase": "essential",
+    "indicator_key": "industrial_sales",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "industrial_sales",
+    "preferred_domains": [
+      "stats.gov.cn",
+      "ce.cn",
+      "eastmoney.com",
+      "people.com.cn",
+      "10jqka.com.cn"
+    ],
+    "exclude_domains": [],
+    "time_range": "month",
+    "max_age_days": 150,
+    "query": "规模以上工业企业 营业收入 同比 最新 数据 国家统计局",
+    "queries": [
+      "2026年1-4月 规模以上工业企业 营业收入 同比 国家统计局",
+      "2026年4月 规模以上工业企业 营业收入 同比 国家统计局",
+      "国家统计局 工业企业 营业收入 同比 最新发布"
+    ],
+    "query_families": [
+      {
+        "name": "official_nbs_release",
+        "queries": [
+          "国家统计局 2026年1-4月 规模以上工业企业 营业收入 同比",
+          "stats.gov.cn 2026年1-4月 规模以上工业企业 利润 营业收入"
+        ],
+        "preferred_domains": [
+          "stats.gov.cn",
+          "data.stats.gov.cn"
+        ],
+        "required_keywords": [
+          "规模以上工业企业",
+          "营业收入",
+          "同比"
+        ]
+      },
+      {
+        "name": "official_ytd",
+        "queries": [
+          "2026年1-4月 规模以上工业企业营业收入同比 国家统计局",
+          "2026年4月 规模以上工业企业营业收入同比 国家统计局",
+          "国家统计局 工业企业营业收入 同比 2026年1-4月"
+        ],
+        "preferred_domains": [
+          "stats.gov.cn",
+          "ce.cn",
+          "people.com.cn"
+        ],
+        "required_keywords": [
+          "工业企业",
+          "营业收入",
+          "同比"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "国家统计局 2026年1-4月 规模以上工业企业 营业收入 同比",
+      "stats.gov.cn 2026年1-4月 规模以上工业企业 利润 营业收入",
+      "2026年1-4月 规模以上工业企业营业收入同比 国家统计局",
+      "2026年4月 规模以上工业企业营业收入同比 国家统计局",
+      "国家统计局 工业企业营业收入 同比 2026年1-4月"
+    ],
+    "field_queries": {},
+    "unit": "%",
+    "issuer": "国家统计局",
+    "issuer_aliases": [
+      "统计局",
+      "NBS"
+    ],
+    "required_keywords": [
+      "工业企业",
+      "营业收入",
+      "同比"
+    ],
+    "exclude_keywords": [],
+    "strict_required_keywords": false,
+    "strict_issuer_match": false,
+    "required_output_fields": [
+      "current_value",
+      "previous_value",
+      "change_rate"
+    ],
+    "evidence_keywords": [
+      "全国",
+      "国家统计局",
+      "规模以上工业企业",
+      "营业收入",
+      "利润总额",
+      "同比"
+    ],
+    "good_url_patterns": [
+      "stats.gov.cn",
+      "data.stats.gov.cn"
+    ],
+    "bad_url_patterns": [
+      "省",
+      "市",
+      "地区",
+      "园区"
+    ],
+    "report_usage": "Stage4 macro table requires national industrial-enterprise sales/revenue period value",
+    "language": "chinese",
+    "topic": "news",
+    "max_results": 6,
+    "search_depth": "basic",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": null,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "quality_gap",
+    "force_refresh": true,
+    "quality_gap_category": "macro_indicators",
+    "quality_gap_reason": "estimated_not_allowed",
+    "quality_gap_details": null,
+    "time_context_type": "monthly_period",
+    "expected_period": null,
+    "expected_period_tokens": [
+      "2026年4月",
+      "2026年1-4月",
+      "2026年04月",
+      "2026-04"
+    ],
+    "ref_date": null,
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "规模以上工业企业 营业收入 同比 最新 数据 国家统计局"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "official_china",
+  "source": "Official China structured source",
+  "source_url": "https://www.stats.gov.cn/sj/zxfb/202604/t20260427_1963403.html",
+  "source_tier": "tier1",
+  "as_of_date": "2026-04-27",
+  "confidence": 0.9,
+  "note": "structured_provider:official_china",
+  "payload": {
+    "value": 5.0,
+    "unit": "%",
+    "is_estimated": false,
+    "value_type": "yoy_ytd",
+    "report_period": "2026-03",
+    "yoy_ytd": 5.0
+  },
+  "diagnostics": {
+    "evidence_text": "IE=edge width=device-width, initial-scale=1.0 2026年1—3月份全国规模以上工业企业利润增长15.5% - 国家统计局 2026年1—3月份全国规模以上工业企业利润增长15.5% 2026/04/27 09:30 .txt-content { font-size: 16px; } .txt-content table { font-size: small; } .txt-content p { font-size: inheri",
+    "canonical_indicator_key": "industrial_sales"
+  },
+  "results": [
+    {
+      "title": "Official China structured source",
+      "url": "https://www.stats.gov.cn/sj/zxfb/202604/t20260427_1963403.html",
+      "content": "structured_provider:official_china",
+      "score": 0.9,
+      "source_tier": "tier1",
+      "as_of_date": "2026-04-27"
+    }
+  ],
+  "extraction": {
+    "value": 5.0,
+    "unit": "%",
+    "is_estimated": false,
+    "value_type": "yoy_ytd",
+    "report_period": "2026-03",
+    "yoy_ytd": 5.0,
+    "indicator_key": "industrial_sales",
+    "category": "macro_indicators",
+    "source": "Official China structured source",
+    "source_url": "https://www.stats.gov.cn/sj/zxfb/202604/t20260427_1963403.html",
+    "source_tier": "tier1",
+    "note": "structured_provider:official_china 缺少发布机构(国家统计局)",
+    "as_of_date": "2026-04-27",
+    "confidence": 0.9,
+    "diagnostics": {
+      "evidence_text": "IE=edge width=device-width, initial-scale=1.0 2026年1—3月份全国规模以上工业企业利润增长15.5% - 国家统计局 2026年1—3月份全国规模以上工业企业利润增长15.5% 2026/04/27 09:30 .txt-content { font-size: 16px; } .txt-content table { font-size: small; } .txt-content p { font-size: inheri",
+      "canonical_indicator_key": "industrial_sales"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Official China structured source",
+      "url": "https://www.stats.gov.cn/sj/zxfb/202604/t20260427_1963403.html",
+      "content": "structured_provider:official_china",
+      "score": 0.9,
+      "source_tier": "tier1",
+      "as_of_date": "2026-04-27"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "macro_indicators",
+  "structured_provider": "official_china",
+  "structured_provider_latency_ms": 2902,
+  "force_refresh": true
+}

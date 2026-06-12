@@ -1,0 +1,248 @@
+{
+  "indicator_key": "GSG",
+  "category": "commodities",
+  "task": {
+    "task_id": "3b3dca9e-11e6-4b7a-97db-0da00d8de247",
+    "stage_phase": "assets",
+    "indicator_key": "GSG",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "GSG",
+    "preferred_domains": [
+      "ishares.com",
+      "blackrock.com",
+      "stooq.com",
+      "finance.yahoo.com",
+      "investing.com"
+    ],
+    "exclude_domains": [
+      "reuters.com",
+      "marketwatch.com",
+      "news.yahoo.com"
+    ],
+    "time_range": "day",
+    "max_age_days": 7,
+    "query": "GSG ETF 价格 iShares S&P GSCI Commodity-Indexed Trust quote",
+    "queries": [
+      "GSG ETF price",
+      "NYSEARCA:GSG price",
+      "GSG ETF quote",
+      "iShares GSG quote",
+      "GSG ETF 价格"
+    ],
+    "query_families": [
+      {
+        "name": "dated_etf_quote",
+        "queries": [
+          "GSG ETF price 2026-05-27 iShares",
+          "iShares GSG ETF market price 2026年5月27日",
+          "NYSEARCA GSG last price 2026-05-27"
+        ],
+        "preferred_domains": [
+          "ishares.com",
+          "blackrock.com",
+          "stooq.com",
+          "finance.yahoo.com",
+          "investing.com"
+        ],
+        "required_keywords": [
+          "gsg",
+          "ishares",
+          "quote"
+        ],
+        "exclude_keywords": [
+          "fund flows",
+          "net inflow",
+          "net outflow",
+          "AUM change",
+          "holding",
+          "portfolio"
+        ]
+      },
+      {
+        "name": "ishares_current_quote",
+        "queries": [
+          "iShares S&P GSCI Commodity-Indexed Trust GSG current quote 2026-05-27",
+          "NYSEARCA GSG iShares S&P GSCI Commodity-Indexed Trust price 2026-05-27",
+          "GSG ETF latest price iShares BlackRock 2026-05-27"
+        ],
+        "preferred_domains": [
+          "ishares.com",
+          "blackrock.com",
+          "investing.com"
+        ],
+        "required_keywords": [
+          "GSG",
+          "iShares"
+        ],
+        "exclude_keywords": [
+          "fund flows",
+          "net inflow",
+          "net outflow",
+          "AUM change"
+        ]
+      },
+      {
+        "name": "official_quote",
+        "queries": [
+          "iShares GSG ETF quote latest 2026-05-27",
+          "NYSEARCA:GSG last price 2026-05-27"
+        ],
+        "preferred_domains": [
+          "ishares.com",
+          "blackrock.com",
+          "stooq.com",
+          "investing.com"
+        ],
+        "required_keywords": [
+          "gsg",
+          "ishares",
+          "quote"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "GSG ETF price 2026-05-27 iShares",
+      "iShares GSG ETF market price 2026年5月27日",
+      "NYSEARCA GSG last price 2026-05-27",
+      "iShares S&P GSCI Commodity-Indexed Trust GSG current quote 2026-05-27",
+      "NYSEARCA GSG iShares S&P GSCI Commodity-Indexed Trust price 2026-05-27",
+      "GSG ETF latest price iShares BlackRock 2026-05-27",
+      "iShares GSG ETF quote latest 2026-05-27",
+      "NYSEARCA:GSG last price 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "USD",
+    "issuer": "iShares/BlackRock",
+    "issuer_aliases": [
+      "BlackRock",
+      "贝莱德",
+      "iShares"
+    ],
+    "required_keywords": [
+      "gsg",
+      "ishares",
+      "quote"
+    ],
+    "exclude_keywords": [
+      "net inflow",
+      "资金流",
+      "flow"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [],
+    "evidence_keywords": [
+      "GSG",
+      "iShares S&P GSCI Commodity-Indexed Trust",
+      "market price",
+      "NAV"
+    ],
+    "good_url_patterns": [
+      "ishares.com/us/products",
+      "blackrock.com",
+      "investing.com/etfs"
+    ],
+    "bad_url_patterns": [
+      "fund flows",
+      "net inflow",
+      "net outflow",
+      "AUM change",
+      "holding",
+      "portfolio"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 5,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false,
+      "extract_topk": 0
+    },
+    "max_query_candidates": 3,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "GSG ETF 价格 iShares S&P GSCI Commodity-Indexed Trust quote"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "stooq",
+  "source": "Stooq structured quote",
+  "source_url": "https://stooq.com/q/l/?s=gsg.us&f=sd2t2ohlcv&h&e=csv",
+  "source_tier": "tier2",
+  "as_of_date": "2026-05-26",
+  "confidence": 0.85,
+  "note": "structured_provider:stooq",
+  "payload": {
+    "value": 32.59,
+    "unit": "USD"
+  },
+  "diagnostics": {
+    "label": "GSG ETF",
+    "price_basis": "market_close",
+    "evidence_text": "GSG 32.59 USD"
+  },
+  "results": [
+    {
+      "title": "Stooq structured quote",
+      "url": "https://stooq.com/q/l/?s=gsg.us&f=sd2t2ohlcv&h&e=csv",
+      "content": "structured_provider:stooq",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-26"
+    }
+  ],
+  "extraction": {
+    "value": 32.59,
+    "unit": "USD",
+    "indicator_key": "GSG",
+    "category": "commodities",
+    "source": "Stooq structured quote",
+    "source_url": "https://stooq.com/q/l/?s=gsg.us&f=sd2t2ohlcv&h&e=csv",
+    "source_tier": "tier2",
+    "note": "structured_provider:stooq 缺少发布机构(iShares/BlackRock)",
+    "as_of_date": "2026-05-26",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "GSG ETF",
+      "price_basis": "market_close",
+      "evidence_text": "GSG 32.59 USD"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Stooq structured quote",
+      "url": "https://stooq.com/q/l/?s=gsg.us&f=sd2t2ohlcv&h&e=csv",
+      "content": "structured_provider:stooq",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-26"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "commodities",
+  "structured_provider": "stooq",
+  "structured_provider_latency_ms": 2183,
+  "force_refresh": false
+}

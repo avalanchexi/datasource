@@ -1,0 +1,296 @@
+{
+  "indicator_key": "USDCNY",
+  "category": "forex",
+  "task": {
+    "task_id": "3a8eeabf-2c50-4b5a-9454-c6a6dbbf2822",
+    "stage_phase": "assets",
+    "indicator_key": "USDCNY",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "USDCNY",
+    "preferred_domains": [
+      "chinamoney.com.cn",
+      "cfets.com.cn",
+      "eastmoney.com",
+      "investing.com",
+      "tradingeconomics.com"
+    ],
+    "exclude_domains": [
+      "xe.com",
+      "x-rates.com",
+      "boc.cn",
+      "bankofchina.com"
+    ],
+    "time_range": "day",
+    "max_age_days": 3,
+    "query": "USD CNY exchange rate 美元人民币 在岸即期汇率 最新",
+    "queries": [
+      "USD/CNY onshore exchange rate today",
+      "USD/CNY exchange rate investing.com",
+      "USD/CNY exchange rate tradingeconomics",
+      "2026年5月 美元人民币 在岸 即期 汇率",
+      "美元人民币 在岸即期汇率 最新报价",
+      "中国货币网 USD/CNY 在岸 即期 汇率",
+      "CFETS 美元 人民币 即期 汇率",
+      "中国银行 外汇牌价 美元 现汇卖出"
+    ],
+    "query_families": [
+      {
+        "name": "onshore_current_quote",
+        "queries": [
+          "USD/CNY onshore spot rate latest China Foreign Exchange Trade System 2026-05-27",
+          "USD/CNY current rate ChinaMoney latest 2026-05-27",
+          "USDCNY onshore spot quote latest 2026-05-27"
+        ],
+        "preferred_domains": [
+          "chinamoney.com.cn",
+          "cfets.com.cn",
+          "investing.com",
+          "tradingeconomics.com"
+        ],
+        "required_keywords": [
+          "USD/CNY",
+          "USDCNY"
+        ],
+        "exclude_keywords": [
+          "bankofchina",
+          "Bank of China",
+          "cash selling",
+          "bank note",
+          "currency converter"
+        ]
+      },
+      {
+        "name": "pboc_midpoint",
+        "queries": [
+          "中国人民银行 人民币汇率中间价 USD CNY 最新 2026-05-27",
+          "人民币汇率中间价 美元 人民币 2026年5月 2026-05-27",
+          "PBOC USD CNY central parity latest 2026-05-27"
+        ],
+        "preferred_domains": [
+          "pbc.gov.cn",
+          "chinamoney.com.cn",
+          "cfets.com.cn"
+        ],
+        "required_keywords": [
+          "中间价",
+          "美元",
+          "人民币",
+          "usd",
+          "cny"
+        ],
+        "exclude_keywords": [
+          "外汇牌价",
+          "现汇卖出"
+        ]
+      },
+      {
+        "name": "cfets_spot",
+        "queries": [
+          "CFETS USD/CNY 在岸即期汇率 最新报价 2026-05-27",
+          "中国货币网 USD/CNY 在岸即期汇率 最新 2026-05-27",
+          "2026年5月 USD/CNY 在岸即期汇率 CFETS 2026-05-27"
+        ],
+        "preferred_domains": [
+          "cfets.com.cn",
+          "chinamoney.com.cn"
+        ],
+        "required_keywords": [
+          "usd/cny",
+          "usdcny",
+          "在岸",
+          "即期"
+        ],
+        "exclude_keywords": [
+          "外汇牌价",
+          "现汇卖出"
+        ]
+      },
+      {
+        "name": "onshore_spot",
+        "queries": [
+          "USD/CNY onshore exchange rate latest 2026-05-27",
+          "USD/CNY quote investing tradingeconomics 2026-05-27"
+        ],
+        "preferred_domains": [
+          "investing.com",
+          "tradingeconomics.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "usd/cny",
+          "onshore",
+          "在岸"
+        ],
+        "exclude_keywords": [
+          "外汇牌价",
+          "现汇卖出"
+        ]
+      }
+    ],
+    "query_candidates_expanded": [
+      "USD/CNY onshore spot rate latest China Foreign Exchange Trade System 2026-05-27",
+      "USD/CNY current rate ChinaMoney latest 2026-05-27",
+      "USDCNY onshore spot quote latest 2026-05-27",
+      "中国人民银行 人民币汇率中间价 USD CNY 最新 2026-05-27",
+      "人民币汇率中间价 美元 人民币 2026年5月 2026-05-27",
+      "PBOC USD CNY central parity latest 2026-05-27",
+      "CFETS USD/CNY 在岸即期汇率 最新报价 2026-05-27",
+      "中国货币网 USD/CNY 在岸即期汇率 最新 2026-05-27",
+      "2026年5月 USD/CNY 在岸即期汇率 CFETS 2026-05-27",
+      "USD/CNY onshore exchange rate latest 2026-05-27",
+      "USD/CNY quote investing tradingeconomics 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "CNY",
+    "issuer": "中国外汇交易中心",
+    "issuer_aliases": [
+      "中国人民银行",
+      "PBOC",
+      "CFETS",
+      "外汇交易中心",
+      "中国货币网",
+      "中国银行",
+      "中行",
+      "BOC",
+      "外汇牌价",
+      "SAFE",
+      "Investing.com",
+      "Trading Economics"
+    ],
+    "required_keywords": [
+      "usd/cny",
+      "usdcny",
+      "美元",
+      "人民币",
+      "在岸",
+      "即期",
+      "中间价"
+    ],
+    "exclude_keywords": [
+      "外汇牌价",
+      "现汇卖出"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": true,
+    "required_output_fields": [
+      "current_value"
+    ],
+    "evidence_keywords": [
+      "USD/CNY",
+      "USDCNY",
+      "onshore",
+      "spot",
+      "central parity"
+    ],
+    "good_url_patterns": [
+      "chinamoney.com.cn",
+      "cfets.com.cn",
+      "investing.com/currencies/usd-cny"
+    ],
+    "bad_url_patterns": [
+      "bankofchina",
+      "boc.cn",
+      "cash selling",
+      "bank note",
+      "currency converter"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 3,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": true,
+      "extract_topk": 1,
+      "official_domains_only": true,
+      "official_domains": [
+        "chinamoney.com.cn",
+        "cfets.com.cn"
+      ]
+    },
+    "max_query_candidates": 3,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "USD CNY exchange rate 美元人民币 在岸即期汇率 最新"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "official_china",
+  "source": "Official China structured source",
+  "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+  "source_tier": "tier1",
+  "as_of_date": "2026-05-26",
+  "confidence": 0.95,
+  "note": "structured_provider:official_china",
+  "payload": {
+    "value": 6.8288,
+    "unit": "CNY",
+    "is_estimated": false
+  },
+  "diagnostics": {
+    "api_url": "https://www.chinamoney.com.cn/ags/ms/cm-u-bk-ccpr/CcprHisNew",
+    "evidence_text": "USD/CNY 6.8288"
+  },
+  "results": [
+    {
+      "title": "Official China structured source",
+      "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+      "content": "structured_provider:official_china",
+      "score": 0.95,
+      "source_tier": "tier1",
+      "as_of_date": "2026-05-26"
+    }
+  ],
+  "extraction": {
+    "value": 6.8288,
+    "unit": "CNY",
+    "is_estimated": false,
+    "indicator_key": "USDCNY",
+    "category": "forex",
+    "source": "Official China structured source",
+    "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+    "source_tier": "tier1",
+    "note": "structured_provider:official_china 缺少发布机构(中国外汇交易中心)",
+    "as_of_date": "2026-05-26",
+    "confidence": 0.95,
+    "diagnostics": {
+      "api_url": "https://www.chinamoney.com.cn/ags/ms/cm-u-bk-ccpr/CcprHisNew",
+      "evidence_text": "USD/CNY 6.8288"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Official China structured source",
+      "url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
+      "content": "structured_provider:official_china",
+      "score": 0.95,
+      "source_tier": "tier1",
+      "as_of_date": "2026-05-26"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "forex",
+  "structured_provider": "official_china",
+  "structured_provider_latency_ms": 726,
+  "force_refresh": false
+}

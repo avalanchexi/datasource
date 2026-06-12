@@ -1,0 +1,253 @@
+{
+  "indicator_key": "reserve_ratio",
+  "category": "monetary_policy",
+  "task": {
+    "task_id": "b82b028d-a05f-4968-ab3b-dc1db52b22d3",
+    "stage_phase": "essential",
+    "indicator_key": "reserve_ratio",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "rrr",
+    "preferred_domains": [
+      "pbc.gov.cn",
+      "eastmoney.com",
+      "cls.cn",
+      "xinhuanet.com",
+      "tradingeconomics.com",
+      "ceicdata.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "month",
+    "max_age_days": 365,
+    "query": "China RRR reserve requirement ratio 存款准备金率 最新",
+    "queries": [
+      "PBOC RRR reserve ratio latest",
+      "中国央行 存款准备金率 最新",
+      "reserve requirement ratio China latest",
+      "China reserve requirement ratio 2026"
+    ],
+    "query_families": [
+      {
+        "name": "current_level",
+        "queries": [
+          "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
+          "China reserve requirement ratio current level PBOC latest"
+        ],
+        "preferred_domains": [
+          "pbc.gov.cn",
+          "tradingeconomics.com",
+          "ceicdata.com"
+        ],
+        "required_keywords": [
+          "存款准备金率",
+          "reserve requirement ratio",
+          "rrr"
+        ]
+      },
+      {
+        "name": "official_adjustment_notice",
+        "queries": [
+          "中国人民银行 决定 下调 金融机构 存款准备金率 公告",
+          "人民银行 降准 存款准备金率 最新 公告"
+        ],
+        "preferred_domains": [
+          "pbc.gov.cn",
+          "xinhuanet.com"
+        ],
+        "required_keywords": [
+          "存款准备金率",
+          "人民银行"
+        ]
+      },
+      {
+        "name": "macro_aggregator",
+        "queries": [
+          "PBOC reserve requirement ratio latest",
+          "China reserve requirement ratio latest PBOC"
+        ],
+        "preferred_domains": [
+          "tradingeconomics.com",
+          "ceicdata.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "reserve requirement ratio",
+          "rrr",
+          "pboc"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
+      "China reserve requirement ratio current level PBOC latest",
+      "中国人民银行 决定 下调 金融机构 存款准备金率 公告",
+      "人民银行 降准 存款准备金率 最新 公告",
+      "PBOC reserve requirement ratio latest",
+      "China reserve requirement ratio latest PBOC"
+    ],
+    "field_queries": {},
+    "unit": "%",
+    "issuer": "中国人民银行",
+    "issuer_aliases": [
+      "央行",
+      "PBOC",
+      "人行",
+      "RRR",
+      "Trading Economics",
+      "CEIC"
+    ],
+    "required_keywords": [
+      "存款准备金率",
+      "降准",
+      "人民银行"
+    ],
+    "exclude_keywords": [
+      "农业",
+      "设施农业",
+      "种植",
+      "lpr",
+      "loan prime rate"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": true,
+    "required_output_fields": [
+      "current_value",
+      "change_from_120d"
+    ],
+    "evidence_keywords": [
+      "存款准备金率",
+      "金融机构",
+      "加权平均",
+      "当前水平",
+      "人民银行"
+    ],
+    "good_url_patterns": [
+      "pbc.gov.cn",
+      "tradingeconomics.com",
+      "ceicdata.com"
+    ],
+    "bad_url_patterns": [
+      "农业",
+      "设施农业",
+      "种植",
+      "lpr"
+    ],
+    "report_usage": "Stage4 monetary table requires current reserve requirement ratio level",
+    "language": "chinese",
+    "topic": "news",
+    "max_results": 6,
+    "search_depth": "basic",
+    "chunks_per_source": null,
+    "auto_parameters": false,
+    "days": null,
+    "low_score_threshold": 0.02,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "quality_gap",
+    "force_refresh": true,
+    "quality_gap_category": "monetary_policy",
+    "quality_gap_reason": "estimated_not_allowed",
+    "quality_gap_details": null,
+    "time_context_type": "monthly_period",
+    "expected_period": null,
+    "expected_period_tokens": [
+      "2026年4月",
+      "2026年1-4月",
+      "2026年04月",
+      "2026-04"
+    ],
+    "ref_date": null,
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "China RRR reserve requirement ratio 存款准备金率 最新"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+  "source_tier": "tier2",
+  "as_of_date": "2026-04-30",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 7.5,
+    "unit": "%",
+    "is_estimated": false
+  },
+  "diagnostics": {
+    "label": "China Cash Reserve Ratio",
+    "evidence_text": "China Cash Reserve Ratio 7.5 %",
+    "structured_provider_attempts": [
+      {
+        "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html",
+        "evidence_text": "text/html; charset=utf-8 人民币存款准备金 2026-05-20 15:28:00 var _speedMark = new Date(); 人民币存款准备金 工作动态 货币政策司 zhengcehuobisi 初始化频道：人民币存款准备金 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{ width",
+        "structured_provider": "official_china",
+        "structured_provider_indicator_key": "reserve_ratio",
+        "structured_provider_error": "missing_value",
+        "structured_provider_message": "Official China source did not contain a parseable value"
+      }
+    ]
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-04-30"
+    }
+  ],
+  "extraction": {
+    "value": 7.5,
+    "unit": "%",
+    "is_estimated": false,
+    "indicator_key": "reserve_ratio",
+    "category": "monetary_policy",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 缺少发布机构(中国人民银行)",
+    "as_of_date": "2026-04-30",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "China Cash Reserve Ratio",
+      "evidence_text": "China Cash Reserve Ratio 7.5 %",
+      "structured_provider_attempts": [
+        {
+          "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html",
+          "evidence_text": "text/html; charset=utf-8 人民币存款准备金 2026-05-20 15:28:00 var _speedMark = new Date(); 人民币存款准备金 工作动态 货币政策司 zhengcehuobisi 初始化频道：人民币存款准备金 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{ width",
+          "structured_provider": "official_china",
+          "structured_provider_indicator_key": "reserve_ratio",
+          "structured_provider_error": "missing_value",
+          "structured_provider_message": "Official China source did not contain a parseable value"
+        }
+      ]
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-04-30"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "monetary_policy",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 1689,
+  "force_refresh": true
+}

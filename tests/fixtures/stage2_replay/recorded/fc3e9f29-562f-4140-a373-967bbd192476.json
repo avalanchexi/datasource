@@ -1,0 +1,226 @@
+{
+  "indicator_key": "bdi",
+  "category": "macro_indicators",
+  "task": {
+    "task_id": "fc3e9f29-562f-4140-a373-967bbd192476",
+    "stage_phase": "essential",
+    "indicator_key": "bdi",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "bdi",
+    "preferred_domains": [
+      "balticexchange.com",
+      "tradingeconomics.com",
+      "investing.com",
+      "eastmoney.com"
+    ],
+    "exclude_domains": [
+      "reuters.com",
+      "bloomberg.com",
+      "jin10.com"
+    ],
+    "time_range": "day",
+    "max_age_days": 2,
+    "query": "BDI Baltic Dry Index latest value Trading Economics Investing",
+    "queries": [
+      "BDI Baltic Dry Index latest value Trading Economics",
+      "Baltic Dry Index latest historical data Investing",
+      "波罗的海干散货指数 BDI 最新 点位 历史数据"
+    ],
+    "query_families": [
+      {
+        "name": "dated_bdi_quote",
+        "queries": [
+          "Baltic Dry Index BDI 2026-05-27 latest value",
+          "BDI Baltic Dry Index 2026年5月27日 points",
+          "Trading Economics Baltic Dry Index 2026-05-27 value"
+        ],
+        "preferred_domains": [
+          "balticexchange.com",
+          "tradingeconomics.com",
+          "investing.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [],
+        "exclude_keywords": [
+          "/Circulars/",
+          "/faqs",
+          "market-announcements",
+          "methodology"
+        ]
+      },
+      {
+        "name": "latest_market_data",
+        "queries": [
+          "BDI Baltic Dry Index latest value Trading Economics 2026-05-27",
+          "Baltic Dry Index latest historical data Investing 2026-05-27",
+          "波罗的海干散货指数 BDI 最新 点位 历史数据 2026-05-27"
+        ],
+        "preferred_domains": [
+          "tradingeconomics.com",
+          "investing.com",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "bdi",
+          "baltic",
+          "波罗的海",
+          "dry index"
+        ],
+        "exclude_keywords": []
+      },
+      {
+        "name": "official_context",
+        "queries": [
+          "BDI Baltic Exchange index value 2026-05-27",
+          "Baltic Exchange Baltic Dry Index latest 2026-05-27"
+        ],
+        "preferred_domains": [
+          "balticexchange.com"
+        ],
+        "required_keywords": [
+          "bdi",
+          "baltic",
+          "dry index"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "Baltic Dry Index BDI 2026-05-27 latest value",
+      "BDI Baltic Dry Index 2026年5月27日 points",
+      "Trading Economics Baltic Dry Index 2026-05-27 value",
+      "BDI Baltic Dry Index latest value Trading Economics 2026-05-27",
+      "Baltic Dry Index latest historical data Investing 2026-05-27",
+      "波罗的海干散货指数 BDI 最新 点位 历史数据 2026-05-27",
+      "BDI Baltic Exchange index value 2026-05-27",
+      "Baltic Exchange Baltic Dry Index latest 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "点",
+    "issuer": "波罗的海交易所",
+    "issuer_aliases": [
+      "Baltic Exchange",
+      "Trading Economics",
+      "Investing.com",
+      "BDI",
+      "波罗的海干散货指数"
+    ],
+    "required_keywords": [],
+    "exclude_keywords": [],
+    "strict_required_keywords": false,
+    "strict_issuer_match": false,
+    "required_output_fields": [
+      "current_value",
+      "previous_value",
+      "change_rate"
+    ],
+    "evidence_keywords": [
+      "BDI",
+      "Baltic Dry Index",
+      "latest",
+      "Index",
+      "points",
+      "波罗的海干散货指数"
+    ],
+    "good_url_patterns": [
+      "tradingeconomics.com",
+      "investing.com/indices",
+      "data.eastmoney.com/cjsj"
+    ],
+    "bad_url_patterns": [
+      "/Circulars/",
+      "/faqs",
+      "market-announcements",
+      "2018",
+      "methodology"
+    ],
+    "report_usage": "Stage4 macro table and Pring macro score require current_value plus comparable previous/change",
+    "language": "chinese",
+    "topic": "general",
+    "max_results": 6,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": false,
+    "days": 3,
+    "low_score_threshold": 0.05,
+    "allow_low_score_extract": true,
+    "extract_policy": {},
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "quality_gap",
+    "force_refresh": true,
+    "quality_gap_category": "macro_indicators",
+    "quality_gap_reason": "estimated_not_allowed",
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "BDI Baltic Dry Index latest value Trading Economics Investing"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/commodity/baltic",
+  "source_tier": "tier2",
+  "as_of_date": "2026-05-22",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 2991.0,
+    "unit": "points"
+  },
+  "diagnostics": {
+    "label": "Baltic Dry Index",
+    "evidence_text": "Baltic Dry Index 2991.0 points"
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/baltic",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-22"
+    }
+  ],
+  "extraction": {
+    "value": 2991.0,
+    "unit": "points",
+    "indicator_key": "bdi",
+    "category": "macro_indicators",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/commodity/baltic",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 发布机构校验放宽",
+    "as_of_date": "2026-05-22",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "Baltic Dry Index",
+      "evidence_text": "Baltic Dry Index 2991.0 points"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/commodity/baltic",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-05-22"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "macro_indicators",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 1508,
+  "force_refresh": true
+}

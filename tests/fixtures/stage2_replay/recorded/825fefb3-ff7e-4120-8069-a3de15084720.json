@@ -1,0 +1,229 @@
+{
+  "indicator_key": "mlf",
+  "category": "monetary_policy",
+  "task": {
+    "task_id": "825fefb3-ff7e-4120-8069-a3de15084720",
+    "stage_phase": "essential",
+    "indicator_key": "mlf",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "mlf",
+    "preferred_domains": [
+      "pbc.gov.cn",
+      "chinamoney.com.cn",
+      "eastmoney.com",
+      "cls.cn",
+      "tradingeconomics.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "month",
+    "max_age_days": 90,
+    "query": "人民银行 中期借贷便利 操作公告 多重价位 中标利率区间 最新",
+    "queries": [
+      "人民银行 中期借贷便利 操作公告 多重价位 中标利率",
+      "央行 MLF 操作公告 利率区间",
+      "中期借贷便利 MLF 1年期 中标利率区间 最新",
+      "MLF 加权平均利率 最新",
+      "MLF 多重价位中标 利率中枢",
+      "PBOC MLF rate latest",
+      "China MLF rate 1 year latest",
+      "medium-term lending facility rate China"
+    ],
+    "query_families": [
+      {
+        "name": "multi_price_notice",
+        "queries": [
+          "人民银行 中期借贷便利 操作公告 多重价位 中标利率区间 最新 2026-05-27",
+          "人民银行 MLF 多重价位 中标利率 加权平均利率 2026-05-27"
+        ],
+        "preferred_domains": [
+          "pbc.gov.cn",
+          "chinamoney.com.cn",
+          "cls.cn"
+        ],
+        "required_keywords": [
+          "mlf",
+          "中期借贷便利",
+          "利率"
+        ]
+      },
+      {
+        "name": "macro_aggregator",
+        "queries": [
+          "China MLF rate latest PBOC 2026-05-27",
+          "PBOC MLF 1 year rate latest 2026-05-27"
+        ],
+        "preferred_domains": [
+          "tradingeconomics.com",
+          "eastmoney.com",
+          "chinamoney.com.cn"
+        ],
+        "required_keywords": [
+          "mlf",
+          "rate",
+          "pboc"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "人民银行 中期借贷便利 操作公告 多重价位 中标利率区间 最新 2026-05-27",
+      "人民银行 MLF 多重价位 中标利率 加权平均利率 2026-05-27",
+      "China MLF rate latest PBOC 2026-05-27",
+      "PBOC MLF 1 year rate latest 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "%",
+    "issuer": "中国人民银行",
+    "issuer_aliases": [
+      "央行",
+      "PBOC",
+      "人行",
+      "中期借贷便利",
+      "中标利率",
+      "利率区间",
+      "多重价位",
+      "加权平均利率",
+      "MLF",
+      "Trading Economics"
+    ],
+    "required_keywords": [
+      "mlf",
+      "中期借贷便利",
+      "利率"
+    ],
+    "exclude_keywords": [
+      "lpr",
+      "loan prime rate"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": true,
+    "required_output_fields": [
+      "current_value",
+      "change_from_120d"
+    ],
+    "evidence_keywords": [
+      "MLF",
+      "中期借贷便利",
+      "多重价位",
+      "中标利率",
+      "加权平均利率"
+    ],
+    "good_url_patterns": [
+      "pbc.gov.cn",
+      "chinamoney.com.cn"
+    ],
+    "bad_url_patterns": [
+      "lpr",
+      "loan prime rate"
+    ],
+    "report_usage": "Stage4 monetary table requires latest MLF rate or multi-price reference context",
+    "language": "chinese",
+    "topic": "news",
+    "max_results": 6,
+    "search_depth": "basic",
+    "chunks_per_source": null,
+    "auto_parameters": false,
+    "days": null,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "quality_gap",
+    "force_refresh": true,
+    "quality_gap_category": "monetary_policy",
+    "quality_gap_reason": "estimated_not_allowed",
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "人民银行 中期借贷便利 操作公告 多重价位 中标利率区间 最新"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "official_china",
+  "source": "Official China structured source",
+  "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/2026052217453752767/index.html",
+  "source_tier": "tier1",
+  "as_of_date": "2026-05-22",
+  "confidence": 0.9,
+  "note": "structured_provider:official_china",
+  "payload": {
+    "value": 2.0,
+    "unit": "%",
+    "is_estimated": false,
+    "policy_name": "MLF 中期借贷便利（多重价位中标，参考值）",
+    "previous_value": 2.0,
+    "change_rate": 0.0,
+    "change_from_120d": 0.0,
+    "manual_reason": "多重价位，参考值，口径不适用",
+    "note": "多重价位中标，无统一利率；展示参考值；manual_official_not_estimated"
+  },
+  "diagnostics": {
+    "evidence_text": "text/html; charset=utf-8 2026年5月中期借贷便利招标公告 2026-05-22 17:49:53 var _speedMark = new Date(); 中期借贷便利工作信息 工作动态 货币政策司 zhengcehuobisi 2026年5月中期借贷便利招标公告 2026-05-22 招标,开展,方式,公告,中标 蔡春春 2026年5月中期借贷便利招标公告。中国人民银行将以固定数量、利率招标、多重价位中标方式开展6000亿元MLF操作。期限为1年",
+    "canonical_indicator_key": "mlf",
+    "multi_price_reference": true,
+    "reference_rate": 2.0,
+    "note": "多重价位中标，无统一利率；展示参考值；manual_official_not_estimated"
+  },
+  "results": [
+    {
+      "title": "Official China structured source",
+      "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/2026052217453752767/index.html",
+      "content": "structured_provider:official_china",
+      "score": 0.9,
+      "source_tier": "tier1",
+      "as_of_date": "2026-05-22"
+    }
+  ],
+  "extraction": {
+    "value": 2.0,
+    "unit": "%",
+    "is_estimated": false,
+    "policy_name": "MLF 中期借贷便利（多重价位中标，参考值）",
+    "previous_value": 2.0,
+    "change_rate": 0.0,
+    "change_from_120d": 0.0,
+    "manual_reason": "多重价位，参考值，口径不适用",
+    "note": "structured_provider:official_china 缺少发布机构(中国人民银行) 多重价位，参考值，口径不适用",
+    "indicator_key": "mlf",
+    "category": "monetary_policy",
+    "source": "Official China structured source",
+    "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/2026052217453752767/index.html",
+    "source_tier": "tier1",
+    "as_of_date": "2026-05-22",
+    "confidence": 0.9,
+    "diagnostics": {
+      "evidence_text": "text/html; charset=utf-8 2026年5月中期借贷便利招标公告 2026-05-22 17:49:53 var _speedMark = new Date(); 中期借贷便利工作信息 工作动态 货币政策司 zhengcehuobisi 2026年5月中期借贷便利招标公告 2026-05-22 招标,开展,方式,公告,中标 蔡春春 2026年5月中期借贷便利招标公告。中国人民银行将以固定数量、利率招标、多重价位中标方式开展6000亿元MLF操作。期限为1年",
+      "canonical_indicator_key": "mlf",
+      "multi_price_reference": true,
+      "reference_rate": 2.0,
+      "note": "多重价位中标，无统一利率；展示参考值；manual_official_not_estimated"
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Official China structured source",
+      "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/2026052217453752767/index.html",
+      "content": "structured_provider:official_china",
+      "score": 0.9,
+      "source_tier": "tier1",
+      "as_of_date": "2026-05-22"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "monetary_policy",
+  "structured_provider": "official_china",
+  "structured_provider_latency_ms": 762,
+  "force_refresh": true
+}

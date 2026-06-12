@@ -1,0 +1,224 @@
+{
+  "indicator_key": "reverse_repo",
+  "category": "monetary_policy",
+  "task": {
+    "task_id": "8ee9d25c-aa01-4e6d-9d62-20c15796e534",
+    "stage_phase": "essential",
+    "indicator_key": "reverse_repo",
+    "search_backend": "structured",
+    "fund_flow_backend": null,
+    "query_template_id": "reverse_repo",
+    "preferred_domains": [
+      "pbc.gov.cn",
+      "chinamoney.com.cn",
+      "eastmoney.com",
+      "cls.cn",
+      "tradingeconomics.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "month",
+    "max_age_days": 14,
+    "query": "中国央行 7天逆回购 中标利率 最新 Reverse Repo rate",
+    "queries": [
+      "China 7-day reverse repo rate latest",
+      "PBOC 7-day reverse repo operation rate",
+      "央行 7天逆回购 中标利率",
+      "reverse repo rate China latest"
+    ],
+    "query_families": [
+      {
+        "name": "official_operation_notice",
+        "queries": [
+          "人民银行 公开市场 7天期逆回购 操作 中标利率 最新 2026-05-27",
+          "中国人民银行 7天期逆回购 中标利率 公告 2026-05-27"
+        ],
+        "preferred_domains": [
+          "pbc.gov.cn",
+          "chinamoney.com.cn",
+          "cls.cn"
+        ],
+        "required_keywords": [
+          "逆回购",
+          "中标利率",
+          "公开市场"
+        ]
+      },
+      {
+        "name": "macro_aggregator",
+        "queries": [
+          "China 7-day reverse repo rate latest PBOC 2026-05-27",
+          "PBOC 7-day reverse repo operation rate 2026-05-27"
+        ],
+        "preferred_domains": [
+          "tradingeconomics.com",
+          "eastmoney.com",
+          "chinamoney.com.cn"
+        ],
+        "required_keywords": [
+          "reverse repo",
+          "7-day",
+          "pboc"
+        ],
+        "exclude_keywords": []
+      }
+    ],
+    "query_candidates_expanded": [
+      "人民银行 公开市场 7天期逆回购 操作 中标利率 最新 2026-05-27",
+      "中国人民银行 7天期逆回购 中标利率 公告 2026-05-27",
+      "China 7-day reverse repo rate latest PBOC 2026-05-27",
+      "PBOC 7-day reverse repo operation rate 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "%",
+    "issuer": "中国人民银行",
+    "issuer_aliases": [
+      "央行",
+      "PBOC",
+      "人行",
+      "公开市场操作",
+      "中标利率",
+      "7天逆回购"
+    ],
+    "required_keywords": [
+      "逆回购",
+      "中标利率",
+      "公开市场业务"
+    ],
+    "exclude_keywords": [
+      "lpr",
+      "loan prime rate"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": true,
+    "required_output_fields": [
+      "current_value",
+      "change_from_120d"
+    ],
+    "evidence_keywords": [
+      "逆回购",
+      "7天期",
+      "中标利率",
+      "公开市场",
+      "人民银行"
+    ],
+    "good_url_patterns": [
+      "pbc.gov.cn",
+      "chinamoney.com.cn"
+    ],
+    "bad_url_patterns": [
+      "lpr",
+      "loan prime rate"
+    ],
+    "report_usage": "Stage4 monetary table requires latest 7-day reverse repo operation rate",
+    "language": "chinese",
+    "topic": "news",
+    "max_results": 6,
+    "search_depth": "basic",
+    "chunks_per_source": null,
+    "auto_parameters": false,
+    "days": null,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false
+    },
+    "max_query_candidates": null,
+    "source_hint": null,
+    "trigger_reason": "quality_gap",
+    "force_refresh": true,
+    "quality_gap_category": "monetary_policy",
+    "quality_gap_reason": "estimated_not_allowed",
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "extraction_backend": "structured",
+    "query_used": "中国央行 7天逆回购 中标利率 最新 Reverse Repo rate"
+  },
+  "search_backend": "structured",
+  "result_type": "structured_success",
+  "provider": "trading_economics",
+  "source": "Trading Economics structured page",
+  "source_url": "https://tradingeconomics.com/china/reverse-repo-rate",
+  "source_tier": "tier2",
+  "as_of_date": "2026-04-30",
+  "confidence": 0.85,
+  "note": "structured_provider:trading_economics",
+  "payload": {
+    "value": 1.4,
+    "unit": "%",
+    "is_estimated": false
+  },
+  "diagnostics": {
+    "label": "China Reverse Repo Rate",
+    "evidence_text": "China Reverse Repo Rate 1.4 %",
+    "structured_provider_attempts": [
+      {
+        "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+        "evidence_text": "text/html; charset=utf-8 公开市场业务交易公告 2026-05-26 09:20:55 var _speedMark = new Date(); 公开市场业务交易公告 工作动态 货币政策司 zhengcehuobisi 初始化频道：公开市场业务交易公告 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{",
+        "structured_provider": "official_china",
+        "structured_provider_indicator_key": "reverse_repo",
+        "structured_provider_error": "missing_value",
+        "structured_provider_message": "Official China source did not contain a parseable value"
+      }
+    ]
+  },
+  "results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/china/reverse-repo-rate",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-04-30"
+    }
+  ],
+  "extraction": {
+    "value": 1.4,
+    "unit": "%",
+    "is_estimated": false,
+    "indicator_key": "reverse_repo",
+    "category": "monetary_policy",
+    "source": "Trading Economics structured page",
+    "source_url": "https://tradingeconomics.com/china/reverse-repo-rate",
+    "source_tier": "tier2",
+    "note": "structured_provider:trading_economics 发布机构校验放宽",
+    "as_of_date": "2026-04-30",
+    "confidence": 0.85,
+    "diagnostics": {
+      "label": "China Reverse Repo Rate",
+      "evidence_text": "China Reverse Repo Rate 1.4 %",
+      "structured_provider_attempts": [
+        {
+          "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+          "evidence_text": "text/html; charset=utf-8 公开市场业务交易公告 2026-05-26 09:20:55 var _speedMark = new Date(); 公开市场业务交易公告 工作动态 货币政策司 zhengcehuobisi 初始化频道：公开市场业务交易公告 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{",
+          "structured_provider": "official_china",
+          "structured_provider_indicator_key": "reverse_repo",
+          "structured_provider_error": "missing_value",
+          "structured_provider_message": "Official China source did not contain a parseable value"
+        }
+      ]
+    }
+  },
+  "extraction_backend": "structured",
+  "raw_results": [
+    {
+      "title": "Trading Economics structured page",
+      "url": "https://tradingeconomics.com/china/reverse-repo-rate",
+      "content": "structured_provider:trading_economics",
+      "score": 0.85,
+      "source_tier": "tier2",
+      "as_of_date": "2026-04-30"
+    }
+  ],
+  "manual_required": false,
+  "manual_reason": null,
+  "write_back_success": true,
+  "write_back_target": "monetary_policy",
+  "structured_provider": "trading_economics",
+  "structured_provider_latency_ms": 2096,
+  "force_refresh": true
+}

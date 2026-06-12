@@ -1,0 +1,281 @@
+{
+  "tavily_http_status": 432,
+  "tavily_error_type": "HTTPStatusError",
+  "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
+  "exa_error_tag": "empty_results",
+  "exa_query": "policy bank bond 10Y yield China latest 2026-05-27",
+  "exa_result_count": 0,
+  "task_id": "8d062b2f-0229-4f6b-bc90-9c2d0f71a8e3",
+  "indicator_key": "CN10Y_CDB",
+  "category": "assets",
+  "stage_phase": "assets",
+  "query": "中国10年期国开债收益率 最新 数据 中债估值 历史",
+  "task": {
+    "task_id": "8d062b2f-0229-4f6b-bc90-9c2d0f71a8e3",
+    "stage_phase": "assets",
+    "indicator_key": "CN10Y_CDB",
+    "search_backend": "exa",
+    "fund_flow_backend": null,
+    "query_template_id": "CN10Y_CDB",
+    "preferred_domains": [
+      "chinabond.com.cn",
+      "chinamoney.com.cn",
+      "cfets.com.cn",
+      "eastmoney.com"
+    ],
+    "exclude_domains": [],
+    "time_range": "day",
+    "max_age_days": 2,
+    "query": "中国10年期国开债收益率 最新 数据 中债估值 历史",
+    "queries": [
+      "中国10年期国开债收益率 历史数据",
+      "国开债 10年期 收益率 最新"
+    ],
+    "query_families": [
+      {
+        "name": "policy_bank_yield_quote",
+        "queries": [
+          "CDB 10Y bond yield ChinaBond latest 2026-05-27",
+          "China Development Bank 10 year bond yield latest 2026-05-27",
+          "policy bank bond 10Y yield China latest 2026-05-27"
+        ],
+        "preferred_domains": [
+          "chinabond.com.cn",
+          "chinamoney.com.cn",
+          "cfets.com.cn",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "CDB",
+          "10Y",
+          "yield"
+        ],
+        "exclude_keywords": [
+          "China 10Y Treasury",
+          "government bond",
+          "sovereign bond"
+        ]
+      },
+      {
+        "name": "official_cdb",
+        "queries": [
+          "国家开发银行债 10年期 到期收益率 最新 2026-05-27",
+          "国开债 10年期 活跃券 收益率 最新 2026-05-27",
+          "政策性金融债 国开债 10年期 收益率 2026-05-27"
+        ],
+        "preferred_domains": [
+          "chinabond.com.cn",
+          "chinamoney.com.cn",
+          "cfets.com.cn",
+          "eastmoney.com"
+        ],
+        "required_keywords": [
+          "国开",
+          "开发债",
+          "政策性金融债",
+          "10年",
+          "10Y",
+          "CDB"
+        ],
+        "exclude_keywords": [
+          "国债",
+          "treasury"
+        ]
+      }
+    ],
+    "query_candidates_expanded": [
+      "CDB 10Y bond yield ChinaBond latest 2026-05-27",
+      "China Development Bank 10 year bond yield latest 2026-05-27",
+      "policy bank bond 10Y yield China latest 2026-05-27",
+      "国家开发银行债 10年期 到期收益率 最新 2026-05-27",
+      "国开债 10年期 活跃券 收益率 最新 2026-05-27",
+      "政策性金融债 国开债 10年期 收益率 2026-05-27"
+    ],
+    "field_queries": {},
+    "unit": "%",
+    "issuer": "国家开发银行",
+    "issuer_aliases": [
+      "中债",
+      "中债估值",
+      "政策性金融债",
+      "CCDC",
+      "CDB",
+      "国开行",
+      "国开债",
+      "ChinaBond"
+    ],
+    "required_keywords": [
+      "国开",
+      "开发债",
+      "政策性金融债",
+      "10年",
+      "10Y",
+      "CDB"
+    ],
+    "exclude_keywords": [
+      "国债",
+      "treasury"
+    ],
+    "strict_required_keywords": true,
+    "strict_issuer_match": false,
+    "required_output_fields": [
+      "current_value"
+    ],
+    "evidence_keywords": [
+      "CDB",
+      "China Development Bank",
+      "policy bank",
+      "10Y",
+      "yield"
+    ],
+    "good_url_patterns": [
+      "chinabond.com.cn",
+      "chinamoney.com.cn",
+      "cfets.com.cn",
+      "eastmoney.com"
+    ],
+    "bad_url_patterns": [
+      "China 10Y Treasury",
+      "government bond",
+      "sovereign bond",
+      "CN10Y"
+    ],
+    "report_usage": null,
+    "language": "chinese",
+    "topic": "news",
+    "max_results": 8,
+    "search_depth": "advanced",
+    "chunks_per_source": null,
+    "auto_parameters": true,
+    "days": 2,
+    "low_score_threshold": null,
+    "allow_low_score_extract": false,
+    "extract_policy": {
+      "use_tavily_extract": false,
+      "extract_topk": 0
+    },
+    "max_query_candidates": 3,
+    "source_hint": null,
+    "trigger_reason": "missing",
+    "force_refresh": false,
+    "quality_gap_category": null,
+    "quality_gap_reason": null,
+    "quality_gap_details": null,
+    "time_context_type": "daily_quote",
+    "expected_period": null,
+    "expected_period_tokens": [],
+    "ref_date": "2026-05-27",
+    "retry_count": 0,
+    "created_at": 1779843176,
+    "structured_provider_attempted": true,
+    "structured_provider_fallback_reason": "missing_cdb_spread",
+    "structured_provider_latency_ms": 518,
+    "structured_provider_diagnostics": {
+      "source_url": "https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/more?locale=cn_ZH",
+      "required_spread_fields": [
+        "task.cdb_spread_bp",
+        "metadata.cn10y_cdb_spread_bp"
+      ],
+      "structured_provider_attempts": [
+        {
+          "url": "https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/more?locale=cn_ZH",
+          "structured_provider": "chinabond",
+          "structured_provider_indicator_key": "CN10Y_CDB",
+          "structured_provider_error": "missing_value",
+          "structured_provider_message": "ChinaBond page did not contain a parseable 10Y CDB yield"
+        },
+        {
+          "source_url": "https://yield.chinabond.com.cn/cbweb-pbc-web/pbc/more?locale=cn_ZH",
+          "required_spread_fields": [
+            "task.cdb_spread_bp",
+            "metadata.cn10y_cdb_spread_bp"
+          ],
+          "structured_provider": "cdb_estimator",
+          "structured_provider_indicator_key": "CN10Y_CDB",
+          "structured_provider_error": "missing_cdb_spread",
+          "structured_provider_message": "CN10Y_CDB estimator requires explicit CDB spread provenance"
+        }
+      ],
+      "structured_provider": "cdb_estimator",
+      "structured_provider_indicator_key": "CN10Y_CDB",
+      "structured_provider_error": "missing_cdb_spread",
+      "structured_provider_message": "CN10Y_CDB estimator requires explicit CDB spread provenance"
+    },
+    "structured_provider_name": "cdb_estimator",
+    "tavily_http_status": 432,
+    "tavily_error_type": "HTTPStatusError",
+    "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
+    "exa_error_tag": "empty_results",
+    "exa_query": "policy bank bond 10Y yield China latest 2026-05-27",
+    "exa_result_count": 0,
+    "category": "assets",
+    "query_used": "中国10年期国开债收益率 最新 数据 中债估值 历史",
+    "query_attempts": [
+      {
+        "query": "CDB 10Y bond yield ChinaBond latest 2026-05-27",
+        "family": "policy_bank_yield_quote",
+        "field_scope": null,
+        "search_backend": "exa",
+        "manual_required": true,
+        "manual_reason": "exa_empty",
+        "exa_error_tag": "empty_results",
+        "exa_query": "CDB 10Y bond yield ChinaBond latest 2026-05-27",
+        "exa_result_count": 0
+      },
+      {
+        "query": "China Development Bank 10 year bond yield latest 2026-05-27",
+        "family": "policy_bank_yield_quote",
+        "field_scope": null,
+        "search_backend": "exa",
+        "manual_required": true,
+        "manual_reason": "exa_empty",
+        "exa_error_tag": "empty_results",
+        "exa_query": "China Development Bank 10 year bond yield latest 2026-05-27",
+        "exa_result_count": 0
+      },
+      {
+        "query": "policy bank bond 10Y yield China latest 2026-05-27",
+        "family": "policy_bank_yield_quote",
+        "field_scope": null,
+        "search_backend": "exa",
+        "manual_required": true,
+        "manual_reason": "exa_empty",
+        "exa_error_tag": "empty_results",
+        "exa_query": "policy bank bond 10Y yield China latest 2026-05-27",
+        "exa_result_count": 0
+      }
+    ],
+    "search_backend_state": "exa_active",
+    "failover_reason": "quota_or_rate_limit",
+    "manual_required": true,
+    "manual_reason": "exa_empty",
+    "source": "Stage2 manual_required",
+    "note": "exa_failover:exa_empty"
+  },
+  "extraction": {
+    "tavily_http_status": 432,
+    "tavily_error_type": "HTTPStatusError",
+    "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
+    "exa_error_tag": "empty_results",
+    "exa_query": "policy bank bond 10Y yield China latest 2026-05-27",
+    "exa_result_count": 0,
+    "value": null,
+    "unit": "%",
+    "source_url": null,
+    "confidence": 0.0,
+    "note": "exa_failover:exa_empty",
+    "llm_error": null,
+    "llm_latency_ms": 0,
+    "manual_required": true,
+    "manual_reason": "exa_empty"
+  },
+  "extraction_backend": "deepseek",
+  "raw_results": [],
+  "search_backend": "exa",
+  "manual_required": true,
+  "manual_reason": "exa_empty",
+  "source": "Stage2 manual_required",
+  "note": "exa_failover:exa_empty",
+  "result_type": "manual_required",
+  "force_refresh": false
+}
