@@ -285,8 +285,8 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 > 完整故障排除表见 AGENTS.md "## 12. Troubleshooting"
 
 **诊断工具**:
-- `bash run_clean.sh python scripts/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
-- `bash run_clean.sh python scripts/stage2_low_score_audit.py --date YYYY-MM-DD` — 审计低分仍进入抽取的指标
+- `bash run_clean.sh python scripts/tools/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
+- `bash run_clean.sh python scripts/tools/stage2_low_score_audit.py --date YYYY-MM-DD` — 审计低分仍进入抽取的指标
 
 ## Code Standards
 

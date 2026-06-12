@@ -15,8 +15,8 @@
 - Logs: `logs/runs/YYYYMMDD/observability.json`。
 - Tests: `tests/`，fixtures in `tests/test_data_sources/`，helpers in `tests/test_datasource.py`。
 - Templates: `templates/`；generated reports: `reports/`（合并前需复核）。
-- Long jobs: `scripts/`（含 `trend_history_scan.py`, `trend_history_backfill.py`, `run_snapshot.py`）；历史/低频脚本已归档至 `archive/py_unused/legacy/`，当前保留但不属于 Stage1-4 主流程的手工辅助脚本见 `scripts/utility/`；`scripts/archive/` 为归档/手工分析脚本，不跑正常 Stage1-4。
-- Diagnostics: `scripts/stage2_health_check.py`, `scripts/stage2_low_score_audit.py`, `scripts/compare_stage2_runs.py`。
+- Long jobs: `scripts/tools/`（含 `trend_history_scan.py`, `trend_history_backfill.py`, `run_snapshot.py` 等运维工具，`<domain>_<verb>` 命名）；历史/低频脚本统一归档至 `archive/py_unused/`（`legacy/`、`scripts_utility/`、`scripts_archive/` 子目录），不跑正常 Stage1-4。
+- Diagnostics: `scripts/tools/stage2_health_check.py`, `scripts/tools/stage2_low_score_audit.py`, `scripts/tools/stage2_compare_runs.py`。
 
 ## 2. 不可破坏约束
 - 严禁从历史 `reports/*.md` 抓取或复用数据；报告只能来自 TuShare、Tavily/AI WebSearch 实时获取结果或各 stage 计算产出。
@@ -73,7 +73,7 @@
 
 6. Optional checks:
    ```bash
-   bash run_clean.sh python scripts/stage2_health_check.py
+   bash run_clean.sh python scripts/tools/stage2_health_check.py
    python -m py_compile src/datasource/adapters/*.py src/datasource/utils/*.py
    ```
 
@@ -99,12 +99,12 @@ bash run_preflight.sh
 
 ### 5.1 Trend History 预检
 ```bash
-bash run_clean.sh python scripts/trend_history_scan.py --date "$DATE"
+bash run_clean.sh python scripts/tools/trend_history_scan.py --date "$DATE"
 ```
 - 默认输出：`reports/trend_history_gap_${DATE_NH}.json`。
 - 缺口较大时，优先做 TuShare 可得数据回补：
   ```bash
-  bash run_clean.sh python scripts/trend_history_backfill.py --start "YYYY-MM-DD" --end "YYYY-MM-DD"
+  bash run_clean.sh python scripts/tools/trend_history_backfill.py --start "YYYY-MM-DD" --end "YYYY-MM-DD"
   ```
 
 ### 5.2 Stage1 API 采集
@@ -276,7 +276,7 @@ if comp < 0.8:
 - LangChain 默认禁用；实验时必须显式传 `--allow-langchain` 并自备依赖。
 - 低分审计：
   ```bash
-  bash run_clean.sh python scripts/stage2_low_score_audit.py \
+  bash run_clean.sh python scripts/tools/stage2_low_score_audit.py \
     --date YYYY-MM-DD \
     --output "data/runs/${DATE_NH}/low_score_audit.json"
   ```

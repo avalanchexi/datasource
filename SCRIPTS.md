@@ -235,14 +235,14 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 ---
 
-### 6. sanitize_market_data.py ✅ SUPPORT
+### 6. market_data_sanitize.py（原 sanitize_market_data.py）✅ SUPPORT
 
-**位置**: `scripts/sanitize_market_data.py`  
+**位置**: `scripts/tools/market_data_sanitize.py`  
 **用途**: 清理历史 `market_data*.json` 中残留的 `7.13/0` 占位值（商品/债券）
 
 **使用**:
 ```bash
-bash run_clean.sh python scripts/sanitize_market_data.py \
+bash run_clean.sh python scripts/tools/market_data_sanitize.py \
   data/runs/YYYYMMDD/market_data_stage2.json \
   --output data/runs/YYYYMMDD/market_data_stage2_clean.json
 ```
@@ -334,14 +334,14 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 
 ### 8. get_real_economic_data.py（已移除）
 
-**位置**: 已移除（原 `scripts/utility/get_real_economic_data.py`）
+**位置**: 已移除（原 utility/get_real_economic_data.py）
 **用途**: 历史实时经济数据获取入口
 **状态**: 已移除，不在当前流程执行；当前补数使用 Stage2/Stage2.5 口径
 
-### 9. scripts/utility/calculate_na_data.py
+### 9. calculate_na_data.py ⚠️ ARCHIVED
 
 **用途**: 计算缺失数据
-**状态**: ✅ 可用
+**状态**: ⚠️ 已归档至 `archive/py_unused/scripts_utility/calculate_na_data.py`，不作为当前流程命令
 
 ---
 

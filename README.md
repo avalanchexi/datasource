@@ -54,11 +54,11 @@ pip install -e ".[dev]"  # 包含测试、格式化、类型检查工具
 ```bash
 cp .env.example .env
 # 编辑 .env 文件，填入你的 TuShare Token、TAVILY_API_KEY 与 DEEPSEEK_API_KEY
-# 可运行 `bash run_clean.sh python scripts/setup_stage2_search_env.py` 验证密钥与网络连通性
+# 可运行 `bash run_clean.sh python scripts/tools/stage2_setup_search_env.py` 验证密钥与网络连通性
 ```
 
 ## 快速运行 Stage2（structured-provider-first + Tavily + DeepSeek/Regex）
-- 运行前：`bash run_preflight.sh`；可选健康检查 `bash run_clean.sh python scripts/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
+- 运行前：`bash run_preflight.sh`；可选健康检查 `bash run_clean.sh python scripts/tools/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
 - 下列示例默认已设置 `DATE=$(date +%Y-%m-%d)` 与 `DATE_NH=${DATE//-/}`。
 - Stage2 uses structured-provider-first for known official or structured indicators, with provider-level fallback for the same key, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction. Current structured sources include Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages. 排障可加 `--disable-structured-providers` 回到原搜索链路。
 - 速度优先（regex，无 LLM）：
@@ -217,11 +217,11 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
   "data/runs/${DATE_NH}/websearch_results_manual.json" \
   "data/runs/${DATE_NH}/market_data_complete.json"
 
-# 工具脚本 (移动到 scripts/utility/)
-# scripts/utility/get_real_economic_data.py 已移除，不再作为可执行工具命令
-python scripts/utility/calculate_na_data.py         # 基于最新数据计算NA值填充
-# scripts/utility/generate_background_scan.py  # 历史/诊断背景扫描，不在当前流程执行
-# scripts/utility/background_scan_120d_generator.py  # 历史/手工分析用，不作为补数入口
+# 工具脚本 (保留入口见 scripts/tools/；历史 utility 已归档)
+# get_real_economic_data.py 已移除，不再作为可执行工具命令
+# calculate_na_data.py 已归档至 archive/py_unused/scripts_utility/，不作为当前命令
+# generate_background_scan.py 已归档至 archive/py_unused/scripts_utility/，不在当前流程执行
+# background_scan_120d_generator.py 已归档至 archive/py_unused/scripts_utility/，不作为补数入口
 ```
 
 **V2.0 重构特色功能**：
