@@ -1,15 +1,15 @@
-"""Deterministic offline replay harness scaffold for stage2_unified_enhancer.
+"""Deterministic offline replay harness for stage2_unified_enhancer.
 
 Fixtures: tests/fixtures/stage2_replay/ (built by _build_fixtures.py from real runs).
 Recorded files double as oracle (result_type/extraction from a real run).
-This file is scaffold-only until Tasks 3/4 append pytest coverage. The golden
-refresh command becomes useful after those tests exist:
+Golden refresh:
 STAGE2_REPLAY_UPDATE_GOLDEN=1 pytest tests/test_stage2_replay_harness.py
 """
 
 import itertools
 import json
 import os
+import sys
 from pathlib import Path
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "stage2_replay"
@@ -305,6 +305,42 @@ def _load_tasks():
     return [json.loads(ln) for ln in lines if ln.strip()]
 
 
+def _produced_by_indicator(websearch_items):
+    return {
+        item.get("indicator_key") or item.get("task", {}).get("indicator_key"): item
+        for item in websearch_items
+    }
+
+
+def assert_recorded_oracle(websearch_items):
+    produced_by_key = _produced_by_indicator(websearch_items)
+    outcome = {
+        key: item.get("result_type")
+        for key, item in produced_by_key.items()
+    }
+
+    recorded = load_recordings()
+    for key, rec in recorded.items():
+        if key == PARSE_ERROR_KEY:
+            continue
+        assert key in produced_by_key, f"{key}: missing produced replay result"
+        assert outcome.get(key) == rec.get("result_type"), (
+            f"{key}: {outcome.get(key)} != {rec.get('result_type')}"
+        )
+        extraction = rec.get("extraction")
+        if extraction and extraction.get("value") is not None:
+            got_extraction = produced_by_key[key].get("extraction") or {}
+            assert got_extraction.get("value") == extraction.get("value"), (
+                f"{key}: extraction.value "
+                f"{got_extraction.get('value')} != {extraction.get('value')}"
+            )
+            assert got_extraction.get("source_url") == extraction.get("source_url"), (
+                f"{key}: extraction.source_url "
+                f"{got_extraction.get('source_url')} != {extraction.get('source_url')}"
+            )
+    return outcome
+
+
 class Level1ReplayRegistry(ReplayRegistry):
     """Replay structured records through the current post-writeback gates."""
 
@@ -370,40 +406,96 @@ def test_replay_execute_tasks_chains(tmp_path, monkeypatch):
     ))
 
     websearch_sorted = sort_results(websearch)
-    produced_by_key = {
-        item.get("indicator_key") or item.get("task", {}).get("indicator_key"): item
-        for item in websearch_sorted
-    }
-    outcome = {item.get("indicator_key") or item.get("task", {}).get("indicator_key"):
-               item.get("result_type") for item in websearch_sorted}
+    outcome = assert_recorded_oracle(websearch_sorted)
 
     # 四链路覆盖(spec 验收 #4)
     have = set(outcome.values())
     for rt in ("structured_success", "search_success", "manual_required", "skipped_existing"):
         assert rt in have, f"missing result_type {rt}; outcome={outcome}"
 
-    # oracle:录制任务的 result_type 与录制一致(parse_error 合成项除外)
-    recorded = load_recordings()
-    for key, rec in recorded.items():
-        if key == PARSE_ERROR_KEY:
-            continue
-        assert outcome.get(key) == rec.get("result_type"), f"{key}: {outcome.get(key)} != {rec.get('result_type')}"
-        extraction = rec.get("extraction")
-        if extraction and extraction.get("value") is not None:
-            got = produced_by_key.get(key)
-            assert got is not None, f"{key}: missing produced replay result"
-            got_extraction = got.get("extraction") or {}
-            assert got_extraction.get("value") == extraction.get("value"), (
-                f"{key}: extraction.value "
-                f"{got_extraction.get('value')} != {extraction.get('value')}"
-            )
-            assert got_extraction.get("source_url") == extraction.get("source_url"), (
-                f"{key}: extraction.source_url "
-                f"{got_extraction.get('source_url')} != {extraction.get('source_url')}"
-            )
-
     assert_or_update_golden(
         {"outcome": outcome, "completed": len(completed), "failures": len(failures),
          "websearch": websearch_sorted},
         "level1_outcome.json",
     )
+
+
+def test_replay_full_main(tmp_path, monkeypatch):
+    import asyncio
+
+    import scripts.stage2_unified_enhancer as stage2
+
+    market_out = tmp_path / "market_data_stage2.json"
+    websearch_out = tmp_path / "websearch_results_auto.json"
+    log_out = tmp_path / "stage2_unified_log.json"
+    monkeypatch.setenv("TAVILY_API_KEY", "replay-tavily-key")
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "replay-deepseek-key")
+    monkeypatch.setenv("EXA_API_KEY", "")
+    monkeypatch.setattr(stage2, "AsyncTavilyClient", lambda *args, **kwargs: ReplayTavilyClient())
+    monkeypatch.setattr(stage2, "DeepSeekExtractionAgent", lambda *args, **kwargs: ReplayDeepSeek())
+    monkeypatch.setattr(stage2, "build_default_registry", lambda: Level1ReplayRegistry())
+    counter = itertools.count()
+    monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
+    fixed_now = stage2.datetime(2026, 6, 13, 0, 0, 0)
+
+    class FixedDatetime(stage2.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return fixed_now.replace(tzinfo=tz)
+            return fixed_now
+
+    monkeypatch.setattr(stage2, "datetime", FixedDatetime)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "stage2_unified_enhancer.py",
+            "--market-data",
+            str(FIXTURES / "market_data_input.json"),
+            "--output",
+            str(market_out),
+            "--execute-search",
+            "--resume-from-task-file",
+            str(FIXTURES / "tasks.jsonl"),
+            "--websearch-results",
+            str(websearch_out),
+            "--task-file",
+            str(tmp_path / "tasks_out.jsonl"),
+            "--task-log",
+            str(tmp_path / "task_log.jsonl"),
+            "--gap-monitor",
+            str(tmp_path / "gap_monitor.json"),
+            "--log-output",
+            str(log_out),
+            "--no-use-queue",
+            "--deepseek-max-concurrency",
+            "1",
+            "--no-cache",
+        ],
+    )
+
+    rc = asyncio.run(stage2.main())
+
+    # Replay fixture intentionally includes manual_required records, so production main returns nonzero.
+    assert rc == 1
+    summary = json.loads(log_out.read_text(encoding="utf-8"))
+    assert summary["stage2_effective_hit_rate"] == 13 / 18
+    assert summary["task_structured_success"] == 12
+    assert summary["task_search_success"] == 1
+    assert summary["task_search_failed"] == 5
+    assert summary["manual_reason_breakdown"] == {
+        "skipped_deepseek:strict_keyword_miss": 2,
+        "skipped_deepseek:no_snippets stale_refresh_failed": 1,
+        "skipped_deepseek:strict_keyword_miss stale_refresh_failed": 1,
+    }
+    produced_market = json.loads(market_out.read_text(encoding="utf-8"))
+    assert_or_update_golden(produced_market, "level2_market_data_stage2.json")
+
+    produced_websearch = json.loads(websearch_out.read_text(encoding="utf-8"))
+    websearch_sorted = sort_results(produced_websearch.get("results") or [])
+    assert_or_update_golden(
+        {"results": websearch_sorted},
+        "level2_websearch_results.json",
+    )
+    assert_recorded_oracle(websearch_sorted)
