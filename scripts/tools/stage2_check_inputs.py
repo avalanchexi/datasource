@@ -4,7 +4,7 @@
 Quick pre-check for Stage2 inputs.
 Verifies: no legacy industrial_output key; missing_items keys exist in SEARCH_PROFILES.
 Usage:
-    python scripts/check_stage2_inputs.py --market-data data/20251211_market_data.json
+    python scripts/tools/stage2_check_inputs.py --market-data data/20251211_market_data.json
 Exit code 0 if passed, non-zero otherwise.
 """
 
