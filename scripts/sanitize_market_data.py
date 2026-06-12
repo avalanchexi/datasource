@@ -9,5 +9,15 @@ import sys
 from pathlib import Path
 
 _NEW = Path(__file__).resolve().parent / "tools" / "market_data_sanitize.py"
-print("[DEPRECATED] scripts/sanitize_market_data.py -> scripts/tools/market_data_sanitize.py; forwarding.", file=sys.stderr)
-runpy.run_path(str(_NEW), run_name="__main__")
+
+if __name__ == "__main__":
+    print("[DEPRECATED] scripts/sanitize_market_data.py -> scripts/tools/market_data_sanitize.py; forwarding.", file=sys.stderr)
+    runpy.run_path(str(_NEW), run_name="__main__")
+else:
+    globals().update(
+        {
+            name: value
+            for name, value in runpy.run_path(str(_NEW)).items()
+            if not (name.startswith("__") and name.endswith("__"))
+        }
+    )

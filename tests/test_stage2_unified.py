@@ -4712,12 +4712,14 @@ def test_execute_tasks_refreshes_value_diagnostics_after_final_snippet_filtering
             }
 
         async def extract(self, **kwargs):
+            today = datetime.now().date().isoformat()
             return {
                 "results": [
                     {
                         "url": "https://example.com/bcom-methodology",
+                        "published_date": today,
                         "content": (
-                            "2026-05-13 BCOM methodology calculation weights rebalance "
+                            f"{today} BCOM methodology calculation weights rebalance "
                             "rulebook uses a 100 baseline."
                         ),
                         "score": 0.95,
