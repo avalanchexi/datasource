@@ -11,12 +11,12 @@
 | 规划 | 方案 v2 + 工作流 | - | ✅ 完成 | - |
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
-| 批次 B | 脚本命名收敛 | 1 | 🔜 计划已就绪,待 Codex 执行 | - |
+| 批次 B | 脚本命名收敛 | 1 | 🚧 Codex 执行中 | - |
 | 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 未开始 | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:把 `docs/superpowers/plans/2026-06-12-batch-b-script-naming.md` 交给 Codex 执行(worktree 分支 `codex/batch-b-script-naming`)。**
+**当前焦点:完成 PR-B 终验并进入 Claude 评审(worktree 分支 `codex/batch-b-script-naming`)。**
 
 ---
 
@@ -47,10 +47,10 @@
 ## 批次 B — 脚本命名收敛(§5,1 个 PR)
 
 - [x] brainstorming 定稿(scripts/utility 与 scripts/archive 拆分定档):spec `docs/superpowers/specs/2026-06-12-batch-b-script-naming-design.md`
-- [x] 生成 PR-B 执行计划(从 HEAD 72dc42c):`docs/superpowers/plans/2026-06-12-batch-b-script-naming.md`;shim 清单按活文档引用实测定死为 8 个,测试修改锁定 2 文件 4 行
-- [ ] **PR-B**:非主链脚本移入 `scripts/tools/` + 旧路径 shim + 活文档命令引用同步
-  - [ ] Codex 执行 → Claude 评审 → 合入
-  - [ ] shim 保留一个版本周期后删除(到期:批次 C 全部合入后)
+- [x] 生成 PR-B 执行计划(从 HEAD 72dc42c):`docs/superpowers/plans/2026-06-12-batch-b-script-naming.md`;shim 清单按活文档引用实测定死为 8 个,测试修改锁定 2 文件(执行期确认 `test_fund_flow_pipeline.py` 第二组 `sys.path` 行漏计,已按机械路径修正处理)
+- [~] **PR-B**:非主链脚本移入 `scripts/tools/` + 旧路径 shim + 活文档命令引用同步
+  - [~] Codex 执行 → Claude 评审 → 合入
+  - [ ] shim 删除(8 个:trend_history_backfill/trend_history_scan/sanitize_market_data/compare_stage2_runs/stage2_health_check/stage2_low_score_audit/setup_stage2_search_env/run_snapshot)——到期条件:批次 C 全部合入后
 
 ## 批次 C — 巨石拆分(§6,5–7 个 PR,核心)
 
