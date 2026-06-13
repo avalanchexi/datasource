@@ -8,6 +8,7 @@ AI WebSearch 数据注入脚本。
 
 import argparse
 import json
+from functools import partial
 import re
 import sys
 from dataclasses import dataclass, field
@@ -44,6 +45,25 @@ from datasource.utils.run_lock import DailyRunLock, run_dir_from_artifact
 from datasource.utils.run_paths import build_run_paths_from_reference
 from datasource.utils.source_trust import is_official_source_url
 from datasource.utils.text_markers import contains_ytd_marker
+from datasource.utils.forex_evidence import (
+    FOREX_DAILY_CHANGE_EVIDENCE_KEYS,
+    FOREX_120D_CHANGE_EVIDENCE_KEYS,
+    STAGE25_FOREX_DAILY_CHANGE_SOURCE_MARKERS as FOREX_DAILY_CHANGE_SOURCE_MARKERS,
+    STAGE25_FOREX_120D_CHANGE_SOURCE_MARKERS as FOREX_120D_CHANGE_SOURCE_MARKERS,
+    copy_valid_stage25_forex_120d_change_evidence,
+    copy_valid_stage25_forex_daily_change_evidence,
+    has_forex_computed_marker,
+    has_stage25_forex_120d_change_evidence,
+    has_stage25_forex_daily_change_evidence,
+    is_stage25_forex_daily_change_absence_text,
+    is_valid_forex_base_date,
+    is_valid_forex_base_price,
+    is_valid_forex_source_url,
+)
+from datasource.utils.note_utils import (
+    append_note_once as _append_note_once,
+    append_note_to_entry as _append_note,
+)
 
 FUND_FLOW_KEY_MAP = {
     "etf_flow": "etf",
@@ -1196,16 +1216,6 @@ def _fund_flow_has_trusted_window(source_tier: str, window_evidence: str, metric
     if source_tier not in {"tier1", "tier2"}:
         return False
     return window_evidence in FUND_FLOW_DIRECT_WINDOW_EVIDENCE
-
-
-def _append_note_once(note: str, addition: str) -> str:
-    if not addition:
-        return note
-    if addition in note:
-        return note
-    if note:
-        return f"{note}；{addition}"
-    return addition
 
 
 def _normalize_fund_flow_estimation(entry: Dict[str, Any], payload: Dict[str, Any]) -> None:
@@ -2373,8 +2383,7 @@ def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
     return None
 
 
-def _contains_ytd_marker(text: str) -> bool:
-    return contains_ytd_marker(text)
+_contains_ytd_marker = contains_ytd_marker
 
 
 def _apply_macro_entry(
@@ -3359,226 +3368,47 @@ def _should_backfill_numeric(value: Any) -> bool:
         return True
 
 
-FOREX_DAILY_CHANGE_SOURCE_MARKERS = (
-    "direct_daily_series",
-    "direct_window",
-    "trend_history_direct_window",
-    "trend_history_full_window",
-    "change_1d",
-    "change_rate",
-    "trend_history",
+_is_forex_daily_change_absence_text = is_stage25_forex_daily_change_absence_text
+_is_valid_forex_daily_change_base_date = partial(
+    is_valid_forex_base_date,
+    is_absence=_is_forex_daily_change_absence_text,
 )
-
-FOREX_DAILY_CHANGE_EVIDENCE_KEYS = (
-    "daily_change_basis",
-    "daily_change_source",
-    "daily_change_source_url",
-    "daily_change_window_evidence",
-    "daily_change_base_date",
-    "daily_change_base_price",
-    "base_1d_date",
-    "change_1d",
-    "change_1d_pct",
-    "reason_1d",
-    "previous_value",
-    "previous_rate",
-    "previous_price",
+_is_valid_forex_daily_change_source_url = partial(
+    is_valid_forex_source_url,
+    is_absence=_is_forex_daily_change_absence_text,
 )
-
-FOREX_120D_CHANGE_SOURCE_MARKERS = (
-    "direct_window",
-    "trend_history_direct_window",
-    "trend_history_full_window",
-    "change_rate",
-    "trend_history",
+_is_valid_forex_change_base_price = partial(
+    is_valid_forex_base_price,
+    is_absence=_is_forex_daily_change_absence_text,
+    coerce=_coerce_float,
 )
-
-FOREX_120D_CHANGE_EVIDENCE_KEYS = (
-    "change_120d_basis",
-    "change_120d_source",
-    "change_120d_source_url",
-    "change_120d_window_evidence",
-    "change_120d_base_date",
-    "change_120d_base_price",
+_has_forex_daily_change_computed_marker = partial(
+    has_forex_computed_marker,
+    markers=FOREX_DAILY_CHANGE_SOURCE_MARKERS,
+    is_absence=_is_forex_daily_change_absence_text,
 )
-
-
-def _is_forex_daily_change_absence_text(text: str) -> bool:
-    normalized = str(text or "").strip().lower()
-    if normalized in {"", "n/a", "na", "-", "--", "unknown", "pending"}:
-        return True
-    return bool(
-        re.search(r"\breason\s*=", normalized)
-        or re.search(r"\b(?:missing|no)[_\s-]", normalized)
-        or any(
-            marker in normalized
-            for marker in (
-                "deepseek_no_value",
-                "missing_previous_value",
-                "missing_value",
-                "no_previous_value",
-                "no_value",
-                "failed",
-                "failure",
-                "error",
-                "invalid",
-                "unavailable",
-                "not_available",
-                "not-available",
-                "not available",
-                "缺失",
-                "失败",
-            )
-        )
-    )
-
-
-def _is_valid_forex_daily_change_base_date(value: Any) -> bool:
-    if value is None:
-        return False
-    text = str(value).strip()
-    if _is_forex_daily_change_absence_text(text):
-        return False
-    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}|\d{8}|\d{4}-\d{2}", text))
-
-
-def _is_valid_forex_daily_change_source_url(value: Any) -> bool:
-    if value is None:
-        return False
-    text = str(value).strip()
-    if _is_forex_daily_change_absence_text(text):
-        return False
-    return bool(re.fullmatch(r"https?://\S+", text, flags=re.IGNORECASE))
-
-
-def _is_valid_forex_change_base_price(value: Any) -> bool:
-    if value is None:
-        return False
-    if _is_forex_daily_change_absence_text(str(value)):
-        return False
-    return _coerce_float(value) is not None
-
-
-def _has_forex_daily_change_computed_marker(value: Any) -> bool:
-    if value is None:
-        return False
-    text = str(value).strip().lower()
-    if _is_forex_daily_change_absence_text(text):
-        return False
-    tokens = set(re.split(r"[^a-z0-9_]+", text))
-    negative_prefixes = ("failed", "failure", "error", "invalid", "unavailable")
-    return any(
-        token == marker or (token.endswith(f"_{marker}") and not token.startswith(negative_prefixes))
-        for token in tokens
-        for marker in FOREX_DAILY_CHANGE_SOURCE_MARKERS
-    )
-
-
-def _has_forex_120d_change_computed_marker(value: Any) -> bool:
-    if value is None:
-        return False
-    text = str(value).strip().lower()
-    if _is_forex_daily_change_absence_text(text):
-        return False
-    tokens = set(re.split(r"[^a-z0-9_]+", text))
-    negative_prefixes = ("failed", "failure", "error", "invalid", "unavailable")
-    return any(
-        (
-            token == marker
-            or (token.endswith(f"_{marker}") and not token.startswith(negative_prefixes))
-        )
-        and not token.startswith("daily_")
-        for token in tokens
-        for marker in FOREX_120D_CHANGE_SOURCE_MARKERS
-    )
-
-
-def _has_forex_daily_change_evidence(entry: Dict[str, Any]) -> bool:
-    for key in FOREX_DAILY_CHANGE_EVIDENCE_KEYS:
-        value = entry.get(key)
-        if key in {"daily_change_basis", "daily_change_source", "daily_change_window_evidence"}:
-            if _has_forex_daily_change_computed_marker(value):
-                return True
-            continue
-        if key == "daily_change_source_url":
-            if _is_valid_forex_daily_change_source_url(value):
-                return True
-            continue
-        if key in {"daily_change_base_date", "base_1d_date"}:
-            if _is_valid_forex_daily_change_base_date(value):
-                return True
-            continue
-        if key == "daily_change_base_price" and _is_valid_forex_change_base_price(value):
-            return True
-    return False
-
-
-def _copy_valid_forex_daily_change_evidence(target: Dict[str, Any], source: Dict[str, Any]) -> None:
-    for key in FOREX_DAILY_CHANGE_EVIDENCE_KEYS:
-        target.pop(key, None)
-
-    for key in ("daily_change_basis", "daily_change_source", "daily_change_window_evidence"):
-        value = source.get(key)
-        if _has_forex_daily_change_computed_marker(value):
-            target[key] = str(value).strip()
-
-    source_url = source.get("daily_change_source_url")
-    if _is_valid_forex_daily_change_source_url(source_url):
-        target["daily_change_source_url"] = str(source_url).strip()
-
-    base_date = source.get("daily_change_base_date")
-    if _is_valid_forex_daily_change_base_date(base_date):
-        target["daily_change_base_date"] = str(base_date).strip()
-
-    base_1d_date = source.get("base_1d_date")
-    if _is_valid_forex_daily_change_base_date(base_1d_date):
-        target["base_1d_date"] = str(base_1d_date).strip()
-
-    base_price = _coerce_float(source.get("daily_change_base_price"))
-    if base_price is not None and _is_valid_forex_change_base_price(source.get("daily_change_base_price")):
-        target["daily_change_base_price"] = base_price
-
-
-def _copy_valid_forex_120d_change_evidence(target: Dict[str, Any], source: Dict[str, Any]) -> None:
-    for key in FOREX_120D_CHANGE_EVIDENCE_KEYS:
-        target.pop(key, None)
-
-    for key in ("change_120d_basis", "change_120d_source", "change_120d_window_evidence"):
-        value = source.get(key)
-        if _has_forex_120d_change_computed_marker(value):
-            target[key] = str(value).strip()
-
-    source_url = source.get("change_120d_source_url")
-    if _is_valid_forex_daily_change_source_url(source_url):
-        target["change_120d_source_url"] = str(source_url).strip()
-
-    base_date = source.get("change_120d_base_date")
-    if _is_valid_forex_daily_change_base_date(base_date):
-        target["change_120d_base_date"] = str(base_date).strip()
-
-    base_price = _coerce_float(source.get("change_120d_base_price"))
-    if base_price is not None and _is_valid_forex_change_base_price(source.get("change_120d_base_price")):
-        target["change_120d_base_price"] = base_price
-
-
-def _has_forex_120d_change_evidence(entry: Dict[str, Any]) -> bool:
-    for key in FOREX_120D_CHANGE_EVIDENCE_KEYS:
-        value = entry.get(key)
-        if key in {"change_120d_basis", "change_120d_source", "change_120d_window_evidence"}:
-            if _has_forex_120d_change_computed_marker(value):
-                return True
-            continue
-        if key == "change_120d_source_url":
-            if _is_valid_forex_daily_change_source_url(value):
-                return True
-            continue
-        if key == "change_120d_base_date":
-            if _is_valid_forex_daily_change_base_date(value):
-                return True
-            continue
-        if key == "change_120d_base_price" and _is_valid_forex_change_base_price(value):
-            return True
-    return False
+_has_forex_120d_change_computed_marker = partial(
+    has_forex_computed_marker,
+    markers=FOREX_120D_CHANGE_SOURCE_MARKERS,
+    is_absence=_is_forex_daily_change_absence_text,
+    reject_daily_prefix=True,
+)
+_has_forex_daily_change_evidence = partial(
+    has_stage25_forex_daily_change_evidence,
+    coerce=_coerce_float,
+)
+_copy_valid_forex_daily_change_evidence = partial(
+    copy_valid_stage25_forex_daily_change_evidence,
+    coerce=_coerce_float,
+)
+_copy_valid_forex_120d_change_evidence = partial(
+    copy_valid_stage25_forex_120d_change_evidence,
+    coerce=_coerce_float,
+)
+_has_forex_120d_change_evidence = partial(
+    has_stage25_forex_120d_change_evidence,
+    coerce=_coerce_float,
+)
 
 
 def _is_zero_change_value(value: Any) -> bool:
@@ -3633,16 +3463,6 @@ def _usable_forex_raw_trend(raw_trend: Any, daily_change: Optional[float], chang
     if (daily_change is None or change_120d is None) and _is_zero_derived_forex_trend(raw_trend):
         return None
     return raw_trend
-
-
-def _append_note(entry: Dict[str, Any], message: str) -> None:
-    if not message:
-        return
-    note = entry.get("note") or ""
-    if note:
-        note += "；"
-    note += message
-    entry["note"] = note
 
 
 def _backfill_cdb_proxy_changes_from_cn10y(market_data: Dict[str, Any]) -> int:
