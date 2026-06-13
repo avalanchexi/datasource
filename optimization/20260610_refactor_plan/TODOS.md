@@ -11,12 +11,12 @@
 | 规划 | 方案 v2 + 工作流 | - | ✅ 完成 | - |
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
-| 批次 B | 脚本命名收敛 | 1 | 🚧 Codex 执行中 | - |
-| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 未开始 | B |
+| 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
+| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5 完成;C0 设计定稿) | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:完成 PR-B 终验并进入 Claude 评审(worktree 分支 `codex/batch-b-script-naming`)。**
+**当前焦点:PR-C0(forex 证据判定族合一)——设计定稿,待生成执行计划。**
 
 ---
 
@@ -48,16 +48,18 @@
 
 - [x] brainstorming 定稿(scripts/utility 与 scripts/archive 拆分定档):spec `docs/superpowers/specs/2026-06-12-batch-b-script-naming-design.md`
 - [x] 生成 PR-B 执行计划(从 HEAD 72dc42c):`docs/superpowers/plans/2026-06-12-batch-b-script-naming.md`;shim 清单按活文档引用实测定死为 8 个,测试修改锁定 2 文件(执行期确认 `test_fund_flow_pipeline.py` 第二组 `sys.path` 行漏计,已按机械路径修正处理)
-- [~] **PR-B**:非主链脚本移入 `scripts/tools/` + 旧路径 shim + 活文档命令引用同步
-  - [~] Codex 执行 → Claude 评审 → 合入
+- [x] **PR-B**:非主链脚本移入 `scripts/tools/` + 旧路径 shim + 活文档命令引用同步
+  - [x] Codex 执行 → Claude 评审 → 合入 main(commits `d92624b`/`104cf2d`/`2c2dbd8`/`aeb0ecd`/`7e65ccd`/`5c88b5f`/`7e81f97`)
   - [ ] shim 删除(8 个:trend_history_backfill/trend_history_scan/sanitize_market_data/compare_stage2_runs/stage2_health_check/stage2_low_score_audit/setup_stage2_search_env/run_snapshot)——到期条件:批次 C 全部合入后
 
 ## 批次 C — 巨石拆分(§6,5–7 个 PR,核心)
 
 - [x] PR-C-0.5 spec + 执行计划已生成(2026-06-12,可与批次 B 并行执行,零文件交叠):`docs/superpowers/plans/2026-06-12-batch-c05-stage2-replay-harness.md`
-- [ ] **PR-C-0.5**:Stage2 replay harness(replay fakes + 录制 oracle + golden byte-stable)— **任何搬移前的硬前置**
-  - [ ] Codex 执行 → Claude 评审(重点:VOLATILE_FIELDS 实证、oracle 覆盖)→ 合入
-- [ ] **PR-C0**:forex 证据判定族合一(先 characterization tests,后合一;两侧语义差异记录在 PR)
+- [x] **PR-C-0.5**:Stage2 replay harness(replay fakes + 录制 oracle + golden byte-stable)— **任何搬移前的硬前置**
+  - [x] Codex 执行 → Claude 评审 → 合入 main `7aad7df`(全量 1013 passed)
+- [~] **PR-C0**:forex 证据判定族合一(先 characterization tests,后合一;两侧语义差异记录在 PR)
+  - [x] brainstorming 定稿:`docs/superpowers/specs/2026-06-13-batch-c0-forex-evidence-consolidation-design.md`(纯保行为 + 共享底层 + 三样全入 + 跨侧参数化 characterization)
+  - [ ] 生成 PR-C0 执行计划(从 HEAD 现生成)→ Codex 执行 → Claude 评审 → 合入
 - [ ] **PR-C1**:Stage2 拆分 — errors / snippet_filters / evidence / regex_extraction
 - [ ] **PR-C2**:Stage2 拆分 — extraction_apply / structured_runner / query_planner / diagnostics / validation / cli
 - [ ] **PR-C3**:`_execute_tasks`(2600 行)按任务生命周期切五段(先加阶段级 characterization test)
