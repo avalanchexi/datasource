@@ -362,6 +362,29 @@ def assert_recorded_oracle(websearch_items):
     return outcome
 
 
+def _freeze_stage2_datetime(stage2, monkeypatch):
+    from datasource.engines.stage2 import errors as stage2_errors
+    from datasource.engines.stage2 import snippet_filters as stage2_snippet_filters
+    from datasource.utils import policy_rules
+
+    fixed_now = stage2.datetime(2026, 6, 13, 0, 0, 0)
+
+    class FixedDatetime(stage2.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return fixed_now.replace(tzinfo=tz)
+            return fixed_now
+
+    for module in (
+        stage2,
+        stage2_errors,
+        stage2_snippet_filters,
+        policy_rules,
+    ):
+        monkeypatch.setattr(module, "datetime", FixedDatetime)
+
+
 class Level1ReplayRegistry(ReplayRegistry):
     """Replay structured records through the current post-writeback gates."""
 
@@ -487,16 +510,7 @@ def test_replay_full_main(tmp_path, monkeypatch):
     )
     counter = itertools.count()
     monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
-    fixed_now = stage2.datetime(2026, 6, 13, 0, 0, 0)
-
-    class FixedDatetime(stage2.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            if tz is not None:
-                return fixed_now.replace(tzinfo=tz)
-            return fixed_now
-
-    monkeypatch.setattr(stage2, "datetime", FixedDatetime)
+    _freeze_stage2_datetime(stage2, monkeypatch)
     monkeypatch.setattr(
         sys,
         "argv",

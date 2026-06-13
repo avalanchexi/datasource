@@ -12,11 +12,11 @@
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
-| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0 完成;下一步 C1) | B |
+| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1 完成;下一步 C2) | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:PR-C1(Stage2 拆分 errors/snippet_filters/evidence/regex_extraction)——待 brainstorming/计划。**
+**当前焦点:PR-C2(Stage2 拆分 extraction_apply/structured_runner/query_planner/diagnostics/validation/cli)——待 brainstorming/计划。**
 
 ---
 
@@ -60,7 +60,10 @@
 - [x] **PR-C0**:forex 证据判定族合一(先 characterization tests,后合一;两侧语义差异记录在 PR)
   - [x] brainstorming 定稿:`docs/superpowers/specs/2026-06-13-batch-c0-forex-evidence-consolidation-design.md`(纯保行为 + 共享底层 + 三样全入 + 跨侧参数化 characterization)
   - [x] 执行计划 `docs/superpowers/plans/2026-06-13-batch-c0-review-followups.md` → Codex 执行 → Claude 评审 → squash 合入 main(§3 矩阵入 commit body)
-- [ ] **PR-C1**:Stage2 拆分 — errors / snippet_filters / evidence / regex_extraction
+- [x] **PR-C1**:Stage2 拆分 — errors / snippet_filters / evidence / regex_extraction
+  - [x] spec:`docs/superpowers/specs/2026-06-13-batch-c1-stage2-split-design.md`(纯机械搬移 + 4 簇 + evidence→snippet_filters 单向 + 跨模块 characterization)
+  - [x] 执行计划:`docs/superpowers/plans/2026-06-13-batch-c1-stage2-split.md`(从 HEAD `0187b00` 现生成,7 Task;已含实跑真值 + 偏离声明)
+  - [x] 评审补救计划:`docs/superpowers/plans/2026-06-13-batch-c1-review-followups.md` → Codex 执行 → squash 合入 main
 - [ ] **PR-C2**:Stage2 拆分 — extraction_apply / structured_runner / query_planner / diagnostics / validation / cli
 - [ ] **PR-C3**:`_execute_tasks`(2600 行)按任务生命周期切五段(先加阶段级 characterization test)
 - [ ] **PR-C4**:Stage2.5 拆分 — schema_coercion / manual_official(行为冻结区,单独评审)/ fund_flow / gap_sync
