@@ -341,7 +341,7 @@ bash run_clean.sh python -m pytest -q tests/test_forex_evidence_characterization
 Expected:
 
 ```text
-27 passed
+26 passed
 ```
 
 - [ ] **Step 1.3: Commit characterization tests**
@@ -1252,7 +1252,7 @@ bash run_clean.sh python -m compileall -q scripts/stage2_unified_enhancer.py src
 Expected pytest summary:
 
 ```text
-29 passed, 3 warnings
+28 passed, 3 warnings
 ```
 
 Expected compileall output: empty output, exit 0.
@@ -1421,7 +1421,7 @@ bash run_clean.sh python -m compileall -q scripts/stage2_5_injector.py src/datas
 Expected pytest summary:
 
 ```text
-235 passed, 3 warnings
+234 passed, 3 warnings
 ```
 
 Expected compileall output: empty output, exit 0.
@@ -1522,7 +1522,7 @@ bash run_clean.sh python -m pytest -q \
 Expected:
 
 ```text
-237 passed, 3 warnings
+236 passed, 3 warnings
 ```
 
 - [ ] **Step 5.5: Run full test suite**
@@ -1542,7 +1542,7 @@ Expected baseline from C-0.5 was:
 Warnings are allowed if test status matches. If count differs only because the new characterization tests are included, expected becomes:
 
 ```text
-1040 passed, 3 skipped
+1039 passed, 3 skipped
 ```
 
 Any failure or additional skip must stop the task.
