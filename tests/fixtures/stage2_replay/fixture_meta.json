@@ -1,6 +1,10 @@
 {
   "search_key": "rrr",
+  "extract_search_key": "USDCNY",
   "parse_error_key": "reverse_repo",
+  "oracle_skip_result_type_keys": [
+    "USDCNY"
+  ],
   "structured_keys": [
     "BZ=F",
     "CL=F",
@@ -8,7 +12,6 @@
     "GC=F",
     "GSG",
     "HG=F",
-    "USDCNY",
     "bdi",
     "industrial",
     "industrial_sales",

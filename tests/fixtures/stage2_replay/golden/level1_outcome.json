@@ -1,6 +1,6 @@
 {
-  "completed": 15,
-  "failures": 4,
+  "completed": 14,
+  "failures": 5,
   "outcome": {
     "BCOM": "manual_required",
     "BZ=F": "structured_success",
@@ -10,7 +10,7 @@
     "GC=F": "structured_success",
     "GSG": "structured_success",
     "HG=F": "structured_success",
-    "USDCNY": "structured_success",
+    "USDCNY": "manual_required",
     "bdi": "structured_success",
     "etf": "manual_required",
     "industrial": "structured_success",
@@ -1163,11 +1163,316 @@
     },
     {
       "extraction": {
+        "as_of_date": "2026-04-24",
+        "confidence": 0.9,
+        "issuer": "Investing.com",
+        "issuer_match": false,
+        "llm_latency_ms": 0,
+        "manual_reason": "missing_compare_values",
+        "manual_required": true,
+        "note": "deepseek_structured missing_compare_values",
+        "recent_5d": null,
+        "report_period": null,
+        "source_url": "https://uk.investing.com/currencies/usd-cny-historical-data",
+        "total_120d": null,
+        "trend": "unknown",
+        "unit": "CNY",
+        "value": 6.8342
+      },
+      "extraction_backend": "deepseek",
+      "field_attempts": [],
+      "force_refresh": false,
+      "manual_reason": "missing_compare_values",
+      "manual_required": true,
+      "note": null,
+      "raw_results": [
+        {
+          "content": "Title: Convert US Dollar to Chinese Yuan | USD to CNY Exchange Rate\n# USD/CNY - US Dollar Chinese Yuan. * To use this feature, make sure you are signed-in to your account. * To use this feature, make sure you are signed-in to your account. * Make sure you are signed-in with the same user profile. USD/CNY 6.8931 +0.0242 +0.35%. ## USDCNY (Dollar to Yuan) Currency Converter. Get the live Dollar to Yuan conversion rate with our free USD CNY currency converter. This real time US Dollar to Chinese Yuan conversion calculator lets you convert any amount from US Dollar to Chinese Yuan (1 USD to CNY). All USD to CNY live exchange rate prices are updated in real time. 1 USD = 6.8931 CNY. 1 CNY = 0.1451 USD. What is your sentiment on USD/CNY? We encourage you to use comments to engage with users, share your perspective and ask questions of authors and each other. * NOTE: Spam and/or promotional messages and links within a comment will be removed. Therefore, in addition to civil interaction, we expect commenters to offer their opinions succinctly and thoughtfully, but not so repeatedly that others are annoyed or offended. * **Only English** comments will be allowed. ### USD CNY Forum Discussions. Write your thoughts about USD/CNY. Are you sure you want to delete this chart? Your ability to comment is currently suspended due to negative user reports. Please wait a minute before you try to comment again. Please note that all comments are pending until approved by our moderators. Woon soo Lee  Jan 13, 2023 0:51. This comment has already been saved in your Saved Items. Woon soo Lee  May 03, 2021 11:15. Cd De  Sep 03, 2019 9:41. World GDP growth will slow to nearly 3% this year should tariffs be imposed on all US-China trade. Are you sure you want to delete this chart? Your ability to comment is currently suspended due to negative user reports. Please wait a minute before you try to comment again. Are you sure you want to block %USER\\_NAME%? By doing so, you and %USER\\_NAME% will not be able to see any of each other's Investing.com's posts. I feel that this comment is:.",
+          "raw_content": null,
+          "score": 0.9970421,
+          "title": "Convert US Dollar to Chinese Yuan | USD to CNY Exchange Rate",
+          "url": "https://uk.investing.com/currencies/usd-cny-converter"
+        },
+        {
+          "content": "Title: Convert 1 USD to CNY | US Dollar to Chinese Yuan Exchange Rate Today\n# USD/CNY - US Dollar Chinese Yuan. Get the latest USD to CNY (1 US Dollar to Chinese Yuan) exchange rate conversion data, resources and insights. Stay informed with real-time data for the current Dollar to Yuan live exchange rate, breaking news, expert opinions, in-depth analyses, and key economic events surrounding the USD CNY currency cross. Harness these free USD CNY currency cross resources today to navigate the live Dollar Yuan exchange rate. **How Do I Trade USD CNY?**. ## USD/CNY - US Dollar Chinese Yuan News & Analysis. ## USD/CNY - US Dollar Chinese Yuan News & Analysis. | US | US | Government Payrolls(Mar)  Act: -  Cons: -  Prev.: -6.00K | -6.00K |. | US | US | Manufacturing Payrolls(Mar)  Act: -  Cons: -5.00K  Prev.: -12.00K | -5.00K | -12.00K |. | US | US | CFTC Aluminium speculative net positions  Act: -  Cons: -  Prev.: -0.70K | -0.70K |. | US | US | CFTC Copper speculative net positions  Act: -  Cons: -  Prev.: 37.50K | 37.50K |. | US | US | CFTC Corn speculative net positions  Act: -  Cons: -  Prev.: 375.40K | 375.40K |. | US | US | CFTC Crude Oil speculative net positions  Act: -  Cons: -  Prev.: 233.60K | 233.60K |. | US | US | CFTC Gold speculative net positions  Act: -  Cons: -  Prev.: 168.30K | 168.30K |. | US | US | CFTC Nasdaq 100 speculative net positions  Act: -  Cons: -  Prev.: 6.60K | 6.60K |. | US | US | CFTC Natural Gas speculative net positions  Act: -  Cons: -  Prev.: -172.60K | -172.60K |. | US | US | CFTC S&P 500 speculative net positions  Act: -  Cons: -  Prev.: -80.90K | -80.90K |. | US | US | CFTC Silver speculative net positions  Act: -  Cons: -  Prev.: 24.70K | 24.70K |. | US | US | CFTC Soybeans speculative net positions  Act: -  Cons: -  Prev.: 215.20K | 215.20K |. | US | US | CFTC Wheat speculative net positions  Act: -  Cons: -  Prev.: -17.10K | -17.10K |. ### What Is the Current USD/CNY Exchange Rate?",
+          "raw_content": null,
+          "score": 0.9959927,
+          "title": "Convert 1 USD to CNY | US Dollar to Chinese Yuan Exchange Rate Today",
+          "url": "https://uk.investing.com/currencies/usd-cny"
+        },
+        {
+          "content": "6.8342\n\n+0.0082(+0.12%)\n\nReal-time Data·\n\nDay's Range\n\n6.82656.8371\n\n52 wk Range\n\n6.81397.3008\n\n## USD to CNY Historical Exchage Rates\n\nView free USD CNY historical exchange rate data.  \n  \n You'll find the full exchange rate history of the chosen currency's closing price, open, high, low, change and percentage change of US Dollar to Chinese Yuan currency pair for the selected range of dates.  \n  \n The USD CNY exchange rate historical data can be viewed in daily, weekly or monthly time intervals. (Including USD to CNY last month, last week or even last year).  \n  \n Investors with a free Investing.com account can download more than 10 years of USDCNY history for free.\n\nTime Frame\n\nDaily\n\nDownload\n\n24/03/2026 - 24/04/2026 [...] Highest:\n\n6.9210\n\nChange %:\n\n-0.6845\n\nAverage:\n\n6.8555\n\nDifference:\n\n0.1071\n\nLowest:\n\n6.8139\n\n## FAQ\n\n### What Is the Current USD/CNY Exchange Rate?\n\nThe current USD/CNY exchange rate is 6.8342, with a previous close of 6.8260.\n\n### What Is the Historical Performance of USD/CNY?\n\nOver the past year, USD/CNY has changed by -6.2200%, trading within a 52-week range of 6.8139 to 7.3008.\n\n### What Is the Daily Range for USD/CNY?\n\nToday’s USD/CNY range is from 6.8265 to 6.8371.\n\n### What Was the Opening Price for USD/CNY Today?\n\nThe opening price for USD/CNY today was 6.8335.\n\nTrade With A Regulated Broker\n\nFTSE 100\")\n\n10,457.01\n\n-19.45\n\n-0.19%\n\nDAX\")\n\n24,155.45\n\n-39.45\n\n-0.16%\n\nEuro Stoxx 50\")\n\n5,887.06\n\n-19.16\n\n-0.32%\n\nS&P 500\")\n\n7,108.40\n\n-29.50\n\n-0.41%\n\nNikkei 225\")\n\n59,734.00\n\n+593.77 [...] | USD/UZS | · | Uzbekistani Sum |\n| USD/VND | · | Vietnamese Dong |\n| USD/AZN | · | Azerbaijani Manat |\n| USD/CNH | · | Chinese Yuan Offshore |\n| USD/KGS | · | Kyrgyzstan som |\n| USD/TJS | · | Tajikistani somoni |\n| USD/MNT | · |\n| USD/AFN | · | Afghanistan Afghani |\n| USD/BTN | · | Bhutanese Ngultrum |\n| USD/ZAR | · | South African Rand |\n| USD/BIF | · | Burundian Franc |\n| USD/BWP | · | Botswana Pula |\n| USD/DJF | · | Djiboutian Franc |\n| USD/DZD | · | Algerian Dinar |\n| USD/EGP | · | Egyptian Pound |\n| USD/ETB | · | Ethiopian Birr |\n| USD/GHS | · | Ghanaian Cedi |\n| USD/GMD | · | Gambian Dalasi |\n| USD/GNF | · | Guinean Franc |\n| USD/KES | · | Kenyan Shilling |\n| USD/KMF | · | Comorian Franc |\n| USD/LSL | · | Lesotho loti |\n| USD/LYD | · | Libyan Dinar |",
+          "raw_content": null,
+          "score": 0.9856076,
+          "title": "USD CNY History | (USD to CNY) Past Exchange Rates",
+          "url": "https://uk.investing.com/currencies/usd-cny-historical-data"
+        }
+      ],
+      "result_type": "manual_required",
+      "search_backend": "tavily",
+      "task": {
+        "allow_low_score_extract": false,
+        "auto_parameters": true,
+        "bad_url_hit_count": 0,
+        "chunks_per_source": null,
+        "created_at": 1777259332,
+        "days": 3,
+        "domain_filtered_drop": 0,
+        "exa_request_id": null,
+        "exclude_domains": [
+          "xe.com",
+          "x-rates.com",
+          "boc.cn",
+          "bankofchina.com"
+        ],
+        "exclude_keywords": [
+          "外汇牌价",
+          "现汇卖出"
+        ],
+        "expected_period": null,
+        "expected_period_tokens": [
+          "2026年3月",
+          "2026年1-3月",
+          "2026年03月",
+          "2026-03"
+        ],
+        "extract_policy": {
+          "extract_topk": 2,
+          "use_tavily_extract": true
+        },
+        "extract_skipped_reason": null,
+        "extraction_skipped_reason": null,
+        "failover_reason": null,
+        "field_queries": {},
+        "field_scope": null,
+        "force_refresh": false,
+        "fund_flow_backend": null,
+        "good_url_hit_count": 0,
+        "indicator_key": "USDCNY",
+        "issuer": "中国外汇交易中心",
+        "issuer_aliases": [
+          "CFETS",
+          "外汇交易中心",
+          "中国货币网",
+          "中国银行",
+          "中行",
+          "BOC",
+          "外汇牌价",
+          "SAFE",
+          "Investing.com",
+          "Trading Economics"
+        ],
+        "issuer_hit": true,
+        "language": "chinese",
+        "low_score_threshold": null,
+        "max_age_days": 3,
+        "max_results": 8,
+        "period_hit": false,
+        "post_writeback_missing_fields": [
+          "daily_change",
+          "change_120d"
+        ],
+        "preferred_domains": [
+          "chinamoney.com.cn",
+          "cfets.com.cn",
+          "eastmoney.com",
+          "investing.com",
+          "tradingeconomics.com"
+        ],
+        "queries": [
+          "USD/CNY onshore exchange rate today",
+          "USD/CNY exchange rate investing.com",
+          "USD/CNY exchange rate tradingeconomics",
+          "2026年4月 美元人民币 在岸 即期 汇率",
+          "美元人民币 在岸即期汇率 最新报价",
+          "中国货币网 USD/CNY 在岸 即期 汇率",
+          "CFETS 美元 人民币 即期 汇率",
+          "中国银行 外汇牌价 美元 现汇卖出"
+        ],
+        "query": "USD CNY exchange rate 美元人民币 在岸即期汇率 最新",
+        "query_attempts": [
+          {
+            "bad_url_hit_count": 0,
+            "family": "official_cfets",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": true,
+            "period_hit": false,
+            "quality_score": 447.970421,
+            "query": "CFETS USD/CNY 在岸即期汇率 最新报价",
+            "result_count": 3,
+            "score_max": 0.9970421,
+            "trusted_count": 0,
+            "unusable_reason": null,
+            "usable_count": 3,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 21
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "official_cfets",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": true,
+            "period_hit": false,
+            "quality_score": 447.970421,
+            "query": "中国货币网 USD/CNY 在岸即期汇率 最新",
+            "result_count": 3,
+            "score_max": 0.9970421,
+            "trusted_count": 0,
+            "unusable_reason": null,
+            "usable_count": 3,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 21
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "official_cfets",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": true,
+            "period_hit": false,
+            "quality_score": 447.970421,
+            "query": "2026年4月 USD/CNY 在岸即期汇率 CFETS",
+            "result_count": 3,
+            "score_max": 0.9970421,
+            "trusted_count": 0,
+            "unusable_reason": null,
+            "usable_count": 3,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 21
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "market_quote",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": true,
+            "period_hit": false,
+            "quality_score": 747.970421,
+            "query": "USD/CNY onshore exchange rate latest",
+            "result_count": 3,
+            "score_max": 0.9970421,
+            "trusted_count": 3,
+            "unusable_reason": null,
+            "usable_count": 3,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 21
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "market_quote",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": true,
+            "period_hit": false,
+            "quality_score": 747.970421,
+            "query": "USD/CNY quote investing tradingeconomics",
+            "result_count": 3,
+            "score_max": 0.9970421,
+            "trusted_count": 3,
+            "unusable_reason": null,
+            "usable_count": 3,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 21
+          }
+        ],
+        "query_candidates_expanded": [
+          "CFETS USD/CNY 在岸即期汇率 最新报价",
+          "中国货币网 USD/CNY 在岸即期汇率 最新",
+          "2026年4月 USD/CNY 在岸即期汇率 CFETS",
+          "USD/CNY onshore exchange rate latest",
+          "USD/CNY quote investing tradingeconomics"
+        ],
+        "query_families": [
+          {
+            "exclude_keywords": [
+              "外汇牌价",
+              "现汇卖出"
+            ],
+            "name": "official_cfets",
+            "preferred_domains": [
+              "cfets.com.cn",
+              "chinamoney.com.cn"
+            ],
+            "queries": [
+              "CFETS USD/CNY 在岸即期汇率 最新报价",
+              "中国货币网 USD/CNY 在岸即期汇率 最新",
+              "2026年4月 USD/CNY 在岸即期汇率 CFETS"
+            ],
+            "required_keywords": [
+              "usd/cny",
+              "usdcny",
+              "在岸"
+            ]
+          },
+          {
+            "exclude_keywords": [
+              "外汇牌价",
+              "现汇卖出"
+            ],
+            "name": "market_quote",
+            "preferred_domains": [
+              "investing.com",
+              "tradingeconomics.com",
+              "eastmoney.com"
+            ],
+            "queries": [
+              "USD/CNY onshore exchange rate latest",
+              "USD/CNY quote investing tradingeconomics"
+            ],
+            "required_keywords": [
+              "usd/cny",
+              "在岸"
+            ]
+          }
+        ],
+        "query_family_used": "market_quote",
+        "query_template_id": "USDCNY",
+        "query_used": "USD/CNY onshore exchange rate latest",
+        "request_id": null,
+        "required_keywords": [
+          "usd/cny",
+          "在岸",
+          "即期"
+        ],
+        "retry_count": 0,
+        "score_filtered_drop": 0,
+        "score_low_all": false,
+        "score_low_threshold": 0.2,
+        "score_stats": {
+          "score_count": 3,
+          "score_max": 0.9970421,
+          "score_min": 0.9856076,
+          "score_p50": 0.9959927,
+          "score_p95": 0.9969371600000001
+        },
+        "search_backend": "tavily",
+        "search_backend_state": null,
+        "search_depth": "advanced",
+        "selected_reason": "trusted=3 usable=3 issuer_hit=True period_hit=False usage_evidence=0 value_evidence=21 good_url=0 bad_url=0 score_max=0.9970421",
+        "source_hint": null,
+        "stage_phase": "assets",
+        "strict_issuer_match": true,
+        "strict_required_keywords": true,
+        "task_id": "2f6ce68f-474b-4413-b174-ccd47336fd72",
+        "time_range": "day",
+        "topic": "general",
+        "trigger_reason": "missing",
+        "trusted_count": 3,
+        "unit": "CNY",
+        "usable_count_before_extract": 3,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 21
+      }
+    },
+    {
+      "extraction": {
         "as_of_date": "2026-02-01",
         "confidence": 0.95,
         "issuer": "中国人民银行",
         "issuer_match": true,
-        "llm_latency_ms": 0,
+        "llm_latency_ms": 1,
         "manual_reason": null,
         "manual_required": false,
         "note": "deepseek_structured 发布机构校验放宽 exa_fallback 发布机构校验放宽",
@@ -1456,312 +1761,6 @@
         "usage_evidence_score": 0,
         "value_evidence_score": 24
       }
-    },
-    {
-      "as_of_date": "2026-05-26",
-      "category": null,
-      "confidence": 0.95,
-      "diagnostics": {
-        "api_url": "https://www.chinamoney.com.cn/ags/ms/cm-u-bk-ccpr/CcprHisNew",
-        "evidence_text": "USD/CNY 6.8288"
-      },
-      "extraction": {
-        "as_of_date": "2026-05-26",
-        "category": null,
-        "change_120d": 0.0,
-        "change_120d_window_evidence": "direct_window",
-        "confidence": 0.95,
-        "daily_change": 0.0,
-        "daily_change_window_evidence": "direct_daily_series",
-        "diagnostics": {
-          "api_url": "https://www.chinamoney.com.cn/ags/ms/cm-u-bk-ccpr/CcprHisNew",
-          "evidence_text": "USD/CNY 6.8288"
-        },
-        "indicator_key": "USDCNY",
-        "is_estimated": false,
-        "issuer_match": true,
-        "note": "structured_provider:official_china",
-        "source": "Official China structured source",
-        "source_tier": "tier1",
-        "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
-        "unit": "CNY",
-        "value": 6.8288
-      },
-      "extraction_backend": "structured",
-      "force_refresh": false,
-      "indicator_key": "USDCNY",
-      "manual_reason": null,
-      "manual_required": false,
-      "note": "structured_provider:official_china",
-      "payload": {
-        "change_120d": 0.0,
-        "change_120d_window_evidence": "direct_window",
-        "daily_change": 0.0,
-        "daily_change_window_evidence": "direct_daily_series",
-        "is_estimated": false,
-        "issuer_match": true,
-        "unit": "CNY",
-        "value": 6.8288
-      },
-      "provider": "official_china",
-      "raw_results": [
-        {
-          "as_of_date": "2026-05-26",
-          "content": "structured_provider:official_china",
-          "score": 0.95,
-          "source_tier": "tier1",
-          "title": "Official China structured source",
-          "url": "https://www.chinamoney.com.cn/chinese/bkccpr/"
-        }
-      ],
-      "result_type": "structured_success",
-      "results": [
-        {
-          "as_of_date": "2026-05-26",
-          "content": "structured_provider:official_china",
-          "score": 0.95,
-          "source_tier": "tier1",
-          "title": "Official China structured source",
-          "url": "https://www.chinamoney.com.cn/chinese/bkccpr/"
-        }
-      ],
-      "search_backend": "structured",
-      "source": "Official China structured source",
-      "source_tier": "tier1",
-      "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
-      "structured_provider": "official_china",
-      "structured_provider_latency_ms": 0,
-      "task": {
-        "allow_low_score_extract": false,
-        "auto_parameters": true,
-        "bad_url_patterns": [
-          "bankofchina",
-          "boc.cn",
-          "cash selling",
-          "bank note",
-          "currency converter"
-        ],
-        "chunks_per_source": null,
-        "created_at": 1779843176,
-        "days": 3,
-        "evidence_keywords": [
-          "USD/CNY",
-          "USDCNY",
-          "onshore",
-          "spot",
-          "central parity"
-        ],
-        "exclude_domains": [
-          "xe.com",
-          "x-rates.com",
-          "boc.cn",
-          "bankofchina.com"
-        ],
-        "exclude_keywords": [
-          "外汇牌价",
-          "现汇卖出"
-        ],
-        "expected_period": null,
-        "expected_period_tokens": [],
-        "extract_policy": {
-          "extract_topk": 1,
-          "official_domains": [
-            "chinamoney.com.cn",
-            "cfets.com.cn"
-          ],
-          "official_domains_only": true,
-          "use_tavily_extract": true
-        },
-        "extraction_backend": "structured",
-        "field_queries": {},
-        "force_refresh": false,
-        "fund_flow_backend": null,
-        "good_url_patterns": [
-          "chinamoney.com.cn",
-          "cfets.com.cn",
-          "investing.com/currencies/usd-cny"
-        ],
-        "indicator_key": "USDCNY",
-        "issuer": "中国外汇交易中心",
-        "issuer_aliases": [
-          "中国人民银行",
-          "PBOC",
-          "CFETS",
-          "外汇交易中心",
-          "中国货币网",
-          "中国银行",
-          "中行",
-          "BOC",
-          "外汇牌价",
-          "SAFE",
-          "Investing.com",
-          "Trading Economics"
-        ],
-        "language": "chinese",
-        "low_score_threshold": null,
-        "max_age_days": 3,
-        "max_query_candidates": 3,
-        "max_results": 8,
-        "preferred_domains": [
-          "chinamoney.com.cn",
-          "cfets.com.cn",
-          "eastmoney.com",
-          "investing.com",
-          "tradingeconomics.com"
-        ],
-        "quality_gap_category": null,
-        "quality_gap_details": null,
-        "quality_gap_reason": null,
-        "queries": [
-          "USD/CNY onshore exchange rate today",
-          "USD/CNY exchange rate investing.com",
-          "USD/CNY exchange rate tradingeconomics",
-          "2026年5月 美元人民币 在岸 即期 汇率",
-          "美元人民币 在岸即期汇率 最新报价",
-          "中国货币网 USD/CNY 在岸 即期 汇率",
-          "CFETS 美元 人民币 即期 汇率",
-          "中国银行 外汇牌价 美元 现汇卖出"
-        ],
-        "query": "USD CNY exchange rate 美元人民币 在岸即期汇率 最新",
-        "query_candidates_expanded": [
-          "USD/CNY onshore spot rate latest China Foreign Exchange Trade System 2026-05-27",
-          "USD/CNY current rate ChinaMoney latest 2026-05-27",
-          "USDCNY onshore spot quote latest 2026-05-27",
-          "中国人民银行 人民币汇率中间价 USD CNY 最新 2026-05-27",
-          "人民币汇率中间价 美元 人民币 2026年5月 2026-05-27",
-          "PBOC USD CNY central parity latest 2026-05-27",
-          "CFETS USD/CNY 在岸即期汇率 最新报价 2026-05-27",
-          "中国货币网 USD/CNY 在岸即期汇率 最新 2026-05-27",
-          "2026年5月 USD/CNY 在岸即期汇率 CFETS 2026-05-27",
-          "USD/CNY onshore exchange rate latest 2026-05-27",
-          "USD/CNY quote investing tradingeconomics 2026-05-27"
-        ],
-        "query_families": [
-          {
-            "exclude_keywords": [
-              "bankofchina",
-              "Bank of China",
-              "cash selling",
-              "bank note",
-              "currency converter"
-            ],
-            "name": "onshore_current_quote",
-            "preferred_domains": [
-              "chinamoney.com.cn",
-              "cfets.com.cn",
-              "investing.com",
-              "tradingeconomics.com"
-            ],
-            "queries": [
-              "USD/CNY onshore spot rate latest China Foreign Exchange Trade System 2026-05-27",
-              "USD/CNY current rate ChinaMoney latest 2026-05-27",
-              "USDCNY onshore spot quote latest 2026-05-27"
-            ],
-            "required_keywords": [
-              "USD/CNY",
-              "USDCNY"
-            ]
-          },
-          {
-            "exclude_keywords": [
-              "外汇牌价",
-              "现汇卖出"
-            ],
-            "name": "pboc_midpoint",
-            "preferred_domains": [
-              "pbc.gov.cn",
-              "chinamoney.com.cn",
-              "cfets.com.cn"
-            ],
-            "queries": [
-              "中国人民银行 人民币汇率中间价 USD CNY 最新 2026-05-27",
-              "人民币汇率中间价 美元 人民币 2026年5月 2026-05-27",
-              "PBOC USD CNY central parity latest 2026-05-27"
-            ],
-            "required_keywords": [
-              "中间价",
-              "美元",
-              "人民币",
-              "usd",
-              "cny"
-            ]
-          },
-          {
-            "exclude_keywords": [
-              "外汇牌价",
-              "现汇卖出"
-            ],
-            "name": "cfets_spot",
-            "preferred_domains": [
-              "cfets.com.cn",
-              "chinamoney.com.cn"
-            ],
-            "queries": [
-              "CFETS USD/CNY 在岸即期汇率 最新报价 2026-05-27",
-              "中国货币网 USD/CNY 在岸即期汇率 最新 2026-05-27",
-              "2026年5月 USD/CNY 在岸即期汇率 CFETS 2026-05-27"
-            ],
-            "required_keywords": [
-              "usd/cny",
-              "usdcny",
-              "在岸",
-              "即期"
-            ]
-          },
-          {
-            "exclude_keywords": [
-              "外汇牌价",
-              "现汇卖出"
-            ],
-            "name": "onshore_spot",
-            "preferred_domains": [
-              "investing.com",
-              "tradingeconomics.com",
-              "eastmoney.com"
-            ],
-            "queries": [
-              "USD/CNY onshore exchange rate latest 2026-05-27",
-              "USD/CNY quote investing tradingeconomics 2026-05-27"
-            ],
-            "required_keywords": [
-              "usd/cny",
-              "onshore",
-              "在岸"
-            ]
-          }
-        ],
-        "query_template_id": "USDCNY",
-        "query_used": "USD CNY exchange rate 美元人民币 在岸即期汇率 最新",
-        "ref_date": "2026-05-27",
-        "report_usage": null,
-        "required_keywords": [
-          "usd/cny",
-          "usdcny",
-          "美元",
-          "人民币",
-          "在岸",
-          "即期",
-          "中间价"
-        ],
-        "required_output_fields": [
-          "current_value"
-        ],
-        "retry_count": 0,
-        "search_backend": "structured",
-        "search_depth": "advanced",
-        "source_hint": null,
-        "stage_phase": "assets",
-        "strict_issuer_match": true,
-        "strict_required_keywords": true,
-        "task_id": "3a8eeabf-2c50-4b5a-9454-c6a6dbbf2822",
-        "time_context_type": "daily_quote",
-        "time_range": "day",
-        "topic": "general",
-        "trigger_reason": "missing",
-        "unit": "CNY"
-      },
-      "write_back_success": true,
-      "write_back_target": "forex"
     },
     {
       "as_of_date": "2026-05-26",
@@ -4052,7 +4051,7 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/commodity/gold",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
+      "structured_provider_latency_ms": 0,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -4281,7 +4280,7 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/united-states/currency",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 0,
+      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": true,
         "auto_parameters": true,

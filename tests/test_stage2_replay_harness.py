@@ -15,6 +15,10 @@ from pathlib import Path
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "stage2_replay"
 META = json.loads((FIXTURES / "fixture_meta.json").read_text(encoding="utf-8"))
 PARSE_ERROR_KEY = META["parse_error_key"]  # 合成 parse_error,不参与 oracle
+# Keys whose recorded result_type predates a current gate (donor borrowed across dates);
+# the golden still locks their produced outcome, but the strict result_type oracle skips them.
+ORACLE_RESULT_TYPE_SKIP = set(META.get("oracle_skip_result_type_keys") or [])
+assert ORACLE_RESULT_TYPE_SKIP == {META["extract_search_key"]}
 
 
 def load_recordings():
@@ -142,6 +146,7 @@ class ReplayTavilyClient:
         self._by_indicator_query = _recordings_by_indicator_query()
         self._query_candidates = _query_candidates(self._by_indicator_query)
         self.search_calls = 0
+        self.extract_calls = 0
 
     def _indicator_from_kwargs(self, kwargs):
         for name in ("indicator_key", "indicator", "task_indicator"):
@@ -181,7 +186,9 @@ class ReplayTavilyClient:
         ]
         if len(search_lane_candidates) == 1:
             return search_lane_candidates[0]
-        candidate_labels = ", ".join(sorted(_candidate_label(rec) for rec in candidates))
+        candidate_labels = ", ".join(
+            sorted(_candidate_label(rec) for rec in candidates)
+        )
         raise AssertionError(
             "ambiguous replay Tavily query without indicator: "
             f"{query!r}; candidate indicators/result_types: {candidate_labels}. "
@@ -196,6 +203,11 @@ class ReplayTavilyClient:
         return {"results": raw or []}
 
     async def extract(self, *args, **kwargs):
+        # No donor recording preserves Tavily extract output (raw_content is empty in
+        # every recorded run), so we cannot faithfully replay extracted page content.
+        # Returning empty still exercises the real call path: production decides to call
+        # extract (use_tavily_extract profile), then handles the empty response.
+        self.extract_calls += 1
         return {"results": []}
 
 
@@ -233,7 +245,10 @@ class ReplayRegistry:
         return object() if indicator_key in self._spec else None
 
     async def fetch(self, task, market_payload, reference_date):
-        from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
+        from datasource.providers.stage2_structured import (
+            StructuredProviderError,
+            StructuredResult,
+        )
 
         self.calls += 1
         key = task["indicator_key"]
@@ -259,7 +274,11 @@ class ReplayRegistry:
 
 
 # 每项必须有实证来由(连跑两次 capture 的 diff),不许凭感觉加。
-VOLATILE_FIELDS = set()  # Task 5 Step 1 实证后填充,如 {"created_at", "elapsed_ms", ...}
+# 当前 golden 可复现还隐性依赖两个开关关闭,不是靠 normalize:生产里 time.time()
+# (stage2 ~5651/5770)和 asyncio.sleep(0.5) 都只在 auto_disable_extract_on_422 与 Exa
+# failover 路径上;replay 把这两条都关掉(flag 默认 False、EXA_API_KEY="")才使其不可达。
+# 若将来扩展 replay 去覆盖 422-cooldown 或 Exa,需要在此登记新泄漏字段。
+VOLATILE_FIELDS = set()  # 实证后填充,如 {"created_at", "elapsed_ms", ...}
 
 
 def _result_sort_key(item):
@@ -280,7 +299,9 @@ def sort_results(items):
 def normalize(obj):
     """递归剔除 VOLATILE_FIELDS、按 dict 键排序;不重排 list(保留 market_data 语义顺序)。"""
     if isinstance(obj, dict):
-        return {k: normalize(v) for k, v in sorted(obj.items()) if k not in VOLATILE_FIELDS}
+        return {
+            k: normalize(v) for k, v in sorted(obj.items()) if k not in VOLATILE_FIELDS
+        }
     if isinstance(obj, list):
         return [normalize(v) for v in obj]
     return obj
@@ -293,11 +314,13 @@ def assert_or_update_golden(payload, name):
         golden.parent.mkdir(parents=True, exist_ok=True)
         golden.write_text(text, encoding="utf-8")
         return
-    update_cmd = "STAGE2_REPLAY_UPDATE_GOLDEN=1 pytest tests/test_stage2_replay_harness.py"
-    assert golden.exists(), f"golden missing: {golden}; update with: {update_cmd}"
-    assert text == golden.read_text(encoding="utf-8"), (
-        f"golden mismatch: {golden}; update with: {update_cmd}"
+    update_cmd = (
+        "STAGE2_REPLAY_UPDATE_GOLDEN=1 pytest tests/test_stage2_replay_harness.py"
     )
+    assert golden.exists(), f"golden missing: {golden}; update with: {update_cmd}"
+    assert text == golden.read_text(
+        encoding="utf-8"
+    ), f"golden mismatch: {golden}; update with: {update_cmd}"
 
 
 def _load_tasks():
@@ -314,19 +337,17 @@ def _produced_by_indicator(websearch_items):
 
 def assert_recorded_oracle(websearch_items):
     produced_by_key = _produced_by_indicator(websearch_items)
-    outcome = {
-        key: item.get("result_type")
-        for key, item in produced_by_key.items()
-    }
+    outcome = {key: item.get("result_type") for key, item in produced_by_key.items()}
 
     recorded = load_recordings()
     for key, rec in recorded.items():
         if key == PARSE_ERROR_KEY:
             continue
         assert key in produced_by_key, f"{key}: missing produced replay result"
-        assert outcome.get(key) == rec.get("result_type"), (
-            f"{key}: {outcome.get(key)} != {rec.get('result_type')}"
-        )
+        if key not in ORACLE_RESULT_TYPE_SKIP:
+            assert outcome.get(key) == rec.get(
+                "result_type"
+            ), f"{key}: {outcome.get(key)} != {rec.get('result_type')}"
         extraction = rec.get("extraction")
         if extraction and extraction.get("value") is not None:
             got_extraction = produced_by_key[key].get("extraction") or {}
@@ -349,7 +370,10 @@ class Level1ReplayRegistry(ReplayRegistry):
         self._by_key = load_recordings()
 
     async def fetch(self, task, market_payload, reference_date):
-        from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
+        from datasource.providers.stage2_structured import (
+            StructuredProviderError,
+            StructuredResult,
+        )
 
         self.calls += 1
         key = task["indicator_key"]
@@ -393,29 +417,50 @@ def test_replay_execute_tasks_chains(tmp_path, monkeypatch):
 
     import scripts.stage2_unified_enhancer as stage2
 
-    market = json.loads((FIXTURES / "market_data_input.json").read_text(encoding="utf-8"))
+    market = json.loads(
+        (FIXTURES / "market_data_input.json").read_text(encoding="utf-8")
+    )
     # Stabilize replay timing fields; this does not alter business behavior.
     counter = itertools.count()
     monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
 
-    completed, failures, websearch = asyncio.run(stage2._execute_tasks(
-        _load_tasks(), market,
-        client=ReplayTavilyClient(), exa_client=None,
-        extractor=ReplayDeepSeek(), task_log_path=tmp_path / "task_log.jsonl",
-        cache_ttl=None, structured_registry=Level1ReplayRegistry(),
-    ))
+    client = ReplayTavilyClient()
+    completed, failures, websearch = asyncio.run(
+        stage2._execute_tasks(
+            _load_tasks(),
+            market,
+            client=client,
+            exa_client=None,
+            extractor=ReplayDeepSeek(),
+            task_log_path=tmp_path / "task_log.jsonl",
+            cache_ttl=None,
+            structured_registry=Level1ReplayRegistry(),
+        )
+    )
 
     websearch_sorted = sort_results(websearch)
     outcome = assert_recorded_oracle(websearch_sorted)
 
     # 四链路覆盖(spec 验收 #4)
     have = set(outcome.values())
-    for rt in ("structured_success", "search_success", "manual_required", "skipped_existing"):
+    for rt in (
+        "structured_success",
+        "search_success",
+        "manual_required",
+        "skipped_existing",
+    ):
         assert rt in have, f"missing result_type {rt}; outcome={outcome}"
 
+    # extract 链路覆盖:USDCNY 借入 search 链路后,production 必须只调到一次 client.extract。
+    assert client.extract_calls == 1, "Tavily extract call path count drifted"
+
     assert_or_update_golden(
-        {"outcome": outcome, "completed": len(completed), "failures": len(failures),
-         "websearch": websearch_sorted},
+        {
+            "outcome": outcome,
+            "completed": len(completed),
+            "failures": len(failures),
+            "websearch": websearch_sorted,
+        },
         "level1_outcome.json",
     )
 
@@ -431,9 +476,15 @@ def test_replay_full_main(tmp_path, monkeypatch):
     monkeypatch.setenv("TAVILY_API_KEY", "replay-tavily-key")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "replay-deepseek-key")
     monkeypatch.setenv("EXA_API_KEY", "")
-    monkeypatch.setattr(stage2, "AsyncTavilyClient", lambda *args, **kwargs: ReplayTavilyClient())
-    monkeypatch.setattr(stage2, "DeepSeekExtractionAgent", lambda *args, **kwargs: ReplayDeepSeek())
-    monkeypatch.setattr(stage2, "build_default_registry", lambda: Level1ReplayRegistry())
+    monkeypatch.setattr(
+        stage2, "AsyncTavilyClient", lambda *args, **kwargs: ReplayTavilyClient()
+    )
+    monkeypatch.setattr(
+        stage2, "DeepSeekExtractionAgent", lambda *args, **kwargs: ReplayDeepSeek()
+    )
+    monkeypatch.setattr(
+        stage2, "build_default_registry", lambda: Level1ReplayRegistry()
+    )
     counter = itertools.count()
     monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
     fixed_now = stage2.datetime(2026, 6, 13, 0, 0, 0)
@@ -480,12 +531,20 @@ def test_replay_full_main(tmp_path, monkeypatch):
     # Replay fixture intentionally includes manual_required records, so production main returns nonzero.
     assert rc == 1
     summary = json.loads(log_out.read_text(encoding="utf-8"))
-    assert summary["stage2_effective_hit_rate"] == 13 / 18
-    assert summary["task_structured_success"] == 12
+    # Assert the integer numerator/denominator rather than the float ratio: same lock,
+    # but robust to any future rounding of the derived hit-rate field.
+    assert summary["stage2_effective_success"] == 12
+    assert summary["stage2_effective_denominator"] == 18
+    assert summary["task_structured_success"] == 11
     assert summary["task_search_success"] == 1
-    assert summary["task_search_failed"] == 5
+    assert summary["task_search_failed"] == 6
+    assert summary["tavily_extract_calls"] == 1
+    # USDCNY routes through search+extract and is blocked by today's forex zero-evidence
+    # gate -> the single missing_compare_values entry; confirms the extract-lane indicator
+    # lands where the gate dictates.
     assert summary["manual_reason_breakdown"] == {
         "skipped_deepseek:strict_keyword_miss": 2,
+        "missing_compare_values": 1,
         "skipped_deepseek:no_snippets stale_refresh_failed": 1,
         "skipped_deepseek:strict_keyword_miss stale_refresh_failed": 1,
     }

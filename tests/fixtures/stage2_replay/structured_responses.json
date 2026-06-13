@@ -65,18 +65,6 @@
     "source_tier": "tier2",
     "confidence": 0.85
   },
-  "USDCNY": {
-    "behavior": "success",
-    "payload": {
-      "value": 6.8288,
-      "unit": "CNY",
-      "is_estimated": false
-    },
-    "source": "Official China structured source",
-    "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
-    "source_tier": "tier1",
-    "confidence": 0.95
-  },
   "bdi": {
     "behavior": "success",
     "payload": {

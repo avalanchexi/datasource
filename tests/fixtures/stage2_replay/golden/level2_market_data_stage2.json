@@ -161,18 +161,19 @@
   "forex": [
     {
       "as_of_date": null,
-      "change_120d": 0.0,
-      "confidence": 0.95,
-      "current_rate": 6.8288,
-      "daily_change": 0.0,
-      "date": "2026-05-26",
-      "is_estimated": false,
+      "compare_fields_pending": [
+        "daily_change",
+        "change_120d"
+      ],
+      "confidence": 0.9,
+      "current_rate": 6.8342,
+      "date": "2026-04-24",
       "name": "USD/CNY在岸",
-      "note": "structured_provider:official_china",
+      "note": "deepseek_structured",
       "pair": "USDCNY",
-      "source": "structured",
-      "source_url": "https://www.chinamoney.com.cn/chinese/bkccpr/",
-      "stage_task_id": "3a8eeabf-2c50-4b5a-9454-c6a6dbbf2822",
+      "source": "tavily+deepseek",
+      "source_url": "https://uk.investing.com/currencies/usd-cny-historical-data",
+      "stage_task_id": "2f6ce68f-474b-4413-b174-ccd47336fd72",
       "trend": "待获取"
     },
     {
@@ -464,6 +465,18 @@
           "source_hint": "WebSearch/Tavily"
         }
       ],
+      "forex": [
+        {
+          "attempted_tushare": true,
+          "expected_period": null,
+          "key": "USDCNY",
+          "name": "USD/CNY在岸",
+          "preferred_source": "tushare",
+          "reason": "TuShare fx_daily 返回空，需Stage2(Tavily)/Stage2.5补充",
+          "search_query": "USD/CNY在岸 汇率 最新 数据",
+          "source_hint": "WebSearch/Tavily"
+        }
+      ],
       "fund_flow": [
         {
           "attempted_tushare": true,
@@ -494,6 +507,7 @@
   },
   "missing_items": [
     "BCOM",
+    "USDCNY",
     "CN10Y_CDB",
     "reverse_repo",
     "etf"
