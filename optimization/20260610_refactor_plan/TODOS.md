@@ -12,11 +12,11 @@
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
-| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5 完成;C0 设计定稿) | B |
+| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0 完成;下一步 C1) | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:PR-C0(forex 证据判定族合一)——设计定稿,待生成执行计划。**
+**当前焦点:PR-C1(Stage2 拆分 errors/snippet_filters/evidence/regex_extraction)——待 brainstorming/计划。**
 
 ---
 
@@ -57,9 +57,9 @@
 - [x] PR-C-0.5 spec + 执行计划已生成(2026-06-12,可与批次 B 并行执行,零文件交叠):`docs/superpowers/plans/2026-06-12-batch-c05-stage2-replay-harness.md`
 - [x] **PR-C-0.5**:Stage2 replay harness(replay fakes + 录制 oracle + golden byte-stable)— **任何搬移前的硬前置**
   - [x] Codex 执行 → Claude 评审 → 合入 main `7aad7df`(全量 1013 passed)
-- [~] **PR-C0**:forex 证据判定族合一(先 characterization tests,后合一;两侧语义差异记录在 PR)
+- [x] **PR-C0**:forex 证据判定族合一(先 characterization tests,后合一;两侧语义差异记录在 PR)
   - [x] brainstorming 定稿:`docs/superpowers/specs/2026-06-13-batch-c0-forex-evidence-consolidation-design.md`(纯保行为 + 共享底层 + 三样全入 + 跨侧参数化 characterization)
-  - [ ] 生成 PR-C0 执行计划(从 HEAD 现生成)→ Codex 执行 → Claude 评审 → 合入
+  - [x] 执行计划 `docs/superpowers/plans/2026-06-13-batch-c0-review-followups.md` → Codex 执行 → Claude 评审 → squash 合入 main(§3 矩阵入 commit body)
 - [ ] **PR-C1**:Stage2 拆分 — errors / snippet_filters / evidence / regex_extraction
 - [ ] **PR-C2**:Stage2 拆分 — extraction_apply / structured_runner / query_planner / diagnostics / validation / cli
 - [ ] **PR-C3**:`_execute_tasks`(2600 行)按任务生命周期切五段(先加阶段级 characterization test)
