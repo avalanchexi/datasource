@@ -363,6 +363,12 @@ def assert_recorded_oracle(websearch_items):
 
 
 def _freeze_stage2_datetime(stage2, monkeypatch):
+    """Keep replay's frozen clock aligned across Stage2 helper modules.
+
+    Future Stage2 splits that move helpers using datetime.now() must add their
+    module to the loop below; otherwise replay can pass against the script module
+    while extracted helpers still observe wall-clock time and drift golden output.
+    """
     from datasource.engines.stage2 import errors as stage2_errors
     from datasource.engines.stage2 import snippet_filters as stage2_snippet_filters
     from datasource.utils import policy_rules
