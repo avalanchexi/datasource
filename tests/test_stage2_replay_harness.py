@@ -370,6 +370,7 @@ def _freeze_stage2_datetime(stage2, monkeypatch):
     while extracted helpers still observe wall-clock time and drift golden output.
     """
     from datasource.engines.stage2 import errors as stage2_errors
+    from datasource.engines.stage2 import query_planner as stage2_query_planner
     from datasource.engines.stage2 import snippet_filters as stage2_snippet_filters
     from datasource.utils import policy_rules
 
@@ -385,6 +386,7 @@ def _freeze_stage2_datetime(stage2, monkeypatch):
     for module in (
         stage2,
         stage2_errors,
+        stage2_query_planner,
         stage2_snippet_filters,
         policy_rules,
     ):
@@ -497,6 +499,7 @@ def test_replay_execute_tasks_chains(tmp_path, monkeypatch):
 def test_replay_full_main(tmp_path, monkeypatch):
     import asyncio
 
+    from datasource.engines.stage2 import cli as stage2_cli
     import scripts.stage2_unified_enhancer as stage2
 
     market_out = tmp_path / "market_data_stage2.json"
@@ -513,6 +516,9 @@ def test_replay_full_main(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         stage2, "build_default_registry", lambda: Level1ReplayRegistry()
+    )
+    monkeypatch.setattr(
+        stage2_cli, "build_default_registry", lambda: Level1ReplayRegistry()
     )
     counter = itertools.count()
     monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)

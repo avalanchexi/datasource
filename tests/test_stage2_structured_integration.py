@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from datasource.engines.stage2 import cli as stage2_cli
 from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.tushare_etf import TuShareETFProvider
@@ -582,7 +583,7 @@ async def test_execute_tasks_tushare_etf_accepts_large_scale_delta_with_direct_w
 
 def test_build_structured_registry_for_args_defaults_to_registry(monkeypatch):
     registry = object()
-    monkeypatch.setattr(stage2, "build_default_registry", lambda: registry)
+    monkeypatch.setattr(stage2_cli, "build_default_registry", lambda: registry)
 
     result = stage2._build_structured_registry_for_args(
         SimpleNamespace(disable_structured_providers=False)
@@ -592,7 +593,7 @@ def test_build_structured_registry_for_args_defaults_to_registry(monkeypatch):
 
 
 def test_build_structured_registry_for_args_disable_returns_none(monkeypatch):
-    monkeypatch.setattr(stage2, "build_default_registry", lambda: object())
+    monkeypatch.setattr(stage2_cli, "build_default_registry", lambda: object())
 
     result = stage2._build_structured_registry_for_args(
         SimpleNamespace(disable_structured_providers=True)
@@ -605,7 +606,7 @@ def test_build_structured_registry_for_args_failure_returns_none(monkeypatch):
     def boom():
         raise RuntimeError("registry failed")
 
-    monkeypatch.setattr(stage2, "build_default_registry", boom)
+    monkeypatch.setattr(stage2_cli, "build_default_registry", boom)
 
     result = stage2._build_structured_registry_for_args(
         SimpleNamespace(disable_structured_providers=False)
