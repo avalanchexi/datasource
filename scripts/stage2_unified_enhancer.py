@@ -269,21 +269,6 @@ except Exception:  # noqa: W0703
     StructuredProviderError = None  # type: ignore
     build_default_registry = None  # type: ignore
 
-try:
-    from .stage2_5_injector import (
-        _default_fund_flow_metric_basis,
-        _infer_fund_flow_source_tier,
-        _infer_fund_flow_window_evidence,
-        _normalize_fund_flow_estimation,
-    )
-except ImportError:  # pragma: no cover - 直接执行 scripts/stage2_unified_enhancer.py 时使用
-    from stage2_5_injector import (  # type: ignore
-        _default_fund_flow_metric_basis,
-        _infer_fund_flow_source_tier,
-        _infer_fund_flow_window_evidence,
-        _normalize_fund_flow_estimation,
-    )
-
 CRITICAL_EXTRACT_KEYS = {
     "industrial",
     "industrial_sales",
@@ -764,12 +749,6 @@ async def main() -> int:
             tid = item["task"]["task_id"]
             _dump_json(item, split_dir / f"{tid}.json")
         try:
-            date_val = (
-                market_payload.get("metadata", {}).get("date")
-                or market_payload.get("metadata", {}).get("end_date")
-                or market_payload.get("metadata", {}).get("start_date")
-            )
-            date_compact_local = str(date_val).replace("-", "") if date_val else datetime.now().strftime("%Y%m%d")
             conflicts_path = run_paths.data_dir / "source_conflicts.json"
             write_source_conflicts(conflicts_payload, conflicts_path)
         except Exception as exc:  # noqa: BLE001
