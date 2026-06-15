@@ -8,6 +8,7 @@ current ``stage2_unified_enhancer`` implementation.
 from __future__ import annotations
 
 import importlib
+import inspect
 import sys
 from datetime import timezone
 from pathlib import Path
@@ -31,6 +32,7 @@ VALIDATION = importlib.import_module("datasource.engines.stage2.validation")
 EXTRACTION_APPLY = importlib.import_module(
     "datasource.engines.stage2.extraction_apply"
 )
+EXECUTION = importlib.import_module("datasource.engines.stage2.execution")
 
 
 C2_MOVED_NAMES = [
@@ -100,6 +102,22 @@ C2_MOVED_NAMES = [
     "_copy_forex_compare_fields",
     "_apply_extraction",
 ]
+
+
+C3_MOVED_NAMES = [
+    "_execute_tasks",
+    "_try_structured_provider",
+    "_DeepSeekCircuitBreaker",
+    "_is_deepseek_timeout",
+    "_mark_stale_refresh_failure",
+    "_is_placeholder_number",
+    "_has_non_placeholder_value",
+    "_append_task_log",
+    "_update_missing_items",
+]
+
+
+ALL_STAGE2_MOVED_NAMES = C2_MOVED_NAMES + C3_MOVED_NAMES
 
 
 C2_MODULE_EXPORTS = {
@@ -200,6 +218,7 @@ C2_MODULE_EXPORTS = {
         "_copy_forex_compare_fields",
         "_apply_extraction",
     ],
+    EXECUTION: C3_MOVED_NAMES,
 }
 
 
@@ -902,7 +921,7 @@ def test_apply_extraction_category_paths_locked():
     assert payload["macro_indicators"]["UNKNOWN"]["current_value"] == 1
 
 
-@pytest.mark.parametrize("name", C2_MOVED_NAMES)
+@pytest.mark.parametrize("name", ALL_STAGE2_MOVED_NAMES)
 def test_import_surface_monolith(name):
     assert hasattr(ENH, name), f"monolith should still expose {name}"
 
@@ -913,12 +932,54 @@ def test_moved_reexports_are_same_objects_as_new_modules():
             assert getattr(ENH, name) is getattr(module, name), name
 
 
-def test_execute_lane_stays_in_monolith_for_c3():
-    assert "_try_structured_provider" not in C2_MOVED_NAMES
-    assert not hasattr(STRUCTURED_RUNNER, "_try_structured_provider")
-    assert ENH._try_structured_provider.__module__ == "stage2_unified_enhancer"
+def test_execute_lane_moved_to_execution_module_for_c3():
+    assert ENH._execute_tasks is EXECUTION._execute_tasks
+    assert ENH._try_structured_provider is EXECUTION._try_structured_provider
+    assert ENH._DeepSeekCircuitBreaker is EXECUTION._DeepSeekCircuitBreaker
+    assert ENH._execute_tasks.__module__ == "datasource.engines.stage2.execution"
+    assert (
+        ENH._try_structured_provider.__module__
+        == "datasource.engines.stage2.execution"
+    )
+
+
+def test_execute_tasks_retains_execution_phase_markers():
+    source = inspect.getsource(EXECUTION._execute_tasks)
+    phase_markers = {
+        "skip_existing_value": [
+            "_has_non_placeholder_value",
+            "skipped_existing",
+        ],
+        "structured_success": [
+            "_try_structured_provider",
+            "structured_records is not None",
+        ],
+        "structured_fallback_to_search": [
+            "_try_structured_provider",
+            "_expand_query_candidates",
+        ],
+        "deepseek_timeout_circuit_breaker": [
+            "_is_deepseek_timeout",
+            "deepseek_circuit_breaker",
+        ],
+        "fund_flow_field_retry_manual_gate": [
+            "field_retry_count",
+            "fund_flow_window_missing",
+        ],
+        "force_refresh_stale_finalization": [
+            "_mark_stale_refresh_failure",
+            "stale_refresh_failed",
+        ],
+    }
+    for phase, markers in phase_markers.items():
+        for marker in markers:
+            assert marker in source, f"{phase} lost marker {marker}"
 
 
 def test_moved_names_list_is_stable():
     assert len(C2_MOVED_NAMES) == 65
     assert len(C2_MOVED_NAMES) == len(set(C2_MOVED_NAMES))
+    assert len(C3_MOVED_NAMES) == 9
+    assert len(C3_MOVED_NAMES) == len(set(C3_MOVED_NAMES))
+    assert len(ALL_STAGE2_MOVED_NAMES) == 74
+    assert len(ALL_STAGE2_MOVED_NAMES) == len(set(ALL_STAGE2_MOVED_NAMES))

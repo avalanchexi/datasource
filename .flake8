@@ -1,0 +1,3 @@
+[flake8]
+per-file-ignores =
+    src/datasource/engines/stage2/execution.py:E501,E131

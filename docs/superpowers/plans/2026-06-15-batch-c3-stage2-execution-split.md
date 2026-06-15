@@ -25,6 +25,9 @@
   - Add lightweight phase-marker characterization for `_execute_tasks`.
 - Modify: `tests/test_stage2_replay_harness.py`
   - Add `datasource.engines.stage2.execution` to `_freeze_stage2_datetime`.
+- Create: `.flake8`
+  - Add a narrow per-file-ignore for `src/datasource/engines/stage2/execution.py:E501,E131`, because C3 mechanically moves the existing 3000-line execution body without reformatting it.
+  - Do not ignore F401/F821; flake8 must still catch real import and undefined-name issues.
 - Modify: `optimization/20260610_refactor_plan/TODOS.md`
   - Mark PR-C3 complete after implementation and verification only.
 
@@ -87,14 +90,43 @@ If the plan/spec docs are uncommitted, commit them before code movement. If unre
 Run:
 
 ```bash
-git show fcb661f:scripts/stage2_unified_enhancer.py | sed -n '366,3451p' > /tmp/c3_original_execution_block.py
-wc -l /tmp/c3_original_execution_block.py
+git show fcb661f:scripts/stage2_unified_enhancer.py > /tmp/c3_original_stage2.py
+bash run_clean.sh python - <<'PY'
+import ast
+from pathlib import Path
+
+moved_names = [
+    "_is_placeholder_number",
+    "_has_non_placeholder_value",
+    "_append_task_log",
+    "_try_structured_provider",
+    "_update_missing_items",
+    "_DeepSeekCircuitBreaker",
+    "_is_deepseek_timeout",
+    "_mark_stale_refresh_failure",
+    "_execute_tasks",
+]
+
+text = Path("/tmp/c3_original_stage2.py").read_text(encoding="utf-8")
+tree = ast.parse(text)
+lines = text.splitlines(keepends=True)
+blocks = []
+found = []
+for node in tree.body:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in moved_names:
+        found.append(node.name)
+        blocks.append("".join(lines[node.lineno - 1:node.end_lineno]).rstrip())
+if found != moved_names:
+    raise SystemExit(f"unexpected moved names/order: {found}")
+Path("/tmp/c3_original_moved_defs.py").write_text("\n\n\n".join(blocks) + "\n", encoding="utf-8")
+PY
+wc -l /tmp/c3_original_moved_defs.py
 ```
 
 Expected:
 
 ```text
-3086 /tmp/c3_original_execution_block.py
+2998 /tmp/c3_original_moved_defs.py
 ```
 
 - [ ] **Step 4: Re-run the focused baseline**
@@ -224,10 +256,10 @@ def test_execute_tasks_retains_execution_phase_markers():
         ],
         "structured_success": [
             "_try_structured_provider",
-            "structured_success",
+            "structured_records is not None",
         ],
         "structured_fallback_to_search": [
-            "_mark_structured_fallback_on_task",
+            "_try_structured_provider",
             "_expand_query_candidates",
         ],
         "deepseek_timeout_circuit_breaker": [
@@ -487,8 +519,36 @@ exit 0
 Run:
 
 ```bash
-sed -n '/^def _is_placeholder_number/,${p}' src/datasource/engines/stage2/execution.py > /tmp/c3_moved_execution_block.py
-diff -u /tmp/c3_original_execution_block.py /tmp/c3_moved_execution_block.py
+bash run_clean.sh python - <<'PY'
+import ast
+from pathlib import Path
+
+moved_names = [
+    "_is_placeholder_number",
+    "_has_non_placeholder_value",
+    "_append_task_log",
+    "_try_structured_provider",
+    "_update_missing_items",
+    "_DeepSeekCircuitBreaker",
+    "_is_deepseek_timeout",
+    "_mark_stale_refresh_failure",
+    "_execute_tasks",
+]
+
+text = Path("src/datasource/engines/stage2/execution.py").read_text(encoding="utf-8")
+tree = ast.parse(text)
+lines = text.splitlines(keepends=True)
+blocks = []
+found = []
+for node in tree.body:
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in moved_names:
+        found.append(node.name)
+        blocks.append("".join(lines[node.lineno - 1:node.end_lineno]).rstrip())
+if found != moved_names:
+    raise SystemExit(f"unexpected moved names/order: {found}")
+Path("/tmp/c3_current_moved_defs.py").write_text("\n\n\n".join(blocks) + "\n", encoding="utf-8")
+PY
+diff -u /tmp/c3_original_moved_defs.py /tmp/c3_current_moved_defs.py
 ```
 
 Expected:
@@ -586,6 +646,16 @@ exit 0
 ```
 
 If flake8 reports unused imports in `execution.py`, remove only the unused import lines. Do not alter function bodies to satisfy flake8.
+
+If flake8 reports only E501/E131 from the mechanically moved `_execute_tasks` body, add this repo-level config rather than reformatting the moved body:
+
+```ini
+[flake8]
+per-file-ignores =
+    src/datasource/engines/stage2/execution.py:E501,E131
+```
+
+This per-file ignore must not include F401 or F821.
 
 - [ ] **Step 3: Verify import direction**
 
@@ -851,6 +921,8 @@ Expected committed diff files:
 
 ```text
 docs/superpowers/specs/2026-06-15-batch-c3-stage2-execution-split-design.md
+docs/superpowers/plans/2026-06-15-batch-c3-stage2-execution-split.md
+.flake8
 scripts/stage2_unified_enhancer.py
 src/datasource/engines/stage2/execution.py
 tests/test_stage2_c2_split_characterization.py
