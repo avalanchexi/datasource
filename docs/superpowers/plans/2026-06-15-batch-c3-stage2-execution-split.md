@@ -290,7 +290,7 @@ Run:
 
 ```bash
 bash run_clean.sh python -m pytest tests/test_stage2_c2_split_characterization.py::test_import_surface_monolith -q
-env -u STAGE2_REPLAY_UPDATE_GOLDEN bash run_clean.sh python -m pytest tests/test_stage2_replay_harness.py::test_stage2_replay_level2_byte_stable -q
+env -u STAGE2_REPLAY_UPDATE_GOLDEN bash run_clean.sh python -m pytest tests/test_stage2_replay_harness.py::test_replay_full_main -q
 ```
 
 Expected failure before Task 2:
