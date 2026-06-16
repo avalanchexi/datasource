@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 
 import scripts.stage2_5_injector as stage2_5
+from datasource.engines.stage2_5 import cli as stage2_5_cli
+from datasource.engines.stage2_5 import core as stage2_5_core
 import scripts.stage3_pring_analyzer as stage3
 import scripts.stage4_report_generator as stage4_report
 import scripts.stage4_risk_review as stage4_risk
@@ -76,7 +78,7 @@ def test_stage2_5_main_acquires_daily_lock(tmp_path, monkeypatch):
     calls = []
 
     monkeypatch.setattr(
-        stage2_5,
+        stage2_5_cli,
         "parse_args",
         lambda: argparse.Namespace(
             market_data_path=str(input_path),
@@ -91,13 +93,17 @@ def test_stage2_5_main_acquires_daily_lock(tmp_path, monkeypatch):
             disable_trend_history_write=False,
         ),
     )
-    monkeypatch.setattr(stage2_5, "DailyRunLock", SpyLock)
+    monkeypatch.setattr(stage2_5_cli, "DailyRunLock", SpyLock)
 
     def fake_inject_websearch_data(**kwargs):
         calls.append(kwargs)
         return Path(kwargs["output_path"])
 
-    monkeypatch.setattr(stage2_5, "inject_websearch_data", fake_inject_websearch_data)
+    monkeypatch.setattr(
+        stage2_5_core,
+        "inject_websearch_data",
+        fake_inject_websearch_data,
+    )
 
     stage2_5.main()
 

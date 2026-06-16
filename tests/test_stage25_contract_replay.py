@@ -17,7 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scripts.stage2_5_injector as injector
-from datasource.engines.stage2_5 import gap_sync
+from datasource.engines.stage2_5 import core, entry_mergers, gap_sync, trend_backfill
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 
 
@@ -33,7 +33,10 @@ def freeze_stage25_datetime(monkeypatch):
             return fixed_now
 
     monkeypatch.setattr(injector, "datetime", FixedDatetime)
+    monkeypatch.setattr(core, "datetime", FixedDatetime)
+    monkeypatch.setattr(entry_mergers, "datetime", FixedDatetime)
     monkeypatch.setattr(gap_sync, "datetime", FixedDatetime)
+    monkeypatch.setattr(trend_backfill, "datetime", FixedDatetime)
 
 
 def test_stage25_refreshes_trend_history_gap_from_custom_base_dir(
@@ -368,11 +371,11 @@ def test_stage25_disable_trend_write_without_base_skips_real_trend_reads(
     def _fail_backfill(*args, **kwargs):
         raise AssertionError("trend backfill should be skipped")
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fail_trend_read)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fail_trend_read)
-    monkeypatch.setattr(injector, "_calc_change_from_event_history", _fail_trend_read)
-    monkeypatch.setattr(injector, "_calc_prev_from_event_history", _fail_trend_read)
-    monkeypatch.setattr(injector, "_backfill_trend_changes", _fail_backfill)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fail_trend_read)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fail_trend_read)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_event_history", _fail_trend_read)
+    monkeypatch.setattr(trend_backfill, "_calc_prev_from_event_history", _fail_trend_read)
+    monkeypatch.setattr(trend_backfill, "_backfill_trend_changes", _fail_backfill)
 
     injector.inject_websearch_data(
         market_path,

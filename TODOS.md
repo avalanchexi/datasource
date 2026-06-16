@@ -34,10 +34,12 @@
 
 **Why:** These scripts are over 3000 lines each, making reviews and regression analysis expensive. The split should happen only after the key contracts and replay tests exist.
 
-**Context:** The 2026-04-27 engineering review deferred this from the current PR set. The right order is: semantic utils extraction, Pring golden tests, canonical key registry and missing-items compatibility, test-safe trend_history fixture replay, then module split.
+**Context:** Stage2 and Stage2.5 split work has landed through PR-C5. C1-C5 moved the Stage2.5 helpers into `src/datasource/engines/stage2_5/` while preserving the `scripts/stage2_5_injector.py` re-export surface. Current focus: terminal cleanup/global validation, including slimming the Stage2.5 script entrypoint toward the planned <=30-line endpoint.
 
 **Effort:** L
 **Priority:** P2
 **Depends on:** PR1 semantic utils extraction; PR3 canonical key registry; test-safe trend_history fixture replay.
 
 ## Completed
+
+- [x] PR-C5 Stage2.5 split: extracted `trend_backfill`, `entry_mergers`, `core`, and `cli`; repointed monkeypatches to owning modules; added re-export identity and qualified-patch reach characterization.

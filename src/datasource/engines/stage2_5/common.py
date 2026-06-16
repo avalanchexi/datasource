@@ -25,6 +25,8 @@ BARE_DOMAIN_START_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9./:-])(?:www\.)?(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*(?=[:/]|$|[\s,;|)\]}<>\"'，；）】》、」』”’｝］〉])"  # noqa: E501
 )
 _POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
+DEFAULT_SOURCE_LABEL = "websearch_manual"
+SOURCE_ANOMALY_LABEL = "异常零值-需核查"
 
 
 def _policy_rules() -> Dict[str, Any]:
@@ -316,3 +318,169 @@ def _coerce_bool(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {'true', '1', 'yes', 'y', '是'}
     return False
+
+
+def _format_source_label(raw_source: Optional[str]) -> str:
+    source_text = str(raw_source or "").strip()
+    if not source_text:
+        return DEFAULT_SOURCE_LABEL
+    if source_text == SOURCE_ANOMALY_LABEL:
+        return source_text
+    if source_text == DEFAULT_SOURCE_LABEL or source_text.startswith(
+        f"{DEFAULT_SOURCE_LABEL}("
+    ):
+        return source_text
+    lower_source = source_text.lower()
+    if "manual_required" in lower_source or "websearch_manual" in lower_source:
+        return DEFAULT_SOURCE_LABEL
+    if (
+        "tavily" in lower_source
+        or "deepseek" in lower_source
+        or source_text == DEFAULT_SOURCE_LABEL
+    ):
+        return source_text
+    if source_text.startswith("http"):
+        return f"{DEFAULT_SOURCE_LABEL}({source_text})"
+    return f"{DEFAULT_SOURCE_LABEL}({source_text})"
+
+
+def _update_metadata_only(
+    entry: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> bool:
+    from datasource.engines.stage2_5.manual_official import (
+        _should_preserve_existing_official_source,
+    )
+
+    changed = False
+    preserve_existing_official_source = (
+        _should_preserve_existing_official_source(entry, payload)
+    )
+
+    def set_if_changed(field: str, value: Any) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if entry.get(field) != value:
+            entry[field] = value
+            changed = True
+
+    incoming_date = (
+        payload.get("date")
+        or payload.get("as_of_date")
+        or payload.get("report_period")
+    )
+    if incoming_date:
+        set_if_changed("date", incoming_date)
+    if payload.get("as_of_date") or payload.get("report_period"):
+        set_if_changed(
+            "as_of_date",
+            payload.get("as_of_date") or payload.get("report_period"),
+        )
+    if "report_period" in payload:
+        set_if_changed("report_period", payload.get("report_period"))
+    if "source" in payload and not preserve_existing_official_source:
+        set_if_changed("source", _format_source_label(payload.get("source")))
+    source_url = _extract_source_url(payload)
+    if source_url and not preserve_existing_official_source:
+        set_if_changed("source_url", source_url)
+    if "note" in payload and not preserve_existing_official_source:
+        note_val = payload.get("note")
+        set_if_changed("note", note_val if isinstance(note_val, str) else "")
+    for field_name in ("confidence", "estimation_method"):
+        if field_name in payload:
+            set_if_changed(field_name, payload.get(field_name))
+    if "is_estimated" in payload:
+        incoming_estimated = _coerce_bool(payload.get("is_estimated"))
+        if not (
+            preserve_existing_official_source
+            and entry.get("is_estimated") is False
+            and incoming_estimated is True
+        ):
+            set_if_changed("is_estimated", incoming_estimated)
+    return changed
+
+
+def _merge_same_value_report_fields(
+    entry: Dict[str, Any],
+    payload: Dict[str, Any],
+    *,
+    category: str,
+    key: str,
+    is_manual: bool = False,
+    override_stale: bool = True,
+) -> bool:
+    from datasource.engines.stage2_5.manual_official import (
+        _apply_manual_official_estimation_rule,
+        _has_rrr_type_conflict,
+        _is_trusted_monetary_manual_quality_override,
+        _normalize_rrr_type,
+    )
+
+    metadata_payload = payload
+    if category == "monetary_policy" and "is_estimated" in payload:
+        metadata_payload = dict(payload)
+        metadata_payload.pop("is_estimated", None)
+    changed = _update_metadata_only(entry, metadata_payload)
+
+    def set_if_changed(field: str, value: Any) -> None:
+        nonlocal changed
+        if value is None:
+            return
+        if entry.get(field) != value:
+            entry[field] = value
+            changed = True
+
+    if category == "macro_indicators":
+        for field in ("previous_value", "change_rate", "yoy_month", "yoy_ytd"):
+            if field in payload:
+                set_if_changed(field, _coerce_float(payload.get(field)))
+        for field in ("value_type", "report_period"):
+            if field in payload:
+                set_if_changed(field, payload.get(field))
+    elif category == "monetary_policy":
+        if "change_from_120d" in payload:
+            change_value = payload.get("change_from_120d")
+        else:
+            change_value = payload.get("change_rate")
+        set_if_changed("change_from_120d", _coerce_float(change_value))
+
+        rrr_type_conflict = (
+            _has_rrr_type_conflict(entry, payload)
+            if key in {"rrr", "reserve_ratio"}
+            else False
+        )
+        incoming_rrr_type = _normalize_rrr_type(
+            payload.get("rrr_type") or payload.get("value_type")
+        )
+        if not rrr_type_conflict:
+            set_if_changed("rrr_type", incoming_rrr_type)
+
+        if is_manual:
+            before_estimated = entry.get("is_estimated")
+            before_note = entry.get("note")
+            _apply_manual_official_estimation_rule(
+                category,
+                key,
+                payload,
+                entry,
+            )
+            if _is_trusted_monetary_manual_quality_override(
+                key,
+                entry,
+                payload,
+                _coerce_float(payload.get("current_value")),
+                is_manual=is_manual,
+            ):
+                entry["is_estimated"] = False
+            changed = (
+                changed
+                or before_estimated != entry.get("is_estimated")
+                or before_note != entry.get("note")
+            )
+
+    if changed and entry.get("current_value") is not None:
+        if override_stale or not bool(entry.get("is_stale")):
+            entry["is_stale"] = False
+            entry["stale_reason"] = None
+    return changed

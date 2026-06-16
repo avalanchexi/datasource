@@ -17,6 +17,7 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scripts.stage2_5_injector as injector
+from datasource.engines.stage2_5 import core, trend_backfill
 from datasource.generators import simple_report
 from datasource.models.market_data_contract import CommodityData
 
@@ -256,7 +257,7 @@ def test_merge_bond_entry_marks_low_confidence_when_history_base_estimated(monke
             "base_120d_estimated": False,
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_history)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_history)
     merged = injector._merge_bond_entry(existing, payload, is_manual=True)
     assert merged["change_5d_bp"] == pytest.approx(2.1)
     assert merged["change_120d_bp"] == pytest.approx(-8.4)
@@ -292,7 +293,7 @@ def test_merge_bond_entry_preserves_date_fields(monkeypatch):
             "base_120d_estimated": False,
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_history)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_history)
     merged = injector._merge_bond_entry(existing, payload, is_manual=True)
     assert merged["date"] == "2026-02-09"
     assert merged["as_of_date"] == "2026-02-09"
@@ -384,7 +385,7 @@ def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
     def _fake_hist(*args, **kwargs):
         return {"change_from_120d": None, "reason": "no_previous_value"}
 
-    monkeypatch.setattr(injector, "_calc_change_from_event_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_event_history", _fake_hist)
     updated = injector._apply_monetary_entry("mlf", entry, payload, "2026-02-06")
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.0)
@@ -494,8 +495,8 @@ def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
             "base_1d_estimated": False,
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
     merged = injector._merge_forex_entry(existing, payload, is_manual=True)
     assert merged["daily_change"] == pytest.approx(-0.16)
     assert merged["change_120d"] == pytest.approx(-3.32)
@@ -515,12 +516,12 @@ def test_merge_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch)
     payload = {"pair": "USDCNY", "current_rate": "6.8184", "source": "manual"}
 
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_1d": 0.0,
@@ -577,8 +578,8 @@ def test_merge_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
             "base_1d_estimated": False,
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     merged = injector._merge_forex_entry(existing, payload, is_manual=True)
 
@@ -608,7 +609,7 @@ def test_merge_forex_entry_preserves_trend_history_evidence_when_payload_change_
     }
 
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_1d": 0.0,
@@ -617,7 +618,7 @@ def test_merge_forex_entry_preserves_trend_history_evidence_when_payload_change_
         },
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_120d": 0.0,
@@ -1257,8 +1258,8 @@ def test_backfill_trend_changes_replaces_untrusted_zero_forex_daily_change(monke
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1312,8 +1313,8 @@ def test_backfill_trend_changes_drops_raw_flat_when_daily_unusable_but_120d_usab
             "base_1d_date": None,
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1373,8 +1374,8 @@ def test_backfill_trend_changes_stamps_forex_120d_trend_history_evidence(monkeyp
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1423,12 +1424,12 @@ def test_backfill_trend_changes_preserves_valid_forex_120d_zero_when_history_mis
     }
 
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
@@ -1469,12 +1470,12 @@ def test_backfill_trend_changes_clears_failed_forex_evidence_when_history_missin
     }
 
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
@@ -1531,8 +1532,8 @@ def test_backfill_trend_changes_daily_change_ignores_120d_failure_note(monkeypat
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1592,8 +1593,8 @@ def test_backfill_trend_changes_daily_change_ignores_existing_failure_note(monke
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1645,8 +1646,8 @@ def test_backfill_trend_changes_daily_change_ignores_fx_daily_quote_source(monke
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1699,8 +1700,8 @@ def test_backfill_trend_changes_daily_change_ignores_no_previous_value_note(monk
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1754,8 +1755,8 @@ def test_backfill_trend_changes_preserves_explicit_zero_forex_daily_change(monke
             "base_1d_date": "2026-06-01",
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_trend_history", _fake_hist)
-    monkeypatch.setattr(injector, "_calc_daily_change_from_trend_history", _fake_daily_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
     stats = injector._backfill_trend_changes(market_data)
 
@@ -1794,7 +1795,7 @@ def test_backfill_trend_changes_clears_no_previous_note_when_monetary_filled(mon
             "base_estimated": False,
         }
 
-    monkeypatch.setattr(injector, "_calc_change_from_event_history", _fake_event_hist)
+    monkeypatch.setattr(trend_backfill, "_calc_change_from_event_history", _fake_event_hist)
     stats = injector._backfill_trend_changes(market_data)
 
     entry = market_data["monetary_policy"]["reverse_repo"]
@@ -1832,10 +1833,10 @@ def test_run_post_write_trend_backfill_persists_output_and_resets_issues(monkeyp
         payload["monetary_policy"]["reverse_repo"]["change_from_120d"] = 0.0
         return {"monetary_policy": 1}
 
-    monkeypatch.setattr(injector, "_backfill_trend_changes", _fake_backfill)
-    monkeypatch.setattr(injector, "_refresh_stage2_gap_monitor", lambda payload: {"top_level": 0, "metadata": 0})
-    monkeypatch.setattr(injector, "_refresh_stage2_notes", lambda metadata, gap: None)
-    monkeypatch.setattr(injector, "_cleanup_metadata_missing", lambda metadata, payload: None)
+    monkeypatch.setattr(trend_backfill, "_backfill_trend_changes", _fake_backfill)
+    monkeypatch.setattr(trend_backfill, "_refresh_stage2_gap_monitor", lambda payload: {"top_level": 0, "metadata": 0})
+    monkeypatch.setattr(trend_backfill, "_refresh_stage2_notes", lambda metadata, gap: None)
+    monkeypatch.setattr(trend_backfill, "_cleanup_metadata_missing", lambda metadata, payload: None)
 
     stats = injector._run_post_write_trend_backfill(market_data, output_path)
     saved = json.loads(output_path.read_text(encoding="utf-8"))
@@ -2023,7 +2024,7 @@ def test_apply_macro_entry_backfills_previous_from_change_rate_percent(monkeypat
         "source": "国家统计局",
     }
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_prev_from_event_history",
         lambda *args, **kwargs: {"previous_value": None, "change_rate": None, "reason": "no_previous_value"},
     )
@@ -2377,9 +2378,9 @@ def test_sync_backfill_issues_to_logs_rewrites_gap_monitor_even_without_issues(t
 
 
 def _stub_trend_writes(monkeypatch):
-    monkeypatch.setattr(injector, "write_from_market_data", lambda *args, **kwargs: 0)
-    monkeypatch.setattr(injector, "_backfill_trend_changes", lambda *args, **kwargs: {})
-    monkeypatch.setattr(injector, "_run_post_write_trend_backfill", lambda *args, **kwargs: {})
+    monkeypatch.setattr(core, "write_from_market_data", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(trend_backfill, "_backfill_trend_changes", lambda *args, **kwargs: {})
+    monkeypatch.setattr(trend_backfill, "_run_post_write_trend_backfill", lambda *args, **kwargs: {})
 
 
 def _write_json(path: Path, payload):
@@ -4691,7 +4692,7 @@ def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monke
     }
 
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_5d": 1.5,
@@ -4731,7 +4732,7 @@ def test_merge_commodity_entry_preserves_payload_change_120d_and_source_url(monk
     }
 
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_5d": 1.5,
@@ -4774,12 +4775,12 @@ def test_commodity_data_preserves_120d_fields_and_source_url():
 
 def test_build_forex_entry_keeps_unknown_changes_as_none(monkeypatch):
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
@@ -4794,7 +4795,7 @@ def test_build_forex_entry_keeps_unknown_changes_as_none(monkeypatch):
 
 def test_build_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_120d": 0.0,
@@ -4803,7 +4804,7 @@ def test_build_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
         },
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
@@ -4825,12 +4826,12 @@ def test_build_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
 
 def test_build_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch):
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_change_from_trend_history",
         lambda *args, **kwargs: {"change_120d": None, "reason_120d": "trend_history_missing"},
     )
     monkeypatch.setattr(
-        injector,
+        trend_backfill,
         "_calc_daily_change_from_trend_history",
         lambda *args, **kwargs: {
             "change_1d": 0.0,
