@@ -12,11 +12,11 @@
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
-| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1/C2/C3 完成;下一步 C4) | B |
+| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1/C2/C3/C4 完成;下一步 C5) | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:PR-C4(Stage2.5 schema/manual/fund_flow/gap_sync 拆分)——从 C3 合入后的 HEAD 现生成 brainstorm/spec/plan。**
+**当前焦点:PR-C5(Stage2.5 entry_mergers / trend_backfill / core / cli 拆分)——续接 `engines/stage2_5/` 新包。**
 
 ---
 
@@ -71,8 +71,10 @@
   - [x] 新增 `src/datasource/engines/stage2/execution.py`;`_execute_tasks`/`_try_structured_provider`/DeepSeek 执行件/执行 glue 已机械搬移,主脚本保留 re-export 与 monkeypatch 合同
   - [x] 阶段级 characterization、replay datetime tie-in、replay byte-stable 与全量 pytest 通过
   - [ ] C3 carry-forward: `_execute_tasks` 内部闭包 helper 暂不继续拆;终态 main 入口 <=30 行仍留 C 批次收尾
-- [ ] **PR-C4**:Stage2.5 拆分 — schema_coercion / manual_official(行为冻结区,单独评审)/ fund_flow / gap_sync
-- [ ] **PR-C5**:Stage2.5 拆分 — entry_mergers / trend_backfill / core / cli
+- [x] **PR-C4**:Stage2.5 拆分 — common / schema_coercion / manual_official(行为冻结区,单独评审)/ fund_flow / gap_sync
+  - [x] 新增 `src/datasource/engines/stage2_5/` 包;主脚本保留 re-export;Stage2.5 contract replay + Stage2 replay harness + 全量 pytest 通过
+  - [x] 回收 C2 `C4-cleanup`:Stage2 `extraction_apply`/`execution` fund_flow helper 改指 `engines.stage2_5.fund_flow`;无跨脚本 import 残留
+- [ ] **PR-C5**:Stage2.5 拆分 — entry_mergers / trend_backfill / core / cli(续接 `engines/stage2_5/`)
 - [ ] (可选)**PR-C6**:stage1_data_collector 瘦身
 - [ ] 每个 PR:生成计划 → Codex 执行 → fixture replay 全绿 → Claude 评审 → 合入(逐个勾选记在上面对应行)
 

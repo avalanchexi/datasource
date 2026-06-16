@@ -3,7 +3,10 @@
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
+
+import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,7 +17,23 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 import scripts.stage2_5_injector as injector
+from datasource.engines.stage2_5 import gap_sync
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
+
+
+@pytest.fixture(autouse=True)
+def freeze_stage25_datetime(monkeypatch):
+    fixed_now = datetime(2026, 6, 13, 0, 0, 0)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            if tz is not None:
+                return fixed_now.replace(tzinfo=tz)
+            return fixed_now
+
+    monkeypatch.setattr(injector, "datetime", FixedDatetime)
+    monkeypatch.setattr(gap_sync, "datetime", FixedDatetime)
 
 
 def test_stage25_refreshes_trend_history_gap_from_custom_base_dir(

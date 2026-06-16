@@ -15,7 +15,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional, List, Tuple
-from urllib.parse import urlparse
 
 from datasource.models.market_data_contract import FundFlowData
 from datasource.utils.trend_history_store import (
@@ -25,25 +24,16 @@ from datasource.utils.trend_history_store import (
     SERIES_WINDOWS,
 )
 from datasource.utils.fund_flow_series import apply_override, compute_rollup, load_daily_series
-from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.quality_metrics import build_quality_metrics
-from datasource.utils.coercion import is_legacy_713_placeholder, is_stage2_number_placeholder
 from datasource.utils.key_aliases import (
     MONETARY_KEY_ALIASES,
-    canonical_monetary_key,
     normalize_monetary_section,
 )
-from datasource.utils.missing_items import (
-    append_missing_item,
-)
 from datasource.utils.policy_rules import (
-    load_policy_rules,
-    is_estimated_allowlisted,
     get_non_blocking_warning_rules,
 )
 from datasource.utils.run_lock import DailyRunLock, run_dir_from_artifact
 from datasource.utils.run_paths import build_run_paths_from_reference
-from datasource.utils.source_trust import is_official_source_url
 from datasource.utils.text_markers import contains_ytd_marker
 from datasource.utils.forex_evidence import (
     FOREX_DAILY_CHANGE_EVIDENCE_KEYS,
@@ -64,6 +54,96 @@ from datasource.utils.note_utils import (
     append_note_once as _append_note_once,
     append_note_to_entry as _append_note,
 )
+from datasource.engines.stage2_5.common import (  # noqa: F401 (C4 re-export)
+    BARE_DOMAIN_START_RE,
+    EXPLICIT_URL_FIELDS,
+    HTTP_LIKE_START_RE,
+    OFFICIAL_MANUAL_TEXT_FIELDS,
+    URL_EVIDENCE_TERMINATORS,
+    _apply_pipeline_quality_state,
+    _attach_source_url,
+    _calc_change_rate_pct,
+    _calc_previous_from_change_rate_pct,
+    _coerce_bool,
+    _coerce_float,
+    _coerce_percent,
+    _collect_http_like_evidence,
+    _extract_domain,
+    _extract_domains_from_evidence,
+    _extract_domains_from_payload,
+    _extract_embedded_http_url,
+    _extract_source_url,
+    _has_valid_value,
+    _is_estimated_allowlisted_entry,
+    _is_https_url_evidence,
+    _is_placeholder_numeric,
+    _is_url_evidence_terminator,
+    _iter_http_like_evidence,
+    _iter_url_like_evidence,
+    _issue_signature,
+    _merge_quality_issues,
+    _normalize_parseable_http_url,
+    _pct_change,
+    _policy_rules,
+    _same_numeric_value,
+)
+from datasource.engines.stage2_5.manual_official import (  # noqa: F401 (C4 re-export)
+    OFFICIAL_MANUAL_NOTE,
+    OFFICIAL_MANUAL_SOURCES,
+    TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS,
+    _apply_manual_official_estimation_rule,
+    _has_invalid_explicit_url_evidence,
+    _has_multi_value_explicit_url_evidence,
+    _has_rrr_type_conflict,
+    _is_manual_official_value,
+    _is_trusted_monetary_manual_quality_override,
+    _iter_explicit_url_evidence,
+    _normalize_manual_official_key,
+    _normalize_rrr_type,
+    _official_domain_matches,
+    _should_preserve_existing_official_source,
+    _single_trusted_explicit_https_url,
+)
+from datasource.engines.stage2_5.fund_flow import (  # noqa: F401 (C4 re-export)
+    FUND_FLOW_DIRECT_WINDOW_EVIDENCE,
+    FUND_FLOW_ESTIMATED_METRIC_BASIS,
+    FUND_FLOW_TIER1_DOMAINS,
+    FUND_FLOW_TIER2_STRUCTURED_PATHS,
+    FUND_FLOW_TIER3_DOMAINS,
+    FUND_FLOW_WEAK_WINDOW_EVIDENCE,
+    _default_fund_flow_metric_basis,
+    _domain_matches,
+    _fund_flow_has_trusted_window,
+    _infer_fund_flow_source_tier,
+    _infer_fund_flow_window_evidence,
+    _is_fund_flow_tier2_structured_source,
+    _normalize_fund_flow_estimation,
+    _normalize_fund_flow_payload,
+    _normalize_source_tier,
+    _normalize_window_evidence,
+    _parse_url_domain_path,
+    _path_matches_prefix,
+)
+from datasource.engines.stage2_5.schema_coercion import (  # noqa: F401 (C4 re-export)
+    _coerce_stage2_results_to_schema,
+    _copy_payload_metadata_fields,
+    _copy_source_url,
+    _normalize_keyed_list,
+    _normalize_monetary_payload,
+)
+from datasource.engines.stage2_5.gap_sync import (  # noqa: F401 (C4 re-export)
+    _append_missing_item,
+    _cleanup_metadata_missing,
+    _collect_missing_source_urls,
+    _collect_unresolved_gap_items,
+    _is_missing_item_filled,
+    _refresh_stage2_gap_monitor,
+    _refresh_stage2_notes,
+    _remove_missing_item,
+    _remove_top_missing,
+    _remove_top_missing_on_skip,
+    _rewrite_gap_monitor_after_injection,
+)
 
 FUND_FLOW_KEY_MAP = {
     "etf_flow": "etf",
@@ -78,90 +158,8 @@ MACRO_KEY_MAP = {
     "industrial_output": "industrial",
 }
 
-# indicator → 类别映射，供 Stage2 results 转换
-INDICATOR_CATEGORY = {
-    # commodities
-    "GC=F": "commodities",
-    "CL=F": "commodities",
-    "BZ=F": "commodities",
-    "HG=F": "commodities",
-    "BCOM": "commodities",
-    "GSG": "commodities",
-    # forex
-    "USDCNY": "forex",
-    "USDCNH": "forex",
-    "DXY": "forex",
-    # bonds
-    "US10Y": "bonds",
-    "CN10Y": "bonds",
-    "CN10Y_CDB": "bonds",
-    # fund flow
-    "northbound": "fund_flow",
-    "southbound": "fund_flow",
-    "etf": "fund_flow",
-    # macro
-    "industrial": "macro_indicators",
-    "industrial_sales": "macro_indicators",
-    "bdi": "macro_indicators",
-    "cpi": "macro_indicators",
-    "ppi": "macro_indicators",
-    "pmi": "macro_indicators",
-    "pmi_new_orders": "macro_indicators",
-    "gdp": "macro_indicators",
-    # monetary
-    "rrr": "monetary_policy",
-    "reserve_ratio": "monetary_policy",
-    "reverse_repo": "monetary_policy",
-    "mlf": "monetary_policy",
-    "tsf": "monetary_policy",
-    "m1": "monetary_policy",
-    "m2": "monetary_policy",
-    "dr007": "monetary_policy",
-    # stock indices
-    "000001": "stock_indices",
-    "000016": "stock_indices",
-    "000300": "stock_indices",
-    "399001": "stock_indices",
-    "399006": "stock_indices",
-}
-
-
 DEFAULT_SOURCE_LABEL = "websearch_manual"
-OFFICIAL_MANUAL_NOTE = "manual_official_not_estimated"
-OFFICIAL_MANUAL_TEXT_FIELDS = ("source", "note", "name", "policy_name", "indicator_name")
-EXPLICIT_URL_FIELDS = ("source_url", "sourceUrl", "url")
-URL_EVIDENCE_TERMINATORS = set(" \t\r\n,;|)]}<>\x22'") | set("，；）】》、」』”’｝］〉")
-HTTP_LIKE_START_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9])(?:https?://|https?(?![A-Za-z0-9]))"
-)
-BARE_DOMAIN_START_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9./:-])(?:www\.)?(?:[A-Za-z0-9-]+\.)+[A-Za-z0-9-]*[A-Za-z][A-Za-z0-9-]*(?=[:/]|$|[\s,;|)\]}<>\"'，；）】》、」』”’｝］〉])"
-)
-OFFICIAL_MANUAL_SOURCES = {
-    "monetary_policy": {
-        "mlf": {
-            "trusted_domains": ("pbc.gov.cn", "chinamoney.com.cn"),
-        },
-    },
-    "forex": {
-        "usdcny": {
-            "trusted_domains": ("chinamoney.com.cn", "cfets.com.cn", "pbc.gov.cn"),
-        },
-    },
-    "commodities": {
-        "bcom": {
-            "trusted_domains": ("bloomberg.com", "bloombergindices.com"),
-        },
-    },
-    "bonds": {},
-}
-TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS = {
-    "reserve_ratio": ("pbc.gov.cn",),
-}
 SOURCE_ANOMALY_LABEL = "异常零值-需核查"
-
-_POLICY_RULES_CACHE: Optional[Dict[str, Any]] = None
-
 
 @dataclass
 class InjectionSummary:
@@ -233,37 +231,6 @@ class InjectionSummary:
             "counts": {name: len(items) for name, items in buckets.items()},
             **{name: list(items) for name, items in buckets.items()},
         }
-
-
-def _policy_rules() -> Dict[str, Any]:
-    global _POLICY_RULES_CACHE
-    if _POLICY_RULES_CACHE is None:
-        _POLICY_RULES_CACHE = load_policy_rules()
-    return _POLICY_RULES_CACHE
-
-
-def _is_estimated_allowlisted_entry(category: str, key: str, entry: Optional[Dict[str, Any]]) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    allowed, _ = is_estimated_allowlisted(category, key, entry, rules=_policy_rules())
-    return allowed
-
-
-def _extract_domain(value: Optional[str]) -> str:
-    if not value:
-        return ""
-    text = str(value).strip().strip("<>()[]{}\"'")
-    if not text:
-        return ""
-    parsed = urlparse(text)
-    if not parsed.hostname and "://" not in text and not text.startswith("//"):
-        parsed = urlparse(f"//{text}")
-    try:
-        parsed.port
-    except ValueError:
-        return ""
-    hostname = parsed.hostname or ""
-    return hostname.lower().strip()
 
 
 def _append_non_blocking_warning(market_data: Dict[str, Any], warning: Dict[str, Any]) -> None:
@@ -357,506 +324,6 @@ def _derive_date_compact(payload: Dict[str, Any], override: Optional[str] = None
     if date_val:
         return str(date_val).replace("-", "")
     return datetime.now().strftime("%Y%m%d")
-
-
-def _normalize_keyed_list(payload: Any, key_field: str) -> list:
-    """接受 dict/list/None，统一为 list 并补齐 key_field。"""
-    if payload is None:
-        return []
-    if isinstance(payload, dict):
-        normalized = []
-        for key, value in payload.items():
-            item = dict(value or {})
-            item.setdefault(key_field, key)
-            normalized.append(item)
-        return normalized
-    if isinstance(payload, list):
-        return payload
-    return []
-
-
-def _normalize_monetary_payload(payload: Any) -> Dict[str, Any]:
-    if not isinstance(payload, dict):
-        return {}
-    normalized: Dict[str, Any] = {}
-    for raw_key, value in payload.items():
-        key = canonical_monetary_key(raw_key)
-        if key not in normalized:
-            normalized[key] = value
-            continue
-        existing = normalized[key] if isinstance(normalized[key], dict) else {}
-        incoming = value if isinstance(value, dict) else {}
-        existing_value = existing.get("current_value")
-        incoming_value = incoming.get("current_value")
-        if _has_valid_value(existing_value):
-            continue
-        if _has_valid_value(incoming_value) or raw_key == key:
-            normalized[key] = value
-    return normalized
-
-
-def _normalize_parseable_http_url(value: Any) -> Optional[str]:
-    if not isinstance(value, str):
-        return None
-    text = value.strip().strip("<>()[]{}\"'")
-    if not text or any(char.isspace() for char in text):
-        return None
-    parsed = urlparse(text)
-    if parsed.scheme.lower() not in {"http", "https"}:
-        return None
-    try:
-        parsed.port
-    except ValueError:
-        return None
-    hostname = (parsed.hostname or "").strip()
-    if not hostname or any(char.isspace() for char in hostname):
-        return None
-    return text
-
-
-def _is_url_evidence_terminator(char: str) -> bool:
-    return char in URL_EVIDENCE_TERMINATORS
-
-
-def _collect_http_like_evidence(value: Any) -> List[str]:
-    if not isinstance(value, str):
-        return []
-    text = value.strip()
-    if not text:
-        return []
-    evidence: List[str] = []
-    for match in HTTP_LIKE_START_RE.finditer(text):
-        end = match.end()
-        while end < len(text) and not _is_url_evidence_terminator(text[end]):
-            end += 1
-        token = text[match.start() : end].strip()
-        if token:
-            evidence.append(token)
-    for match in BARE_DOMAIN_START_RE.finditer(text):
-        end = match.end()
-        while end < len(text) and not _is_url_evidence_terminator(text[end]):
-            end += 1
-        token = text[match.start() : end].strip()
-        if token:
-            evidence.append(token)
-    return evidence
-
-
-def _extract_embedded_http_url(value: Any) -> Optional[str]:
-    for token in _collect_http_like_evidence(value):
-        url = _normalize_parseable_http_url(token)
-        if url:
-            return url
-    return None
-
-
-def _iter_http_like_evidence(value: Any, *, fallback_raw: bool = False) -> List[str]:
-    if not isinstance(value, str):
-        return []
-    text = value.strip()
-    if not text:
-        return []
-    matches = _collect_http_like_evidence(text)
-    if matches:
-        return matches
-    if fallback_raw:
-        return [text]
-    return []
-
-
-def _extract_source_url(payload: Dict[str, Any]) -> Optional[str]:
-    for key in EXPLICIT_URL_FIELDS:
-        url = _extract_embedded_http_url(payload.get(key))
-        if url:
-            return url
-    for key in ("source", "note"):
-        url = _extract_embedded_http_url(payload.get(key))
-        if url:
-            return url
-    return None
-
-
-def _attach_source_url(payload: Dict[str, Any]) -> None:
-    url = _normalize_parseable_http_url(payload.get("source_url"))
-    if not url:
-        return
-    if _extract_source_url(payload):
-        return
-    source = payload.get("source")
-    if isinstance(source, str) and source.strip():
-        payload["source"] = f"{source} | {url}"
-    else:
-        payload["source"] = url
-
-
-def _copy_payload_metadata_fields(target: Dict[str, Any], payload: Dict[str, Any], fields: Tuple[str, ...]) -> None:
-    for field in fields:
-        if field in payload and payload.get(field) is not None:
-            target[field] = payload.get(field)
-
-
-def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
-    url = _extract_source_url(payload)
-    if url:
-        target["source_url"] = url
-
-
-def _should_preserve_existing_official_source(target: Dict[str, Any], payload: Dict[str, Any]) -> bool:
-    existing_url = _extract_source_url(target)
-    if not existing_url or not is_official_source_url(existing_url):
-        return False
-    incoming_url = _extract_source_url(payload)
-    return not (incoming_url and is_official_source_url(incoming_url))
-
-
-def _normalize_manual_official_key(category: str, key: str) -> str:
-    if category == "monetary_policy":
-        return canonical_monetary_key(str(key)).lower()
-    return str(key).lower()
-
-
-def _iter_url_like_evidence(payload: Dict[str, Any]) -> List[str]:
-    evidence: List[str] = []
-    for field in EXPLICIT_URL_FIELDS:
-        evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
-    for field in OFFICIAL_MANUAL_TEXT_FIELDS:
-        evidence.extend(_iter_http_like_evidence(payload.get(field)))
-    return evidence
-
-
-def _iter_explicit_url_evidence(payload: Dict[str, Any]) -> List[str]:
-    evidence: List[str] = []
-    for field in EXPLICIT_URL_FIELDS:
-        evidence.extend(_iter_http_like_evidence(payload.get(field), fallback_raw=True))
-    return evidence
-
-
-def _has_multi_value_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
-    for field in EXPLICIT_URL_FIELDS:
-        if len(_iter_http_like_evidence(payload.get(field), fallback_raw=True)) > 1:
-            return True
-    return False
-
-
-def _has_invalid_explicit_url_evidence(payload: Dict[str, Any]) -> bool:
-    for field in EXPLICIT_URL_FIELDS:
-        value = payload.get(field)
-        if value is not None and not isinstance(value, str):
-            return True
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                continue
-            tokens = _iter_http_like_evidence(text)
-            if len(tokens) != 1 or tokens[0] != text:
-                return True
-    return False
-
-
-def _is_https_url_evidence(value: str) -> bool:
-    return urlparse(value).scheme.lower() == "https"
-
-
-def _extract_domains_from_payload(payload: Dict[str, Any]) -> List[str]:
-    domains: List[str] = []
-    for value in _iter_url_like_evidence(payload):
-        domain = _extract_domain(value)
-        if domain:
-            domains.append(domain)
-    return domains
-
-
-def _extract_domains_from_evidence(url_like_evidence: List[str]) -> List[str]:
-    domains: List[str] = []
-    for value in url_like_evidence:
-        domain = _extract_domain(value)
-        if domain:
-            domains.append(domain)
-    return domains
-
-
-def _single_trusted_explicit_https_url(
-    payload: Dict[str, Any],
-    trusted_domains: Tuple[str, ...],
-) -> Optional[str]:
-    if _has_invalid_explicit_url_evidence(payload):
-        return None
-    if _has_multi_value_explicit_url_evidence(payload):
-        return None
-    url_like_evidence = _iter_explicit_url_evidence(payload)
-    if len(url_like_evidence) != 1:
-        return None
-    source_url = url_like_evidence[0]
-    if not _is_https_url_evidence(source_url):
-        return None
-    domain = _extract_domain(source_url)
-    if not domain:
-        return None
-    if not any(_official_domain_matches(domain, trusted_domain) for trusted_domain in trusted_domains):
-        return None
-    text_url_evidence: List[str] = []
-    for field in OFFICIAL_MANUAL_TEXT_FIELDS:
-        text_url_evidence.extend(_iter_http_like_evidence(payload.get(field)))
-    if len(text_url_evidence) > 1:
-        return None
-    for value in text_url_evidence:
-        if not _is_https_url_evidence(value):
-            return None
-        text_domain = _extract_domain(value)
-        if not text_domain:
-            return None
-        if not any(_official_domain_matches(text_domain, trusted_domain) for trusted_domain in trusted_domains):
-            return None
-    return source_url
-
-
-def _official_domain_matches(domain: str, trusted_domain: str) -> bool:
-    domain = domain.lower().strip()
-    trusted_domain = trusted_domain.lower().strip()
-    return domain == trusted_domain or domain.endswith(f".{trusted_domain}")
-
-
-def _is_manual_official_value(category: str, key: str, payload: Dict[str, Any]) -> bool:
-    if not isinstance(payload, dict):
-        return False
-    category_rules = OFFICIAL_MANUAL_SOURCES.get(category) or {}
-    rule = category_rules.get(_normalize_manual_official_key(category, key))
-    if not rule:
-        return False
-
-    trusted_domains = tuple(str(item).lower() for item in rule.get("trusted_domains", ()) if str(item).strip())
-    if _has_invalid_explicit_url_evidence(payload):
-        return False
-    if _has_multi_value_explicit_url_evidence(payload):
-        return False
-    if not trusted_domains:
-        return False
-    return _single_trusted_explicit_https_url(payload, trusted_domains) is not None
-
-
-def _apply_manual_official_estimation_rule(
-    category: str,
-    key: str,
-    payload: Dict[str, Any],
-    entry: Dict[str, Any],
-) -> None:
-    if not _is_manual_official_value(category, key, payload):
-        return
-    entry["is_estimated"] = False
-    if OFFICIAL_MANUAL_NOTE not in str(entry.get("note") or ""):
-        _append_note(entry, OFFICIAL_MANUAL_NOTE)
-
-
-def _collect_missing_source_urls(websearch_data: Dict[str, Any]) -> List[str]:
-    missing: List[str] = []
-
-    for entry in websearch_data.get("commodities", []) or []:
-        symbol = entry.get("symbol") or "unknown"
-        if _has_valid_value(entry.get("current_price")) and not _extract_source_url(entry):
-            missing.append(f"commodities.{symbol}")
-
-    for entry in websearch_data.get("forex", []) or []:
-        pair = entry.get("pair") or "unknown"
-        if _has_valid_value(entry.get("current_rate")) and not _extract_source_url(entry):
-            missing.append(f"forex.{pair}")
-
-    for entry in websearch_data.get("bonds", []) or []:
-        symbol = entry.get("symbol") or "unknown"
-        if _has_valid_value(entry.get("current_yield")) and not _extract_source_url(entry):
-            missing.append(f"bonds.{symbol}")
-
-    for entry in websearch_data.get("stock_indices", []) or []:
-        symbol = entry.get("symbol") or "unknown"
-        if _has_valid_value(entry.get("current_price")) and not _extract_source_url(entry):
-            missing.append(f"stock_indices.{symbol}")
-
-    for key, payload in (websearch_data.get("macro_indicators") or {}).items():
-        if _has_valid_value(payload.get("current_value")) and not _extract_source_url(payload):
-            missing.append(f"macro_indicators.{key}")
-
-    for key, payload in (websearch_data.get("monetary_policy") or {}).items():
-        if _has_valid_value(payload.get("current_value")) and not _extract_source_url(payload):
-            missing.append(f"monetary_policy.{key}")
-
-    for key, payload in (websearch_data.get("fund_flow") or {}).items():
-        has_value = _has_valid_value(payload.get("recent_5d")) or _has_valid_value(payload.get("total_120d"))
-        has_value = has_value or _has_valid_value(payload.get("current_value"))
-        if has_value and not _extract_source_url(payload):
-            missing.append(f"fund_flow.{key}")
-
-    return missing
-
-
-def _is_placeholder_numeric(value: Any) -> bool:
-    return is_stage2_number_placeholder(value) or is_legacy_713_placeholder(value)
-
-
-def _has_valid_value(value: Any) -> bool:
-    return not _is_placeholder_numeric(value)
-
-
-def _remove_missing_item(metadata: Dict[str, Any], category: str, key: str) -> None:
-    missing = metadata.get('missing_items')
-    if not missing or category not in missing:
-        return
-    targets = {str(key)}
-    if category == "monetary_policy":
-        canonical = canonical_monetary_key(key)
-        targets.add(canonical)
-        targets.update(alias for alias, mapped in MONETARY_KEY_MAP.items() if mapped == canonical)
-    cleaned = []
-    for item in missing[category]:
-        if isinstance(item, dict):
-            item_key = item.get('key') or item.get('indicator_key')
-            if str(item_key) in targets:
-                continue
-        else:
-            if str(item) in targets:
-                continue
-        cleaned.append(item)
-    if cleaned:
-        missing[category] = cleaned
-    else:
-        missing.pop(category, None)
-
-
-def _remove_top_missing(market_data: Dict[str, Any], key: str) -> None:
-    """同步清理顶层 missing_items 列表，避免已补齐的缺口再次触发 Stage3 校验。"""
-    missing = market_data.get('missing_items')
-    if not isinstance(missing, list):
-        return
-    targets = {str(key)}
-    canonical = canonical_monetary_key(key)
-    targets.add(canonical)
-    targets.update(alias for alias, mapped in MONETARY_KEY_MAP.items() if mapped == canonical)
-    filtered = []
-    for item in missing:
-        if isinstance(item, dict):
-            item_key = item.get('key') or item.get('indicator_key')
-            if str(item_key) in targets:
-                continue
-        elif str(item) in targets:
-            continue
-        filtered.append(item)
-    market_data['missing_items'] = filtered
-
-
-def _remove_top_missing_on_skip(
-    market_data: Dict[str, Any],
-    key: str,
-    entry: Optional[Dict[str, Any]],
-) -> None:
-    """已有有效值但跳过注入时，仍清理顶层 missing_items。"""
-    if isinstance(entry, dict) and _has_valid_value(entry.get("current_value")):
-        _remove_top_missing(market_data, key)
-
-
-def _is_missing_item_filled(market_data: Dict[str, Any], category: str, key: str) -> bool:
-    if category in ('macro_indicators', 'monetary_policy'):
-        entry = market_data.get(category, {}).get(key)
-        if not isinstance(entry, dict):
-            return False
-        if not _has_valid_value(entry.get('current_value')):
-            return False
-        if entry.get("is_stale"):
-            return False
-        if entry.get('is_estimated') and not _is_estimated_allowlisted_entry(category, key, entry):
-            return False
-        if category == 'macro_indicators':
-            return entry.get('previous_value') is not None and entry.get('change_rate') is not None
-        return entry.get('change_from_120d') is not None
-    if category == 'fund_flow':
-        entry = market_data.get('fund_flow', {}).get(key)
-        if not isinstance(entry, dict):
-            return False
-        return _has_valid_value(entry.get('recent_5d')) and _has_valid_value(entry.get('total_120d'))
-    if category == 'commodities':
-        for item in market_data.get('commodities', []):
-            if item.get('symbol') == key:
-                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('commodities', key, item):
-                    return False
-                return _has_valid_value(item.get('current_price'))
-        return False
-    if category == 'forex':
-        for item in market_data.get('forex', []):
-            if item.get('pair') == key:
-                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('forex', key, item):
-                    return False
-                return _has_valid_value(item.get('current_rate'))
-        return False
-    if category == 'bonds':
-        for item in market_data.get('bonds', []):
-            if item.get('symbol') == key:
-                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('bonds', key, item):
-                    return False
-                return _has_valid_value(item.get('current_yield'))
-        return False
-    if category == 'stock_indices':
-        for item in market_data.get('stock_indices', []):
-            if item.get('symbol') == key:
-                if item.get('is_estimated') and not _is_estimated_allowlisted_entry('stock_indices', key, item):
-                    return False
-                return _has_valid_value(item.get('current_price'))
-        return False
-    return False
-
-
-def _refresh_stage2_gap_monitor(payload: Dict[str, Any]) -> Dict[str, int]:
-    commodities = payload.get('commodities', [])
-    bonds = payload.get('bonds', [])
-    summary = {
-        'commodities': sum(1 for item in commodities if _is_placeholder_numeric(item.get('current_price'))),
-        'bonds': sum(1 for item in bonds if _is_placeholder_numeric(item.get('current_yield'))),
-    }
-    payload.setdefault('metadata', {})['stage2_gap_monitor'] = summary
-    return summary
-
-
-def _refresh_stage2_notes(metadata: Dict[str, Any], gap_summary: Dict[str, int]) -> None:
-    notes = metadata.setdefault('stage2_notes', [])
-    filtered = [
-        note for note in notes
-        if not note.startswith("Stage2: 行情缺口仍存在") and not note.startswith("Stage2: Yahoo Fallback")
-    ]
-    summary_text = f"Stage2.5: WebSearch注入完成 (commodities={gap_summary['commodities']}, bonds={gap_summary['bonds']})."
-    if summary_text not in filtered:
-        filtered.append(summary_text)
-    metadata['stage2_notes'] = filtered
-
-
-def _cleanup_metadata_missing(metadata: Dict[str, Any], market_data: Dict[str, Any]) -> None:
-    """根据实际填充情况清理 metadata.missing_items，避免 Stage3 误阻断。"""
-    missing = metadata.get('missing_items')
-    if not isinstance(missing, dict):
-        return
-    cleaned: Dict[str, list] = {}
-    for category, items in missing.items():
-        if not items:
-            continue
-        kept = []
-        for item in items:
-            key = None
-            if isinstance(item, dict):
-                key = item.get('key') or item.get('indicator_key')
-            elif isinstance(item, str):
-                key = item
-            check_key = canonical_monetary_key(key) if category == "monetary_policy" else key
-            if key and _is_missing_item_filled(market_data, category, check_key):
-                continue
-            if item:
-                kept.append(item)
-        if kept:
-            cleaned[category] = kept
-    if cleaned:
-        metadata['missing_items'] = cleaned
-    else:
-        metadata.pop('missing_items', None)
-
-
-def _append_missing_item(market_data: Dict[str, Any], category: str, key: str, reason: str) -> None:
-    """将质量阻断项写回 metadata/top-level missing_items，确保 Stage3 能硬阻断。"""
-    canonical_key = canonical_monetary_key(key) if category == "monetary_policy" else key
-    append_missing_item(market_data, category, canonical_key, reason)
 
 
 def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -953,29 +420,6 @@ def _enforce_quality_blockers(market_data: Dict[str, Any]) -> List[Dict[str, str
     return blockers
 
 
-def _apply_pipeline_quality_state(
-    market_data: Dict[str, Any],
-    *,
-    allow_estimated: bool = False,
-) -> Dict[str, Any]:
-    state = build_pipeline_quality_state(
-        market_data,
-        policy_rules=_policy_rules(),
-        stage="stage2_5",
-        allow_estimated=allow_estimated,
-    )
-    metadata = market_data.setdefault("metadata", {})
-    metadata["missing_items"] = state["missing_items"] or {}
-    metadata["quality_blockers"] = state["quality_blockers"]
-    metadata["source_url_issues"] = state["source_url_issues"]
-    metadata["window_metric_issues"] = state["window_metric_issues"]
-    metadata["manual_required"] = state["manual_required"]
-    market_data["missing_items"] = list(state.get("gap_monitor_view", {}).get("manual_required", []))
-    if not market_data["missing_items"]:
-        market_data["missing_items"] = []
-    return state
-
-
 def _write_unified_quality_artifacts(
     market_data: Dict[str, Any],
     state: Dict[str, Any],
@@ -1034,569 +478,6 @@ def _cleanup_monetary_aliases(market_data: Dict[str, Any], metadata: Dict[str, A
             _remove_missing_item(metadata, 'monetary_policy', alias)
             _remove_top_missing(market_data, alias)
 
-
-def _normalize_fund_flow_payload(raw_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = dict(payload or {})
-    if raw_key == "etf_flow":
-        normalized.setdefault('recent_5d', normalized.get('recent_week'))
-        normalized.setdefault('note', normalized.get('hot_sectors'))
-    if raw_key == "margin_trading":
-        normalized.setdefault('total_120d', normalized.get('balance'))
-        normalized.setdefault('note', normalized.get('ratio'))
-        normalized.setdefault('recent_5d', None)
-    return normalized
-
-
-def _default_fund_flow_metric_basis(key: str, payload: Dict[str, Any]) -> str:
-    if payload.get("metric_basis"):
-        return str(payload.get("metric_basis"))
-    if key in {"northbound", "southbound"}:
-        return "net_flow_sum"
-    if key == "margin":
-        return "balance_delta"
-    if key == "etf":
-        return "estimated_net_flow" if _coerce_bool(payload.get("is_estimated")) else "net_flow_sum"
-    return "net_flow_sum"
-
-
-FUND_FLOW_TIER1_DOMAINS = (
-    "hkex.com.hk",
-    "sse.com.cn",
-    "szse.cn",
-)
-FUND_FLOW_TIER2_STRUCTURED_PATHS = {
-    "data.eastmoney.com": (
-        "/hsgt",
-        "/etf",
-        "/fund",
-        "/rzrq",
-    ),
-    "tushare.pro": ("/document",),
-}
-FUND_FLOW_TIER3_DOMAINS = (
-    "finance.sina.com.cn",
-    "sina.com.cn",
-    "stcn.com",
-    "cs.com.cn",
-    "cls.cn",
-    "10jqka.com.cn",
-)
-FUND_FLOW_DIRECT_WINDOW_EVIDENCE = {
-    "direct_window",
-    "direct_daily_series",
-    "direct_balance_delta",
-}
-FUND_FLOW_WEAK_WINDOW_EVIDENCE = {
-    "news_summary",
-    "derived",
-    "unknown",
-}
-FUND_FLOW_ESTIMATED_METRIC_BASIS = {
-    "news_net_flow",
-    "estimated_net_flow",
-}
-
-
-def _normalize_source_tier(value: Any) -> Optional[str]:
-    text = str(value or "").strip().lower()
-    if text in {"tier1", "tier2", "tier3", "unknown"}:
-        return text
-    return None
-
-
-def _normalize_window_evidence(value: Any) -> Optional[str]:
-    text = str(value or "").strip().lower()
-    allowed = FUND_FLOW_DIRECT_WINDOW_EVIDENCE | FUND_FLOW_WEAK_WINDOW_EVIDENCE
-    if text in allowed:
-        return text
-    return None
-
-
-def _domain_matches(domain: str, suffixes: Any) -> bool:
-    return bool(domain) and any(domain == suffix or domain.endswith(f".{suffix}") for suffix in suffixes)
-
-
-def _parse_url_domain_path(value: Optional[str]) -> Tuple[str, str]:
-    if not value:
-        return "", ""
-    text = str(value).strip().strip("<>()[]{}\"'")
-    if not text:
-        return "", ""
-    parsed = urlparse(text)
-    if not parsed.hostname and "://" not in text and not text.startswith("//"):
-        parsed = urlparse(f"//{text}")
-    try:
-        parsed.port
-    except ValueError:
-        return "", ""
-    return (parsed.hostname or "").lower().strip(), parsed.path or "/"
-
-
-def _path_matches_prefix(path: str, prefixes: Any) -> bool:
-    normalized = path or "/"
-    return any(
-        prefix == "/"
-        or normalized == prefix
-        or normalized.startswith(f"{prefix}/")
-        for prefix in prefixes
-    )
-
-
-def _is_fund_flow_tier2_structured_source(url: Optional[str]) -> bool:
-    domain, path = _parse_url_domain_path(url)
-    prefixes = FUND_FLOW_TIER2_STRUCTURED_PATHS.get(domain)
-    if not prefixes:
-        return False
-    return _path_matches_prefix(path, prefixes)
-
-
-def _infer_fund_flow_source_tier(payload: Dict[str, Any]) -> str:
-    url = _extract_source_url(payload)
-    domain = _extract_domain(url)
-    if _domain_matches(domain, FUND_FLOW_TIER1_DOMAINS):
-        return "tier1"
-    if _is_fund_flow_tier2_structured_source(url):
-        return "tier2"
-    if _domain_matches(domain, FUND_FLOW_TIER3_DOMAINS):
-        return "tier3"
-    return "unknown"
-
-
-def _infer_fund_flow_window_evidence(key: str, payload: Dict[str, Any], metric_basis: str) -> str:
-    metric = str(metric_basis or "").strip().lower()
-    if metric == "estimated_net_flow":
-        return "derived"
-    if metric == "news_net_flow":
-        return "news_summary"
-
-    explicit = _normalize_window_evidence(payload.get("window_evidence"))
-    field_retry_evidence = payload.get("field_retry_evidence")
-    if isinstance(field_retry_evidence, dict):
-        recent = field_retry_evidence.get("recent_5d")
-        total = field_retry_evidence.get("total_120d")
-        if isinstance(recent, dict) and isinstance(total, dict):
-            recent_trusted = _fund_flow_has_trusted_window(
-                _infer_fund_flow_source_tier(recent),
-                str(recent.get("window_evidence") or "unknown"),
-                str(recent.get("metric_basis") or metric_basis),
-            )
-            total_trusted = _fund_flow_has_trusted_window(
-                _infer_fund_flow_source_tier(total),
-                str(total.get("window_evidence") or "unknown"),
-                str(total.get("metric_basis") or metric_basis),
-            )
-            if recent_trusted and total_trusted:
-                if explicit in FUND_FLOW_DIRECT_WINDOW_EVIDENCE:
-                    return explicit
-                return "direct_window"
-        return "unknown"
-
-    if explicit:
-        return explicit
-
-    text = " ".join(
-        str(payload.get(field) or "")
-        for field in ("source", "note", "estimation_method", "description")
-    ).lower()
-    if any(token in text for token in ("季度", "q1", "q2", "q3", "q4", "年内", "年度", "单日", "外推")):
-        return "news_summary"
-    if key == "margin" and metric == "balance_delta" and any(token in text for token in ("余额", "balance")):
-        return "direct_balance_delta"
-    if "recent_5d_field_retry" in text and "total_120d_field_retry" in text:
-        return "unknown"
-    if ("近5日" in text or "5日" in text or "5-day" in text) and ("120" in text or "一百二十" in text):
-        return "direct_window"
-    return "unknown"
-
-
-def _fund_flow_has_trusted_window(source_tier: str, window_evidence: str, metric_basis: str) -> bool:
-    metric = str(metric_basis or "").strip().lower()
-    if metric in FUND_FLOW_ESTIMATED_METRIC_BASIS:
-        return False
-    if source_tier not in {"tier1", "tier2"}:
-        return False
-    return window_evidence in FUND_FLOW_DIRECT_WINDOW_EVIDENCE
-
-
-def _normalize_fund_flow_estimation(entry: Dict[str, Any], payload: Dict[str, Any]) -> None:
-    source_tier = str(entry.get("source_tier") or "unknown")
-    window_evidence = str(entry.get("window_evidence") or "unknown")
-    metric_basis = str(entry.get("metric_basis") or "")
-    trusted = _fund_flow_has_trusted_window(source_tier, window_evidence, metric_basis)
-
-    if trusted:
-        entry["is_estimated"] = False
-        return
-
-    entry["is_estimated"] = True
-    entry.setdefault("estimation_method", "fund_flow_manual_window_not_direct")
-    note_addition = (
-        "fund_flow_estimated_gate:"
-        f"source_tier={source_tier},"
-        f"window_evidence={window_evidence},"
-        f"metric_basis={metric_basis or 'unknown'}"
-    )
-    entry["note"] = _append_note_once(str(entry.get("note") or ""), note_addition)
-
-
-def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    将 Stage2 Unified 的 websearch_results（results 数组，含 task/extraction）转换为
-    stage2_5_injector 期望的 schema。
-    """
-    if "results" not in raw or not isinstance(raw.get("results"), list):
-        return raw
-    schema: Dict[str, Any] = {
-        "commodities": [],
-        "forex": [],
-        "bonds": [],
-        "stock_indices": [],
-        "fund_flow": {},
-        "macro_indicators": {},
-        "monetary_policy": {},
-        "metadata": {"manual_required": []},
-    }
-
-    def _num(val):
-        try:
-            return float(val)
-        except Exception:
-            return None
-
-    def _trend_cn(raw_trend: Any, val: Optional[float]) -> str:
-        text = str(raw_trend or "").strip().lower()
-        if text in {"inflow", "流入", "净流入", "net_inflow", "buy"}:
-            return "流入"
-        if text in {"outflow", "流出", "净流出", "net_outflow", "sell"}:
-            return "流出"
-        if val is not None:
-            if val > 0:
-                return "流入"
-            if val < 0:
-                return "流出"
-        return "未知"
-
-    def _candidate_url(item: Dict[str, Any], extraction: Dict[str, Any]) -> Optional[str]:
-        url = extraction.get("source_url")
-        if isinstance(url, str) and url.strip().startswith("http"):
-            return url.strip()
-        for row in item.get("raw_results") or []:
-            u = row.get("url")
-            if isinstance(u, str) and u.strip().startswith("http"):
-                return u.strip()
-        return None
-
-    def _upsert(rows: List[Dict[str, Any]], key_field: str, payload: Dict[str, Any]) -> None:
-        key_val = payload.get(key_field)
-        for i, row in enumerate(rows):
-            if row.get(key_field) == key_val:
-                rows[i] = payload
-                return
-        rows.append(payload)
-
-    def _stage2_quality_metadata(extraction: Dict[str, Any]) -> Dict[str, Any]:
-        fields = (
-            "is_estimated",
-            "estimation_method",
-            "metric_basis",
-            "confidence",
-            "note",
-            "as_of_date",
-            "report_period",
-        )
-        return {field: extraction.get(field) for field in fields if extraction.get(field) is not None}
-
-    def _append_manual_skeleton(
-        key: str,
-        cat: str,
-        task: Dict[str, Any],
-        extraction: Dict[str, Any],
-        reason: str,
-        item: Dict[str, Any],
-    ) -> None:
-        src = _candidate_url(item, extraction)
-        schema["metadata"]["manual_required"].append(
-            {
-                "indicator_key": key,
-                "category": cat,
-                "reason": reason,
-                "source_url": src,
-                "query": task.get("query"),
-                "query_used": task.get("query_used"),
-            }
-        )
-        source_text = "待人工补数(Stage2 manual_required)"
-        note_text = reason
-        if src:
-            note_text = f"{reason} | {src}"
-
-        if cat == "commodities":
-            _upsert(
-                schema["commodities"],
-                "symbol",
-                {
-                    "symbol": key,
-                    "name": key,
-                    "current_price": None,
-                    "unit": task.get("unit") or "",
-                    "trend": "未知",
-                    "source": source_text,
-                    "note": note_text,
-                    "source_url": src,
-                },
-            )
-            return
-        if cat == "forex":
-            _upsert(
-                schema["forex"],
-                "pair",
-                {
-                    "pair": key,
-                    "name": key,
-                    "current_rate": None,
-                    "trend": "未知",
-                    "source": source_text,
-                    "note": note_text,
-                    "source_url": src,
-                },
-            )
-            return
-        if cat == "bonds":
-            _upsert(
-                schema["bonds"],
-                "symbol",
-                {
-                    "symbol": key,
-                    "name": key,
-                    "current_yield": None,
-                    "trend": "未知",
-                    "source": source_text,
-                    "note": note_text,
-                    "source_url": src,
-                },
-            )
-            return
-        if cat == "stock_indices":
-            _upsert(
-                schema["stock_indices"],
-                "symbol",
-                {
-                    "symbol": key,
-                    "name": key,
-                    "current_price": None,
-                    "source": source_text,
-                    "note": note_text,
-                    "source_url": src,
-                },
-            )
-            return
-        if cat == "fund_flow":
-            schema["fund_flow"][key] = {
-                "recent_5d": _num(extraction.get("recent_5d")),
-                "total_120d": _num(extraction.get("total_120d")),
-                "trend": _trend_cn(extraction.get("trend"), _num(extraction.get("value"))),
-                "source": source_text,
-                "note": note_text,
-                "source_url": src,
-            }
-            return
-        if cat == "macro_indicators":
-            schema["macro_indicators"][key] = {
-                "indicator_name": key,
-                "current_value": None,
-                "previous_value": extraction.get("previous_value"),
-                "change_rate": extraction.get("change_rate"),
-                "unit": task.get("unit") or "%",
-                "date": extraction.get("date") or "",
-                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
-                "value_type": extraction.get("value_type"),
-                "yoy_month": extraction.get("yoy_month"),
-                "yoy_ytd": extraction.get("yoy_ytd"),
-                "source": source_text,
-                "note": note_text,
-                "source_url": src,
-            }
-            return
-        if cat == "monetary_policy":
-            schema["monetary_policy"][key] = {
-                "policy_name": key,
-                "current_value": None,
-                "unit": task.get("unit") or "%",
-                "date": extraction.get("date") or "",
-                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
-                "source": source_text,
-                "note": note_text,
-                "source_url": src,
-            }
-
-    # 用于 manual_required 元数据去重
-    seen_manual_keys: set = set()
-
-    for item in raw["results"]:
-        task = item.get("task") or {}
-        extraction = item.get("extraction") or {}
-        key = task.get("indicator_key")
-        if not key:
-            continue
-        cat = INDICATOR_CATEGORY.get(key)
-        if not cat:
-            continue
-        manual_reason = (
-            extraction.get("manual_reason")
-            or extraction.get("note")
-            or item.get("note")
-            or "manual_required"
-        )
-        if item.get("manual_required") is True:
-            uniq_key = f"{cat}:{key}"
-            if uniq_key not in seen_manual_keys:
-                _append_manual_skeleton(key, cat, task, extraction, str(manual_reason), item)
-                seen_manual_keys.add(uniq_key)
-            continue
-        note_text = extraction.get("note") or ""
-        if isinstance(note_text, str) and ("数据超过" in note_text or "需更新" in note_text):
-            continue
-        val = _num(extraction.get("value"))
-        if val is None and cat != "fund_flow":
-            uniq_key = f"{cat}:{key}"
-            if uniq_key not in seen_manual_keys:
-                _append_manual_skeleton(key, cat, task, extraction, "no_value_from_stage2", item)
-                seen_manual_keys.add(uniq_key)
-            continue
-        src = _candidate_url(item, extraction)
-        source = extraction.get("source_url") or extraction.get("note") or "stage2_auto_extract"
-        if src:
-            source_text = str(source or "stage2_auto_extract")
-            if src not in source_text:
-                source = f"{source_text}({src})"
-        elif "stage2_auto" not in str(source).lower():
-            source = f"stage2_auto_extract:{source}" if source else "stage2_auto_extract"
-        if cat == "commodities":
-            _upsert(
-                schema["commodities"],
-                "symbol",
-                {
-                    "symbol": key,
-                    "name": key,
-                    "current_price": val,
-                    "unit": task.get("unit") or "",
-                    "ytd_change": extraction.get("ytd_change"),
-                    "trend": "未知",
-                    "source": source,
-                    "source_url": src,
-                },
-            )
-        elif cat == "forex":
-            _upsert(
-                schema["forex"],
-                "pair",
-                {
-                    "pair": key,
-                    "name": key,
-                    "current_rate": val,
-                    "daily_change": extraction.get("daily_change"),
-                    "change_120d": extraction.get("change_120d"),
-                    "trend": extraction.get("trend") or "未知",
-                    "source": source,
-                    "source_url": src,
-                },
-            )
-        elif cat == "bonds":
-            _upsert(
-                schema["bonds"],
-                "symbol",
-                {
-                    "symbol": key,
-                    "name": key,
-                    "current_yield": val,
-                    "change_5d_bp": extraction.get("change_5d_bp"),
-                    "change_120d_bp": extraction.get("change_120d_bp"),
-                    "trend": extraction.get("trend") or "未知",
-                    "source": source,
-                    "source_url": src,
-                    **_stage2_quality_metadata(extraction),
-                },
-            )
-        elif cat == "stock_indices":
-            _upsert(
-                schema["stock_indices"],
-                "symbol",
-                {
-                    "symbol": key,
-                    "name": key,
-                    "current_price": val,
-                    "source": source,
-                    "source_url": src,
-                },
-            )
-        elif cat == "fund_flow":
-            recent = _num(extraction.get("recent_5d"))
-            total = _num(extraction.get("total_120d"))
-            if recent is None or total is None:
-                uniq_key = f"{cat}:{key}"
-                if uniq_key not in seen_manual_keys:
-                    _append_manual_skeleton(key, cat, task, extraction, "fund_flow_window_missing", item)
-                    seen_manual_keys.add(uniq_key)
-                continue
-            schema["fund_flow"][key] = {
-                "recent_5d": recent,
-                "total_120d": total,
-                "trend": _trend_cn(extraction.get("trend"), recent),
-                "source": source,
-                "note": extraction.get("note"),
-                "source_url": src,
-                "is_estimated": extraction.get("is_estimated"),
-                "estimation_method": extraction.get("estimation_method"),
-                "confidence": extraction.get("confidence"),
-                "metric_basis": extraction.get("metric_basis"),
-                "window_evidence": extraction.get("window_evidence"),
-                "source_tier": extraction.get("source_tier"),
-                "field_retry_evidence": extraction.get("field_retry_evidence"),
-            }
-        elif cat == "macro_indicators":
-            schema["macro_indicators"][key] = {
-                "indicator_name": key,
-                "current_value": val,
-                "previous_value": extraction.get("previous_value"),
-                "change_rate": extraction.get("change_rate"),
-                "unit": task.get("unit") or "%",
-                "date": extraction.get("date") or "",
-                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
-                "value_type": extraction.get("value_type"),
-                "yoy_month": extraction.get("yoy_month"),
-                "yoy_ytd": extraction.get("yoy_ytd"),
-                "source": source,
-                "source_url": src,
-            }
-        elif cat == "monetary_policy":
-            schema["monetary_policy"][key] = {
-                "policy_name": key,
-                "current_value": val,
-                "change_from_120d": extraction.get("change_from_120d"),
-                "unit": task.get("unit") or "%",
-                "date": extraction.get("date") or "",
-                "as_of_date": extraction.get("as_of_date") or extraction.get("report_period"),
-                "rrr_type": extraction.get("rrr_type"),
-                "source": source,
-                "source_url": src,
-            }
-    # 移除空类别，保持与原脚本兼容
-    metadata = schema.get("metadata") or {}
-    if isinstance(metadata, dict):
-        manual_rows = metadata.get("manual_required") or []
-        if manual_rows:
-            deduped: List[Dict[str, Any]] = []
-            seen = set()
-            for row in manual_rows:
-                mk = f"{row.get('category')}:{row.get('indicator_key')}"
-                if mk in seen:
-                    continue
-                seen.add(mk)
-                deduped.append(row)
-            metadata["manual_required"] = deduped
-        else:
-            schema.pop("metadata", None)
-    return {k: v for k, v in schema.items() if v}
 
 
 def inject_websearch_data(
@@ -2132,73 +1013,6 @@ def _post_injection_validation(market_data: Dict[str, Any]) -> None:
         print("  [OK] 所有字段已去除估计值标记")
 
 
-def _coerce_float(value: Any) -> Optional[float]:
-    if value in (None, '', 'N/A'):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    if isinstance(value, str):
-        text = value.strip().replace(',', '')
-        if not text:
-            return None
-        text = text.replace('%', '')
-        match = re.search(r'[-+]?\d+(?:\.\d+)?', text)
-        if match:
-            try:
-                return float(match.group())
-            except ValueError:
-                return None
-    return None
-
-
-def _pct_change(current: Any, previous: Any) -> Optional[float]:
-    current_value = _coerce_float(current)
-    previous_value = _coerce_float(previous)
-    if current_value is None or previous_value is None:
-        return None
-    if abs(previous_value) < 1e-9:
-        return None
-    return round((current_value - previous_value) / abs(previous_value) * 100.0, 4)
-
-
-def _same_numeric_value(left: Any, right: Any) -> bool:
-    left_value = _coerce_float(left)
-    right_value = _coerce_float(right)
-    if left_value is None or right_value is None:
-        return False
-    return abs(left_value - right_value) < 1e-9
-
-
-def _calc_change_rate_pct(current_value: Optional[float], previous_value: Optional[float]) -> Optional[float]:
-    """按百分比口径计算变化率：(current - previous) / abs(previous) * 100。"""
-    if current_value is None or previous_value is None:
-        return None
-    try:
-        current = float(current_value)
-        previous = float(previous_value)
-        denominator = abs(previous)
-        if denominator < 1e-9:
-            return None
-        return round((current - previous) / denominator * 100.0, 4)
-    except Exception:
-        return None
-
-
-def _calc_previous_from_change_rate_pct(
-    current_value: Optional[float], change_rate_pct: Optional[float]
-) -> Optional[float]:
-    """按百分比口径反推前值：previous = current / (1 + change_rate/100)。"""
-    if current_value is None or change_rate_pct is None:
-        return None
-    try:
-        denominator = 1.0 + float(change_rate_pct) / 100.0
-        if abs(denominator) < 1e-9:
-            return None
-        return round(float(current_value) / denominator, 4)
-    except Exception:
-        return None
-
-
 def _format_source_label(raw_source: Optional[str]) -> str:
     source_text = str(raw_source or "").strip()
     if not source_text:
@@ -2323,64 +1137,6 @@ def _merge_same_value_report_fields(
             entry["is_stale"] = False
             entry["stale_reason"] = None
     return changed
-
-
-def _has_rrr_type_conflict(entry: Dict[str, Any], payload: Dict[str, Any]) -> bool:
-    existing_rrr_type = _normalize_rrr_type(entry.get("rrr_type"))
-    incoming_rrr_type = _normalize_rrr_type(payload.get("rrr_type") or payload.get("value_type"))
-    return bool(
-        existing_rrr_type
-        and incoming_rrr_type
-        and incoming_rrr_type != existing_rrr_type
-        and entry.get("current_value") is not None
-    )
-
-
-def _is_trusted_monetary_manual_quality_override(
-    indicator_key: str,
-    entry: Dict[str, Any],
-    payload: Dict[str, Any],
-    incoming_current_value: Optional[float],
-    *,
-    is_manual: bool,
-) -> bool:
-    key = "reserve_ratio" if indicator_key in {"rrr", "reserve_ratio"} else indicator_key
-    if not is_manual or key not in TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS:
-        return False
-    if _has_rrr_type_conflict(entry, payload):
-        return False
-    if incoming_current_value is None:
-        return False
-    if not bool(entry.get("is_estimated")):
-        existing_source_url = _extract_source_url(entry)
-        existing_official = bool(existing_source_url and is_official_source_url(existing_source_url))
-        existing_compare_gap = _coerce_float(entry.get("change_from_120d")) is None
-        note_text = str(entry.get("note") or "")
-        if existing_official or not existing_compare_gap or "缺少发布机构" not in note_text:
-            return False
-    if "is_estimated" not in payload or _coerce_bool(payload.get("is_estimated")) is not False:
-        return False
-    source_url = _single_trusted_explicit_https_url(
-        payload,
-        TRUSTED_MONETARY_MANUAL_QUALITY_DOMAINS[key],
-    )
-    if not source_url:
-        return False
-    return True
-
-
-def _normalize_rrr_type(value: Optional[str]) -> Optional[str]:
-    if not value:
-        return None
-    text = str(value).strip().lower()
-    if "加权" in text or "weighted" in text:
-        return "weighted"
-    if "法定" in text or "statutory" in text:
-        return "statutory"
-    if "平均" in text:
-        # 无明确口径时保守归类为法定平均
-        return "statutory"
-    return None
 
 
 _contains_ytd_marker = contains_ytd_marker
@@ -2987,25 +1743,6 @@ def _build_fund_flow_note(payload: Dict[str, Any], anomaly: bool) -> str:
     if anomaly:
         parts.append("异常: 零值待WebSearch复核")
     return '；'.join(parts)
-
-
-def _coerce_percent(value: Any) -> Optional[float]:
-    if value in (None, '', 'N/A'):
-        return None
-    try:
-        return float(str(value).replace('%', '').strip())
-    except Exception:
-        return None
-
-
-def _coerce_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
-    if isinstance(value, str):
-        return value.strip().lower() in {'true', '1', 'yes', 'y', '是'}
-    return False
 
 
 def _parse_date(value: Optional[str]) -> Optional[datetime]:
@@ -3929,97 +2666,6 @@ def _run_post_write_trend_backfill(
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(market_data, f, ensure_ascii=False, indent=2)
     return stats
-
-
-def _issue_signature(issue: Dict[str, Any]) -> Tuple[Any, Any, Any, Any]:
-    return (issue.get("category"), issue.get("key"), issue.get("field"), issue.get("reason"))
-
-
-def _merge_quality_issues(base_issues: List[Dict[str, Any]], extra_issues: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    merged: List[Dict[str, Any]] = []
-    seen = set()
-    for item in list(base_issues or []) + list(extra_issues or []):
-        if not isinstance(item, dict):
-            continue
-        sig = _issue_signature(item)
-        if sig in seen:
-            continue
-        seen.add(sig)
-        merged.append(item)
-    return merged
-
-
-def _collect_unresolved_gap_items(market_data: Dict[str, Any]) -> List[str]:
-    """收集仍未补齐的缺口项，用于重写 gap_monitor.manual_required。"""
-    unresolved: List[str] = []
-    metadata = market_data.get("metadata", {}) if isinstance(market_data, dict) else {}
-    metadata_missing = metadata.get("missing_items", {})
-    if isinstance(metadata_missing, dict):
-        for category, items in metadata_missing.items():
-            if not isinstance(items, list):
-                continue
-            for item in items:
-                if isinstance(item, dict):
-                    key = item.get("key") or item.get("indicator_key")
-                else:
-                    key = item
-                if not key:
-                    continue
-                key_str = str(key)
-                if _is_missing_item_filled(market_data, category, key_str):
-                    continue
-                unresolved.append(key_str)
-
-    top_missing = market_data.get("missing_items", [])
-    if isinstance(top_missing, list):
-        for item in top_missing:
-            if isinstance(item, dict):
-                key = item.get("key") or item.get("indicator_key")
-            else:
-                key = item
-            if key:
-                unresolved.append(str(key))
-
-    deduped: List[str] = []
-    seen = set()
-    for key in unresolved:
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(key)
-    return deduped
-
-
-def _rewrite_gap_monitor_after_injection(
-    market_data: Dict[str, Any],
-    *,
-    date_override: Optional[str] = None,
-    gap_monitor_path: Optional[Path] = None,
-    extra_issues: Optional[List[Dict[str, Any]]] = None,
-) -> Path:
-    """按当前 market_data 状态重写 gap_monitor，避免遗留旧 manual_required。"""
-    run_paths = build_run_paths_from_reference(
-        date=date_override,
-        payload=market_data,
-        fallback_to_today=True,
-    )
-    target_path = gap_monitor_path or run_paths.gap_monitor
-
-    state = _apply_pipeline_quality_state(market_data)
-    merged_issues = _merge_quality_issues(state.get("quality_blockers", []), extra_issues or [])
-    gap_view = state.get("gap_monitor_view", {}) if isinstance(state, dict) else {}
-
-    payload: Dict[str, Any] = {
-        "generated_at": datetime.now().isoformat(),
-        "manual_required": list(gap_view.get("manual_required") or []),
-        "pending_tasks": list(gap_view.get("pending_tasks") or []),
-        "data_quality_issues": merged_issues,
-        "quality_blockers": list(state.get("quality_blockers") or []),
-    }
-
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return target_path
 
 
 def _sync_backfill_issues_to_logs(

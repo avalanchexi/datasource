@@ -19,6 +19,12 @@ from datasource.engines.stage2.evidence import (
 )
 from datasource.engines.stage2.regex_extraction import _infer_rrr_type
 from datasource.engines.stage2.snippet_filters import _extract_report_month, _parse_date_str  # noqa: E501
+from datasource.engines.stage2_5.fund_flow import (
+    _default_fund_flow_metric_basis,
+    _infer_fund_flow_source_tier,
+    _infer_fund_flow_window_evidence,
+    _normalize_fund_flow_estimation,
+)
 from datasource.utils.forex_evidence import (
     FOREX_COMPARE_FIELDS,
     has_forex_computed_marker,
@@ -41,23 +47,6 @@ from datasource.utils.key_aliases import canonical_monetary_key
 from datasource.utils.policy_rules import is_estimated_allowlisted
 from datasource.utils.source_trust import should_mark_official_non_estimated
 from datasource.utils.text_markers import contains_ytd_marker
-
-try:
-    # C4-cleanup: move shared fund_flow gate helpers out of scripts/stage2_5_injector.py.  # noqa: E501
-    from scripts.stage2_5_injector import (
-        _default_fund_flow_metric_basis,
-        _infer_fund_flow_source_tier,
-        _infer_fund_flow_window_evidence,
-        _normalize_fund_flow_estimation,
-    )
-except ImportError:  # pragma: no cover - direct script execution keeps scripts/ on sys.path  # noqa: E501
-    # C4-cleanup: keep the existing direct-execution fallback until the shared module exists.  # noqa: E501
-    from stage2_5_injector import (  # type: ignore
-        _default_fund_flow_metric_basis,
-        _infer_fund_flow_source_tier,
-        _infer_fund_flow_window_evidence,
-        _normalize_fund_flow_estimation,
-    )
 
 
 _contains_ytd_marker = contains_ytd_marker

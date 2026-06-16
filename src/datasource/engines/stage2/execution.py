@@ -51,6 +51,8 @@ from datasource.engines.stage2.evidence import (
 from datasource.engines.stage2.extraction_apply import (
     _apply_extraction,
     _augment_extraction_metadata,
+)
+from datasource.engines.stage2_5.fund_flow import (
     _default_fund_flow_metric_basis,
     _infer_fund_flow_source_tier,
     _infer_fund_flow_window_evidence,
