@@ -12,11 +12,11 @@
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
-| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1/C2/C3/C4 完成;下一步 C5) | B |
+| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1/C2/C3/C4/C5/C6 完成;下一步 C 终态/全局验收) | B |
 | 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
-**当前焦点:PR-C5(Stage2.5 entry_mergers / trend_backfill / core / cli 拆分)——续接 `engines/stage2_5/` 新包。**
+**当前焦点:C 批次终态/全局验收——确认 `scripts/` 入口瘦身、命令文档与重构后结构一致。**
 
 ---
 
@@ -74,8 +74,8 @@
 - [x] **PR-C4**:Stage2.5 拆分 — common / schema_coercion / manual_official(行为冻结区,单独评审)/ fund_flow / gap_sync
   - [x] 新增 `src/datasource/engines/stage2_5/` 包;主脚本保留 re-export;Stage2.5 contract replay + Stage2 replay harness + 全量 pytest 通过
   - [x] 回收 C2 `C4-cleanup`:Stage2 `extraction_apply`/`execution` fund_flow helper 改指 `engines.stage2_5.fund_flow`;无跨脚本 import 残留
-- [ ] **PR-C5**:Stage2.5 拆分 — entry_mergers / trend_backfill / core / cli(续接 `engines/stage2_5/`)
-- [ ] (可选)**PR-C6**:stage1_data_collector 瘦身
+- [x] **PR-C5**:Stage2.5 拆分 — entry_mergers / trend_backfill / core / cli(续接 `engines/stage2_5/`) — squash `0c8f14b`
+- [x] (可选)**PR-C6**:stage1_data_collector 瘦身 — branch commits `1315e82`/`1b9bab7`/`1dfb241`; squash SHA pending merge
 - [ ] 每个 PR:生成计划 → Codex 执行 → fixture replay 全绿 → Claude 评审 → 合入(逐个勾选记在上面对应行)
 
 ## 批次 D — run 目录契约(§7,2 个 PR)

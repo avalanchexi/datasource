@@ -56,7 +56,7 @@ class _MacroLagManager(_FakeManager):
 
 
 def test_fetch_gdp_uses_delta_change_rate(monkeypatch):
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-02-06")
     payload = asyncio.run(collector._fetch_gdp_from_tushare())
 
@@ -67,7 +67,7 @@ def test_fetch_gdp_uses_delta_change_rate(monkeypatch):
 
 
 def test_apply_monthly_freshness_marks_stale_for_lagging_month(monkeypatch):
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-02-27")
     payload = {"date": "2025-12", "current_value": 0.8}
     marked = collector._apply_monthly_freshness(payload, "cpi")
@@ -78,7 +78,7 @@ def test_apply_monthly_freshness_marks_stale_for_lagging_month(monkeypatch):
 
 
 def test_apply_monthly_freshness_pmi_uses_current_month_after_month_end(monkeypatch):
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-02-28")
     payload = {"date": "2026-01", "current_value": 50.2}
     marked = collector._apply_monthly_freshness(payload, "pmi")
@@ -88,7 +88,7 @@ def test_apply_monthly_freshness_pmi_uses_current_month_after_month_end(monkeypa
 
 
 def test_apply_monthly_freshness_respects_release_lag_before_mid_month(monkeypatch):
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-02-10")
     payload = {"date": "2025-12", "current_value": 0.8}
     marked = collector._apply_monthly_freshness(payload, "cpi")
@@ -98,7 +98,7 @@ def test_apply_monthly_freshness_respects_release_lag_before_mid_month(monkeypat
 
 
 def test_collect_macro_indicators_records_stale_items(monkeypatch):
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _MacroLagManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _MacroLagManager())
     collector = MarketDataCollector("2026-02-27")
     result = asyncio.run(collector.collect_macro_indicators())
     assert result["cpi"].is_stale is True
@@ -149,7 +149,7 @@ def test_index_daily_fallback_short_window_returns_none_changes(monkeypatch):
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(
@@ -179,7 +179,7 @@ def test_index_daily_fallback_calculates_exact_5d_window(monkeypatch):
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(
@@ -210,7 +210,7 @@ def test_index_daily_fallback_calculates_exact_120d_window(monkeypatch):
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(
@@ -243,7 +243,7 @@ def test_minute_fallback_returns_none_window_changes(monkeypatch):
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(
@@ -281,7 +281,7 @@ def test_previous_trade_fallback_returns_none_window_changes(monkeypatch):
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(
@@ -329,7 +329,7 @@ def test_fetch_fx_from_tushare_discovers_dxy_fxcm_proxy(monkeypatch):
 
     pro = _Pro()
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(pro))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
@@ -384,7 +384,7 @@ def test_fetch_fx_from_tushare_dxy_prefers_exact_usdollar_fxcm(monkeypatch):
 
     pro = _Pro()
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(pro))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
@@ -411,7 +411,7 @@ def test_fetch_fx_from_tushare_dxy_returns_none_with_single_usable_row(monkeypat
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
@@ -440,7 +440,7 @@ def test_fetch_fx_from_tushare_dxy_returns_none_without_usdollar_candidate(monke
 
     pro = _Pro()
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(pro))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
@@ -465,7 +465,7 @@ def test_fetch_fx_from_tushare_dxy_rejects_out_of_range_proxy_value(monkeypatch)
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY美元指数"))
@@ -494,7 +494,7 @@ def test_fetch_fx_from_tushare_dxy_rejects_out_of_range_prior_proxy_value(monkey
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("DXY", "DXY缇庡厓鎸囨暟"))
@@ -523,7 +523,7 @@ def test_fetch_fx_from_tushare_usdcny_skips_zero_quote_candidates(monkeypatch):
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("USDCNY", "USD/CNY在岸"))
@@ -553,7 +553,7 @@ def test_fetch_fx_from_tushare_usdcny_returns_none_when_all_quotes_invalid(monke
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = asyncio.run(collector._fetch_fx_from_tushare("USDCNY", "USD/CNY在岸"))
@@ -583,7 +583,7 @@ def test_fetch_etf_total_size_on_date_sums_exchanges_and_converts_to_yi(monkeypa
 
     pro = _Pro()
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(pro))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = collector._fetch_etf_total_size_on_date("20260427")
@@ -612,7 +612,7 @@ def test_fetch_etf_total_size_on_date_returns_none_when_one_exchange_missing(mon
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = collector._fetch_etf_total_size_on_date("20260427")
@@ -637,7 +637,7 @@ def test_fetch_etf_total_size_on_date_returns_none_when_one_exchange_has_no_usab
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = collector._fetch_etf_total_size_on_date("20260427")
@@ -666,7 +666,7 @@ def test_fetch_etf_flow_from_tushare_share_size_builds_trade_cal_windows(monkeyp
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = collector._fetch_etf_flow_from_tushare_share_size()
@@ -700,7 +700,7 @@ def test_fetch_etf_flow_from_tushare_share_size_returns_none_when_window_incompl
             return self.pro
 
     monkeypatch.setitem(sys.modules, "tushare", _Tushare(_Pro()))
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     result = collector._fetch_etf_flow_from_tushare_share_size()
@@ -709,7 +709,7 @@ def test_fetch_etf_flow_from_tushare_share_size_returns_none_when_window_incompl
 
 
 def test_collect_fund_flow_keeps_etf_missing_when_only_estimated_fallback(monkeypatch):
-    monkeypatch.setattr("scripts.stage1_data_collector.get_manager", lambda: _FakeManager())
+    monkeypatch.setattr("datasource.engines.stage1.collector.get_manager", lambda: _FakeManager())
     collector = MarketDataCollector("2026-04-27")
 
     async def _empty_hsgt():
@@ -753,3 +753,19 @@ def test_collect_fund_flow_keeps_etf_missing_when_only_estimated_fallback(monkey
     assert len(etf_missing) == 1
     assert "etf_share_size" in etf_missing[0]["reason"]
     assert "estimated fallback" in etf_missing[0]["reason"]
+
+
+def test_c6_collector_reexport_is_canonical():
+    import scripts.stage1_data_collector as s
+    from datasource.engines.stage1 import collector as c
+
+    assert s.MarketDataCollector is c.MarketDataCollector
+    assert s.Stage1DataCollector is c.MarketDataCollector
+    for name in (
+        "_calc_change_from_trend_history",
+        "_is_missing_change",
+        "_backfill_stage1_trend",
+        "_normalize_date_str",
+        "_resolve_last_trading_day",
+    ):
+        assert getattr(s, name) is getattr(c, name), name
