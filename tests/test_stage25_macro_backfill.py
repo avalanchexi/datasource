@@ -515,6 +515,39 @@ def test_apply_macro_entry_preserves_existing_non_backfill_value_source(
     assert entry["value_source"] == "manual_override"
 
 
+def test_apply_macro_entry_macro_caliber_fills_missing_change_rate():
+    entry = {
+        "indicator_name": "CPI同比",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "",
+        "source": "待WebSearch补充",
+        "note": "",
+        "value_source": "manual_override",
+    }
+    payload = {
+        "indicator_name": "CPI同比",
+        "current_value": 1.2,
+        "previous_value": 1.0,
+        "unit": "%",
+        "source": "manual",
+    }
+
+    assert _apply_macro_entry(
+        "cpi",
+        entry,
+        payload,
+        "2026-06-30",
+        trend_history_base_dir=None,
+    )
+
+    assert entry["previous_value"] == 1.0
+    assert entry["change_rate"] == 0.2
+    assert entry["value_source"] == "manual_override"
+
+
 def test_backfill_trend_changes_tags_macro_event_history_source(tmp_path):
     _write_events(
         tmp_path,

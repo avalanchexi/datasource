@@ -13,7 +13,6 @@ from datasource.engines.stage2_5 import trend_backfill
 from datasource.engines.stage2_5.common import (
     DEFAULT_SOURCE_LABEL,
     SOURCE_ANOMALY_LABEL,
-    _calc_change_rate_pct,
     _calc_previous_from_change_rate_pct,
     _coerce_bool,
     _coerce_float,
@@ -269,27 +268,31 @@ def _apply_macro_entry(
         else:
             fallback_reason = hist_prev.get("reason")
 
-    # 兜底回填变化率：若有 current_value + previous_value 且 change_rate 缺失，自动按百分比补齐
+    # 兜底回填变化率：若有 current_value + previous_value 且 change_rate 缺失，按宏观指标口径补齐
     if (
         entry["change_rate"] is None
         and entry["current_value"] is not None
         and entry["previous_value"] is not None
     ):
-        change_rate_pct = _calc_change_rate_pct(
-            entry["current_value"], entry["previous_value"]
+        change_rate, caliber_note = trend_backfill._macro_change_rate(
+            indicator_key,
+            float(entry["current_value"]),
+            float(entry["previous_value"]),
+            unit=entry.get("unit"),
         )
-        if change_rate_pct is not None:
-            entry["change_rate"] = change_rate_pct
-            if not entry.get("note"):
-                entry["note"] = ""
-            if entry["note"]:
-                entry["note"] += "；"
-            entry["note"] += (
-                "auto-backfilled change_rate% via "
-                "(current-previous)/abs(previous)*100"
+        if change_rate is not None:
+            entry["change_rate"] = change_rate
+            _append_note(
+                entry, "auto-backfilled change_rate via macro caliber"
             )
+            if caliber_note == "caliber_inferred":
+                _append_note(entry, "caliber_inferred")
         else:
-            fallback_reason = fallback_reason or "change_rate_pct_div_by_zero"
+            fallback_reason = (
+                fallback_reason
+                or caliber_note
+                or "change_rate_pct_div_by_zero"
+            )
 
     # 兜底回填前值：若有 current_value + change_rate(%) 但前值缺失，按百分比反推
     if entry["previous_value"] is None and entry["current_value"] is not None:

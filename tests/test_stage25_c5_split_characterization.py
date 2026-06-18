@@ -584,7 +584,7 @@ def test_entry_apply_functions_locked():
     ) is True
     assert macro_entry["current_value"] == 4.5
     assert macro_entry["previous_value"] == 4.0
-    assert macro_entry["change_rate"] == 12.5
+    assert macro_entry["change_rate"] == 0.5
     assert macro_entry["value_type"] == "yoy_month"
 
 

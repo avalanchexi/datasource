@@ -2009,8 +2009,8 @@ def test_apply_macro_entry_autofills_change_rate_from_previous_value():
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.1)
     assert entry["previous_value"] == pytest.approx(1.9)
-    assert entry["change_rate"] == pytest.approx(10.5263)
-    assert "auto-backfilled change_rate% via (current-previous)/abs(previous)*100" in str(entry.get("note") or "")
+    assert entry["change_rate"] == pytest.approx(0.2)
+    assert "auto-backfilled change_rate via macro caliber" in str(entry.get("note") or "")
 
 
 def test_apply_macro_entry_backfills_previous_from_change_rate_percent(monkeypatch):
@@ -2045,7 +2045,7 @@ def test_apply_macro_entry_backfills_previous_from_change_rate_percent(monkeypat
     assert "auto-backfilled previous_value via current/(1+change_rate/100)" in str(entry.get("note") or "")
 
 
-def test_apply_macro_entry_marks_reason_when_previous_is_zero():
+def test_apply_macro_entry_uses_point_difference_when_previous_is_zero():
     entry = {
         "indicator_name": "CPI同比",
         "current_value": None,
@@ -2068,8 +2068,8 @@ def test_apply_macro_entry_marks_reason_when_previous_is_zero():
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.1)
     assert entry["previous_value"] == pytest.approx(0.0)
-    assert entry["change_rate"] is None
-    assert "reason=change_rate_pct_div_by_zero" in str(entry.get("note") or "")
+    assert entry["change_rate"] == pytest.approx(2.1)
+    assert "reason=change_rate_pct_div_by_zero" not in str(entry.get("note") or "")
 
 
 def test_apply_macro_entry_skips_non_stale_existing_value():
