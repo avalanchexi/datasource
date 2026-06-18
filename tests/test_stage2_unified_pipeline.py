@@ -2,8 +2,10 @@ import asyncio
 import json
 from pathlib import Path
 
+from datasource.engines.stage2 import cli as stage2_cli
+from datasource.engines.stage2 import execution as stage2_execution
+from datasource.engines.stage2 import validation as stage2_validation
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
-from scripts import stage2_unified_enhancer as s
 
 
 class DummyClient:
@@ -52,7 +54,7 @@ def test_unified_pipeline_write_back(tmp_path: Path):
     tasks = planner.build_tasks(payload)
 
     completed, failures, web_results = asyncio.run(
-        s._execute_tasks(
+        stage2_execution._execute_tasks(
             tasks,
             payload,
             DummyClient(),
@@ -62,8 +64,8 @@ def test_unified_pipeline_write_back(tmp_path: Path):
             cache_ttl=60,
         )
     )
-    flagged = s._flag_fund_flow_anomalies(payload)
-    s._compute_derived_metrics(payload)
+    flagged = stage2_validation._flag_fund_flow_anomalies(payload)
+    stage2_cli._compute_derived_metrics(payload)
 
     # CPI should be filled
     assert payload["macro_indicators"]["cpi"]["current_value"] == 2.3

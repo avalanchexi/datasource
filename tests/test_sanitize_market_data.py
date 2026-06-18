@@ -3,7 +3,7 @@ from pathlib import Path
 
 
 def _load_sanitizer():
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "sanitize_market_data.py"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "tools" / "market_data_sanitize.py"
     spec = importlib.util.spec_from_file_location("sanitize_market_data", script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

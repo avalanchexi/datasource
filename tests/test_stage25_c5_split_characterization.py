@@ -8,19 +8,14 @@ from __future__ import annotations
 
 import importlib
 import json
-import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from datasource.engines.stage2_5 import cli, common, core, entry_mergers, trend_backfill
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
-INJ = importlib.import_module("stage2_5_injector")
 
 
 C5_MOVED_NAMES = [
@@ -90,9 +85,21 @@ C5_MOVED_NAMES = [
 ]
 
 
+def _canonical_namespace() -> SimpleNamespace:
+    namespace = {}
+    for module in (cli, common, core, entry_mergers, trend_backfill):
+        for name in C5_MOVED_NAMES:
+            if hasattr(module, name):
+                namespace[name] = getattr(module, name)
+    return SimpleNamespace(**namespace)
+
+
+INJ = _canonical_namespace()
+
+
 @pytest.mark.parametrize("name", C5_MOVED_NAMES)
-def test_c5_import_surface_monolith(name):
-    assert hasattr(INJ, name), f"stage2_5_injector should still export {name}"
+def test_c5_canonical_modules_export_moved_names(name):
+    assert hasattr(INJ, name), f"canonical stage2_5 modules should export {name}"
 
 
 def test_c5_reexports_are_canonical_module_objects():

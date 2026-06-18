@@ -11,16 +11,10 @@ import importlib
 import inspect
 import sys
 from datetime import timezone
-from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
-ENH = importlib.import_module("stage2_unified_enhancer")
 COMMON = importlib.import_module("datasource.engines.stage2.common")
 CLI = importlib.import_module("datasource.engines.stage2.cli")
 QUERY_PLANNER = importlib.import_module("datasource.engines.stage2.query_planner")
@@ -220,6 +214,17 @@ C2_MODULE_EXPORTS = {
     ],
     EXECUTION: C3_MOVED_NAMES,
 }
+
+
+def _stage2_namespace():
+    attrs = {"datetime": QUERY_PLANNER.datetime}
+    for module, names in C2_MODULE_EXPORTS.items():
+        for name in names:
+            attrs[name] = getattr(module, name)
+    return SimpleNamespace(**attrs)
+
+
+ENH = _stage2_namespace()
 
 
 @pytest.mark.parametrize(
@@ -923,7 +928,7 @@ def test_apply_extraction_category_paths_locked():
 
 @pytest.mark.parametrize("name", ALL_STAGE2_MOVED_NAMES)
 def test_import_surface_monolith(name):
-    assert hasattr(ENH, name), f"monolith should still expose {name}"
+    assert hasattr(ENH, name), f"canonical stage2 namespace should expose {name}"
 
 
 def test_moved_reexports_are_same_objects_as_new_modules():

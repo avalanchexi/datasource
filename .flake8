@@ -1,4 +1,5 @@
 [flake8]
 per-file-ignores =
     src/datasource/engines/stage1/collector.py:E501,F541,E306,E722,E302
+    src/datasource/engines/stage2/cli.py:E501
     src/datasource/engines/stage2/execution.py:E501,E131

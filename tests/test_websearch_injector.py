@@ -16,8 +16,15 @@ SRC_DIR = PROJECT_ROOT / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-import scripts.stage2_5_injector as injector
-from datasource.engines.stage2_5 import core, trend_backfill
+from datasource.engines.stage2_5 import (
+    common,
+    core,
+    entry_mergers,
+    gap_sync,
+    manual_official,
+    schema_coercion,
+    trend_backfill,
+)
 from datasource.generators import simple_report
 from datasource.models.market_data_contract import CommodityData
 
@@ -33,12 +40,12 @@ from datasource.models.market_data_contract import CommodityData
     ],
 )
 def test_coerce_float_handles_percent_and_units(raw, expected):
-    assert injector._coerce_float(raw) == expected
+    assert common._coerce_float(raw) == expected
 
 
 @pytest.mark.parametrize("raw", [7.13, "7.13"])
 def test_is_placeholder_numeric_preserves_legacy_713_placeholder(raw):
-    assert injector._is_placeholder_numeric(raw) is True
+    assert common._is_placeholder_numeric(raw) is True
 
 
 def test_apply_fund_flow_entry_normalizes_websearch_payload():
@@ -51,7 +58,7 @@ def test_apply_fund_flow_entry_normalizes_websearch_payload():
         "note": "11月5日成交创阶段高位",
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
     assert updated is True
     assert entry["recent_5d"] == pytest.approx(140.0)
     assert entry["total_120d"] == pytest.approx(1800.0)
@@ -94,7 +101,7 @@ def test_apply_fund_flow_entry_field_retry_evidence_overrides_top_window_claim()
         },
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert entry["source_tier"] == "tier2"
@@ -135,7 +142,7 @@ def test_apply_fund_flow_entry_recomputes_nested_retry_source_tier_from_url():
         },
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert entry["source_tier"] == "tier2"
@@ -153,7 +160,7 @@ def test_apply_fund_flow_entry_marks_zero_anomaly():
         "source": "同花顺",
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "southbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "southbound", payload)
     assert updated is True
     assert entry["recent_5d"] == 0.0
     assert entry["total_120d"] == 0.0
@@ -170,7 +177,7 @@ def test_apply_fund_flow_entry_accepts_current_value_only():
         "source": "每日经济新闻",
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
     assert updated is True
     assert entry["current_value"] == pytest.approx(35.6)
     assert entry["current_date"] == "2026-01-12"
@@ -193,7 +200,7 @@ def test_apply_fund_flow_entry_overrides_suspicious_stage2_pair():
         "source": "东方财富",
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
     assert updated is True
     assert entry["recent_5d"] == pytest.approx(268.5)
     assert entry["total_120d"] == pytest.approx(1320.2)
@@ -203,7 +210,7 @@ def test_apply_fund_flow_entry_overrides_suspicious_stage2_pair():
 
 def test_create_monetary_placeholder_keeps_date_empty_when_unknown():
     metadata = {"date": "2025-11-14"}
-    placeholder = injector._create_monetary_placeholder("dr007", {"unit": "%"}, metadata)
+    placeholder = entry_mergers._create_monetary_placeholder("dr007", {"unit": "%"}, metadata)
     assert placeholder["policy_name"] == "DR007"
     assert placeholder["date"] == ""
     assert placeholder["is_estimated"] is True
@@ -227,7 +234,7 @@ def test_apply_monetary_entry_uses_change_rate_when_delta_missing():
         "date": "2025-11-14",
         "source": "全国银行间同业拆借中心",
     }
-    updated = injector._apply_monetary_entry("dr007", entry, payload, "2025-11-14")
+    updated = entry_mergers._apply_monetary_entry("dr007", entry, payload, "2025-11-14")
     assert updated is True
     assert entry["current_value"] == pytest.approx(1.85)
     assert entry["change_from_120d"] == pytest.approx(-0.15)
@@ -258,7 +265,7 @@ def test_merge_bond_entry_marks_low_confidence_when_history_base_estimated(monke
         }
 
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_history)
-    merged = injector._merge_bond_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_bond_entry(existing, payload, is_manual=True)
     assert merged["change_5d_bp"] == pytest.approx(2.1)
     assert merged["change_120d_bp"] == pytest.approx(-8.4)
     assert merged["trend_history_confidence"] == "low"
@@ -294,7 +301,7 @@ def test_merge_bond_entry_preserves_date_fields(monkeypatch):
         }
 
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_history)
-    merged = injector._merge_bond_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_bond_entry(existing, payload, is_manual=True)
     assert merged["date"] == "2026-02-09"
     assert merged["as_of_date"] == "2026-02-09"
 
@@ -322,7 +329,7 @@ def test_backfill_cdb_proxy_changes_from_cn10y_for_estimated_spread():
         ]
     }
 
-    changed = injector._backfill_cdb_proxy_changes_from_cn10y(market_data)
+    changed = trend_backfill._backfill_cdb_proxy_changes_from_cn10y(market_data)
 
     cdb = market_data["bonds"][1]
     assert changed == 2
@@ -352,7 +359,7 @@ def test_coerce_stage2_results_preserves_bond_estimation_metadata():
         ]
     }
 
-    schema = injector._coerce_stage2_results_to_schema(raw)
+    schema = schema_coercion._coerce_stage2_results_to_schema(raw)
 
     cdb = schema["bonds"][0]
     assert cdb["symbol"] == "CN10Y_CDB"
@@ -386,7 +393,7 @@ def test_apply_monetary_entry_keeps_none_when_no_previous_value(monkeypatch):
         return {"change_from_120d": None, "reason": "no_previous_value"}
 
     monkeypatch.setattr(trend_backfill, "_calc_change_from_event_history", _fake_hist)
-    updated = injector._apply_monetary_entry("mlf", entry, payload, "2026-02-06")
+    updated = entry_mergers._apply_monetary_entry("mlf", entry, payload, "2026-02-06")
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.0)
     assert entry["change_from_120d"] is None
@@ -401,13 +408,13 @@ def test_remove_top_missing_on_skip_keeps_stage3_unblocked():
         "source_url": "https://www.tradingeconomics.com/commodity/baltic",
     }
 
-    injector._remove_top_missing_on_skip(market_data, "bdi", entry)
+    gap_sync._remove_top_missing_on_skip(market_data, "bdi", entry)
 
     assert market_data["missing_items"] == ["cpi"]
 
 
 def test_stock_index_merge_preserves_source_url_and_metadata():
-    merged = injector._merge_stock_index_entry(
+    merged = entry_mergers._merge_stock_index_entry(
         {
             "symbol": "000300",
             "name": "沪深300",
@@ -435,7 +442,7 @@ def test_stock_index_merge_preserves_source_url_and_metadata():
 
 
 def test_stock_index_build_preserves_source_url_alias():
-    built = injector._build_stock_index_entry(
+    built = entry_mergers._build_stock_index_entry(
         "000016",
         {
             "name": "上证50",
@@ -449,7 +456,7 @@ def test_stock_index_build_preserves_source_url_alias():
 
 
 def test_coerce_stage2_results_uses_raw_result_url_when_extraction_lacks_source_url():
-    converted = injector._coerce_stage2_results_to_schema(
+    converted = schema_coercion._coerce_stage2_results_to_schema(
         {
             "results": [
                 {
@@ -497,7 +504,7 @@ def test_merge_forex_entry_uses_prev_session_change_for_daily(monkeypatch):
 
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
-    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_forex_entry(existing, payload, is_manual=True)
     assert merged["daily_change"] == pytest.approx(-0.16)
     assert merged["change_120d"] == pytest.approx(-3.32)
 
@@ -531,13 +538,13 @@ def test_merge_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch)
         },
     )
 
-    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_forex_entry(existing, payload, is_manual=True)
 
     assert merged["daily_change"] == pytest.approx(0.0)
     assert merged["daily_change_basis"] == "trend_history"
     assert merged["daily_change_base_date"] == "2026-06-02"
     assert "reason_1d" not in merged
-    assert injector._should_backfill_forex_daily_change(merged) is False
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is False
 
 
 def test_merge_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
@@ -581,7 +588,7 @@ def test_merge_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_forex_entry(existing, payload, is_manual=True)
 
     assert merged["change_120d"] == pytest.approx(0.0)
     assert merged["change_120d_basis"] == "trend_history"
@@ -627,7 +634,7 @@ def test_merge_forex_entry_preserves_trend_history_evidence_when_payload_change_
         },
     )
 
-    merged = injector._merge_forex_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_forex_entry(existing, payload, is_manual=True)
 
     assert merged["daily_change"] == pytest.approx(0.0)
     assert merged["daily_change_basis"] == "trend_history"
@@ -656,7 +663,7 @@ def test_merge_forex_entry_clears_stale_120d_evidence_for_payload_zero():
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -689,7 +696,7 @@ def test_merge_forex_entry_preserves_valid_payload_120d_zero_evidence():
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -722,7 +729,7 @@ def test_merge_forex_entry_preserves_payload_daily_change_evidence():
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -734,7 +741,7 @@ def test_merge_forex_entry_preserves_payload_daily_change_evidence():
     assert merged["daily_change_base_date"] == "2026-06-02"
     assert merged["daily_change_source_url"] == "https://example.com/fx"
     assert merged["daily_change_base_price"] == pytest.approx(6.8184)
-    assert injector._should_backfill_forex_daily_change(merged) is False
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is False
 
 
 def test_merge_forex_entry_drops_stale_daily_evidence_when_payload_daily_evidence_invalid():
@@ -763,7 +770,7 @@ def test_merge_forex_entry_drops_stale_daily_evidence_when_payload_daily_evidenc
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -779,7 +786,7 @@ def test_merge_forex_entry_drops_stale_daily_evidence_when_payload_daily_evidenc
     assert "previous_value" not in merged
     assert "previous_rate" not in merged
     assert "previous_price" not in merged
-    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is True
 
 
 def test_merge_forex_entry_clears_stale_daily_evidence_for_explicit_missing_payload_daily_change():
@@ -805,7 +812,7 @@ def test_merge_forex_entry_clears_stale_daily_evidence_for_explicit_missing_payl
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -817,7 +824,7 @@ def test_merge_forex_entry_clears_stale_daily_evidence_for_explicit_missing_payl
     assert "daily_change_base_date" not in merged
     assert "base_1d_date" not in merged
     assert "reason_1d" not in merged
-    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is True
 
 
 def test_merge_forex_entry_cleans_invalid_orig_daily_evidence_when_payload_daily_absent():
@@ -840,7 +847,7 @@ def test_merge_forex_entry_cleans_invalid_orig_daily_evidence_when_payload_daily
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -852,7 +859,7 @@ def test_merge_forex_entry_cleans_invalid_orig_daily_evidence_when_payload_daily
     assert "daily_change_window_evidence" not in merged
     assert "daily_change_base_date" not in merged
     assert "reason_1d" not in merged
-    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is True
 
 
 def test_merge_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
@@ -869,7 +876,7 @@ def test_merge_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -883,7 +890,7 @@ def test_merge_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
 
 @pytest.mark.parametrize("trend", ["flat", "sideways"])
 def test_merge_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zero(trend):
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         {"pair": "USDCNY", "current_rate": 6.8184},
         {
             "pair": "USDCNY",
@@ -900,7 +907,7 @@ def test_merge_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zer
 
 
 def test_merge_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         {"pair": "USDCNY", "current_rate": 6.8184},
         {
             "pair": "USDCNY",
@@ -917,7 +924,7 @@ def test_merge_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
     )
 
     assert merged["change_120d"] == pytest.approx(1.2)
-    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is True
     assert merged["trend"] != "flat"
 
 
@@ -941,7 +948,7 @@ def test_merge_forex_entry_cleans_invalid_orig_evidence_for_nonzero_changes_when
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -974,7 +981,7 @@ def test_merge_forex_entry_preserves_valid_orig_daily_evidence_when_payload_dail
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -984,7 +991,7 @@ def test_merge_forex_entry_preserves_valid_orig_daily_evidence_when_payload_dail
     assert merged["daily_change"] == pytest.approx(0.0)
     assert merged["daily_change_basis"] == "direct_daily_series"
     assert merged["daily_change_base_date"] == "2026-06-02"
-    assert injector._should_backfill_forex_daily_change(merged) is False
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is False
 
 
 def test_merge_forex_entry_preserves_valid_orig_base_1d_date_when_payload_daily_absent():
@@ -1004,7 +1011,7 @@ def test_merge_forex_entry_preserves_valid_orig_base_1d_date_when_payload_daily_
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -1013,7 +1020,7 @@ def test_merge_forex_entry_preserves_valid_orig_base_1d_date_when_payload_daily_
 
     assert merged["daily_change"] == pytest.approx(0.0)
     assert merged["base_1d_date"] == "2026-06-02"
-    assert injector._should_backfill_forex_daily_change(merged) is False
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is False
 
 
 def test_merge_forex_entry_cleans_invalid_orig_120d_evidence_when_payload_120d_absent():
@@ -1034,7 +1041,7 @@ def test_merge_forex_entry_cleans_invalid_orig_120d_evidence_when_payload_120d_a
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -1064,7 +1071,7 @@ def test_merge_forex_entry_preserves_valid_orig_120d_evidence_when_payload_120d_
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -1097,7 +1104,7 @@ def test_merge_forex_entry_clears_valid_orig_120d_evidence_for_explicit_missing_
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -1164,26 +1171,26 @@ def test_merge_forex_entry_clears_valid_orig_120d_evidence_for_explicit_missing_
     ],
 )
 def test_should_backfill_forex_daily_change_handles_evidence_and_failure_text(entry, expected):
-    assert injector._should_backfill_forex_daily_change(entry) is expected
+    assert trend_backfill._should_backfill_forex_daily_change(entry) is expected
 
 
 def test_forex_change_computed_markers_reject_not_available_variants():
-    assert injector._has_forex_daily_change_computed_marker("trend_history") is True
-    assert injector._has_forex_daily_change_computed_marker("direct_daily_series") is True
-    assert injector._has_forex_daily_change_computed_marker("not-available_trend_history") is False
-    assert injector._has_forex_daily_change_computed_marker("not_available_trend_history") is False
-    assert injector._has_forex_120d_change_computed_marker("trend_history") is True
-    assert injector._has_forex_120d_change_computed_marker("not-available_trend_history") is False
-    assert injector._has_forex_120d_change_computed_marker("not_available_trend_history") is False
+    assert trend_backfill._has_forex_daily_change_computed_marker("trend_history") is True
+    assert trend_backfill._has_forex_daily_change_computed_marker("direct_daily_series") is True
+    assert trend_backfill._has_forex_daily_change_computed_marker("not-available_trend_history") is False
+    assert trend_backfill._has_forex_daily_change_computed_marker("not_available_trend_history") is False
+    assert trend_backfill._has_forex_120d_change_computed_marker("trend_history") is True
+    assert trend_backfill._has_forex_120d_change_computed_marker("not-available_trend_history") is False
+    assert trend_backfill._has_forex_120d_change_computed_marker("not_available_trend_history") is False
 
 
 def test_forex_120d_change_evidence_rejects_failed_base_price_text():
-    assert injector._has_forex_120d_change_evidence({"change_120d_base_price": 6.82}) is True
-    assert injector._has_forex_120d_change_evidence({"change_120d_base_price": "failed 6.82"}) is False
+    assert trend_backfill._has_forex_120d_change_evidence({"change_120d_base_price": 6.82}) is True
+    assert trend_backfill._has_forex_120d_change_evidence({"change_120d_base_price": "failed 6.82"}) is False
 
 
 def test_forex_120d_change_evidence_rejects_daily_change_rate_marker():
-    assert injector._has_forex_120d_change_evidence({"change_120d_basis": "daily_change_rate"}) is False
+    assert trend_backfill._has_forex_120d_change_evidence({"change_120d_basis": "daily_change_rate"}) is False
 
 
 def test_merge_forex_entry_rejects_not_available_payload_daily_evidence():
@@ -1205,7 +1212,7 @@ def test_merge_forex_entry_rejects_not_available_payload_daily_evidence():
         "source": "manual",
     }
 
-    merged = injector._merge_forex_entry(
+    merged = entry_mergers._merge_forex_entry(
         existing,
         payload,
         is_manual=True,
@@ -1214,7 +1221,7 @@ def test_merge_forex_entry_rejects_not_available_payload_daily_evidence():
 
     assert merged["daily_change"] == pytest.approx(0.0)
     assert "daily_change_basis" not in merged
-    assert injector._should_backfill_forex_daily_change(merged) is True
+    assert trend_backfill._should_backfill_forex_daily_change(merged) is True
 
 
 def test_backfill_trend_changes_replaces_untrusted_zero_forex_daily_change(monkeypatch):
@@ -1261,7 +1268,7 @@ def test_backfill_trend_changes_replaces_untrusted_zero_forex_daily_change(monke
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 2
@@ -1316,7 +1323,7 @@ def test_backfill_trend_changes_drops_raw_flat_when_daily_unusable_but_120d_usab
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 0
@@ -1377,7 +1384,7 @@ def test_backfill_trend_changes_stamps_forex_120d_trend_history_evidence(monkeyp
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 1
@@ -1434,7 +1441,7 @@ def test_backfill_trend_changes_preserves_valid_forex_120d_zero_when_history_mis
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 0
@@ -1480,7 +1487,7 @@ def test_backfill_trend_changes_clears_failed_forex_evidence_when_history_missin
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 0
@@ -1535,7 +1542,7 @@ def test_backfill_trend_changes_daily_change_ignores_120d_failure_note(monkeypat
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 1
@@ -1596,7 +1603,7 @@ def test_backfill_trend_changes_daily_change_ignores_existing_failure_note(monke
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 1
@@ -1649,7 +1656,7 @@ def test_backfill_trend_changes_daily_change_ignores_fx_daily_quote_source(monke
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 1
@@ -1703,7 +1710,7 @@ def test_backfill_trend_changes_daily_change_ignores_no_previous_value_note(monk
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 1
@@ -1758,7 +1765,7 @@ def test_backfill_trend_changes_preserves_explicit_zero_forex_daily_change(monke
     monkeypatch.setattr(trend_backfill, "_calc_change_from_trend_history", _fake_hist)
     monkeypatch.setattr(trend_backfill, "_calc_daily_change_from_trend_history", _fake_daily_hist)
 
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     fx = market_data["forex"][0]
     assert stats["forex"] == 1
@@ -1796,7 +1803,7 @@ def test_backfill_trend_changes_clears_no_previous_note_when_monetary_filled(mon
         }
 
     monkeypatch.setattr(trend_backfill, "_calc_change_from_event_history", _fake_event_hist)
-    stats = injector._backfill_trend_changes(market_data)
+    stats = trend_backfill._backfill_trend_changes(market_data)
 
     entry = market_data["monetary_policy"]["reverse_repo"]
     assert stats["monetary_policy"] == 1
@@ -1838,7 +1845,7 @@ def test_run_post_write_trend_backfill_persists_output_and_resets_issues(monkeyp
     monkeypatch.setattr(trend_backfill, "_refresh_stage2_notes", lambda metadata, gap: None)
     monkeypatch.setattr(trend_backfill, "_cleanup_metadata_missing", lambda metadata, payload: None)
 
-    stats = injector._run_post_write_trend_backfill(market_data, output_path)
+    stats = trend_backfill._run_post_write_trend_backfill(market_data, output_path)
     saved = json.loads(output_path.read_text(encoding="utf-8"))
 
     assert stats["monetary_policy"] == 1
@@ -1864,8 +1871,8 @@ def test_is_missing_item_filled_requires_compare_and_non_estimated():
             }
         ],
     }
-    assert injector._is_missing_item_filled(market_data, "macro_indicators", "industrial") is False
-    assert injector._is_missing_item_filled(market_data, "bonds", "CN10Y_CDB") is True
+    assert gap_sync._is_missing_item_filled(market_data, "macro_indicators", "industrial") is False
+    assert gap_sync._is_missing_item_filled(market_data, "bonds", "CN10Y_CDB") is True
 
 
 def test_enforce_quality_blockers_marks_missing_items():
@@ -1893,7 +1900,7 @@ def test_enforce_quality_blockers_marks_missing_items():
         "stock_indices": [],
         "fund_flow": {},
     }
-    blockers = injector._enforce_quality_blockers(market_data)
+    blockers = core._enforce_quality_blockers(market_data)
 
     assert {"category": "macro_indicators", "key": "industrial", "reason": "missing_compare_values"} in blockers
     assert {"category": "monetary_policy", "key": "mlf", "reason": "estimated_not_allowed"} in blockers
@@ -1920,7 +1927,7 @@ def test_enforce_quality_blockers_marks_etf_window_missing():
         },
     }
 
-    blockers = injector._enforce_quality_blockers(market_data)
+    blockers = core._enforce_quality_blockers(market_data)
     assert {"category": "fund_flow", "key": "etf", "reason": "fund_flow_window_missing"} in blockers
     assert "etf" in market_data["missing_items"]
 
@@ -1942,7 +1949,7 @@ def test_collect_gc_non_blocking_warnings_risk_and_anomaly():
         ]
     }
 
-    warnings = injector._collect_gc_non_blocking_warnings(market_data, websearch_raw)
+    warnings = core._collect_gc_non_blocking_warnings(market_data, websearch_raw)
     codes = {item.get("code") for item in warnings}
     assert "gc_f_source_risk" in codes
     assert "gc_f_price_anomaly" in codes
@@ -1973,7 +1980,7 @@ def test_sync_backfill_issues_to_logs_merges_non_blocking_warnings(tmp_path: Pat
         "fund_flow": {},
     }
 
-    injector._sync_backfill_issues_to_logs(market_data)
+    trend_backfill._sync_backfill_issues_to_logs(market_data)
     obs = json.loads((tmp_path / "logs" / "runs" / "20260305" / "observability.json").read_text(encoding="utf-8"))
     warnings = obs.get("non_blocking_warnings", [])
     assert isinstance(warnings, list) and warnings
@@ -1997,7 +2004,7 @@ def test_apply_macro_entry_autofills_change_rate_from_previous_value():
         "source": "国家统计局",
     }
 
-    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-09")
+    updated = entry_mergers._apply_macro_entry("cpi", entry, payload, "2026-02-09")
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.1)
     assert entry["previous_value"] == pytest.approx(1.9)
@@ -2029,7 +2036,7 @@ def test_apply_macro_entry_backfills_previous_from_change_rate_percent(monkeypat
         lambda *args, **kwargs: {"previous_value": None, "change_rate": None, "reason": "no_previous_value"},
     )
 
-    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-09")
+    updated = entry_mergers._apply_macro_entry("cpi", entry, payload, "2026-02-09")
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.1)
     assert entry["previous_value"] == pytest.approx(2.0)
@@ -2056,7 +2063,7 @@ def test_apply_macro_entry_marks_reason_when_previous_is_zero():
         "source": "国家统计局",
     }
 
-    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-09")
+    updated = entry_mergers._apply_macro_entry("cpi", entry, payload, "2026-02-09")
     assert updated is True
     assert entry["current_value"] == pytest.approx(2.1)
     assert entry["previous_value"] == pytest.approx(0.0)
@@ -2087,7 +2094,7 @@ def test_apply_macro_entry_skips_non_stale_existing_value():
         "date": "2026-01",
         "source": "国家统计局",
     }
-    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-27")
+    updated = entry_mergers._apply_macro_entry("cpi", entry, payload, "2026-02-27")
     assert updated is False
     assert entry["current_value"] == pytest.approx(2.1)
     assert entry["is_stale"] is False
@@ -2147,7 +2154,7 @@ def test_injection_summary_records_skipped_existing(tmp_path: Path, monkeypatch)
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     summary = output["metadata"]["injection_summary"]
@@ -2188,9 +2195,9 @@ def test_macro_entry_same_value_updates_metadata_without_force():
         "is_estimated": False,
         "note": "官方发布",
     }
-    summary = injector.InjectionSummary()
+    summary = core.InjectionSummary()
 
-    updated = injector._apply_macro_entry(
+    updated = entry_mergers._apply_macro_entry(
         "cpi",
         entry,
         payload,
@@ -2244,9 +2251,9 @@ def test_macro_entry_force_override_records_values():
         "source_url": "https://www.stats.gov.cn/sj/zxfb/",
         "is_estimated": False,
     }
-    summary = injector.InjectionSummary()
+    summary = core.InjectionSummary()
 
-    updated = injector._apply_macro_entry(
+    updated = entry_mergers._apply_macro_entry(
         "cpi",
         entry,
         payload,
@@ -2292,7 +2299,7 @@ def test_apply_macro_entry_overrides_stale_and_clears_flag():
         "date": "2026-01",
         "source": "国家统计局",
     }
-    updated = injector._apply_macro_entry("cpi", entry, payload, "2026-02-27", override_stale=True)
+    updated = entry_mergers._apply_macro_entry("cpi", entry, payload, "2026-02-27", override_stale=True)
     assert updated is True
     assert entry["current_value"] == pytest.approx(0.2)
     assert entry["date"] == "2026-01"
@@ -2334,7 +2341,7 @@ def test_rewrite_gap_monitor_after_injection_clears_stale_manual_required(tmp_pa
         "fund_flow": {},
     }
 
-    injector._rewrite_gap_monitor_after_injection(
+    gap_sync._rewrite_gap_monitor_after_injection(
         market_data,
         gap_monitor_path=gap_path,
         extra_issues=[],
@@ -2371,7 +2378,7 @@ def test_sync_backfill_issues_to_logs_rewrites_gap_monitor_even_without_issues(t
         "fund_flow": {},
     }
 
-    injector._sync_backfill_issues_to_logs(market_data, gap_monitor_path=gap_path)
+    trend_backfill._sync_backfill_issues_to_logs(market_data, gap_monitor_path=gap_path)
     payload = json.loads(gap_path.read_text(encoding="utf-8"))
     assert payload.get("manual_required", []) == []
     assert payload.get("pending_tasks", []) == []
@@ -2414,7 +2421,7 @@ def test_apply_macro_entry_same_value_merges_compare_fields():
         "is_estimated": False,
     }
 
-    updated = injector._apply_macro_entry(
+    updated = entry_mergers._apply_macro_entry(
         "industrial",
         entry,
         payload,
@@ -2447,7 +2454,7 @@ def test_apply_monetary_entry_same_value_merges_change_and_non_estimated_flag():
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2486,7 +2493,7 @@ def test_apply_monetary_entry_same_value_preserves_existing_official_source():
         "is_estimated": False,
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reverse_repo",
         entry,
         payload,
@@ -2524,7 +2531,7 @@ def test_apply_monetary_entry_same_value_preserves_official_non_estimated_status
         "is_estimated": True,
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reverse_repo",
         entry,
         payload,
@@ -2564,7 +2571,7 @@ def test_apply_monetary_entry_stale_override_preserves_official_source_and_statu
         "is_estimated": True,
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reverse_repo",
         entry,
         payload,
@@ -2598,7 +2605,7 @@ def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_manu
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2632,7 +2639,7 @@ def test_apply_monetary_entry_replaces_nonofficial_reserve_ratio_compare_gap():
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2664,7 +2671,7 @@ def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_sour
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2696,7 +2703,7 @@ def test_apply_monetary_entry_replaces_estimated_reserve_ratio_with_trusted_url_
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2728,7 +2735,7 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_http
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2759,7 +2766,7 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_chin
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2791,7 +2798,7 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_conf
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2824,7 +2831,7 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_with_mult
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2858,7 +2865,7 @@ def test_apply_monetary_entry_trusted_reserve_ratio_no_override_stale_preserves_
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2892,7 +2899,7 @@ def test_apply_monetary_entry_trusted_reserve_ratio_rrr_type_conflict_keeps_esti
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2926,7 +2933,7 @@ def test_apply_monetary_entry_stale_rrr_type_conflict_keeps_estimated_and_stale(
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2960,7 +2967,7 @@ def test_apply_monetary_entry_does_not_replace_estimated_reserve_ratio_without_e
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -2993,7 +3000,7 @@ def test_apply_monetary_entry_same_value_does_not_clear_estimated_without_explic
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -3024,7 +3031,7 @@ def test_apply_monetary_entry_non_manual_same_value_does_not_clear_estimated():
         "rrr_type": "weighted",
     }
 
-    updated = injector._apply_monetary_entry(
+    updated = entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         entry,
         payload,
@@ -3062,7 +3069,7 @@ def test_apply_macro_entry_same_value_no_override_stale_preserves_stale_flag():
         "is_estimated": False,
     }
 
-    updated = injector._apply_macro_entry(
+    updated = entry_mergers._apply_macro_entry(
         "industrial",
         entry,
         payload,
@@ -3108,13 +3115,13 @@ def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
         "fund_flow": {},
     }
 
-    injector._apply_pipeline_quality_state(market_data)
+    common._apply_pipeline_quality_state(market_data)
 
     assert _has_quality_blocker(market_data, "macro_indicators", "industrial", "missing_compare_values")
     assert _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio", "missing_compare_values")
     assert _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio")
 
-    injector._apply_macro_entry(
+    entry_mergers._apply_macro_entry(
         "industrial",
         market_data["macro_indicators"]["industrial"],
         {
@@ -3131,7 +3138,7 @@ def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
         is_manual=True,
         trend_history_base_dir=None,
     )
-    injector._apply_monetary_entry(
+    entry_mergers._apply_monetary_entry(
         "reserve_ratio",
         market_data["monetary_policy"]["reserve_ratio"],
         {
@@ -3146,7 +3153,7 @@ def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
         trend_history_base_dir=None,
     )
 
-    injector._apply_pipeline_quality_state(market_data)
+    common._apply_pipeline_quality_state(market_data)
 
     assert not _has_quality_blocker(market_data, "macro_indicators", "industrial", "missing_compare_values")
     assert not _has_quality_blocker(market_data, "monetary_policy", "reserve_ratio", "missing_compare_values")
@@ -3166,13 +3173,13 @@ def test_pipeline_quality_state_clears_after_same_value_stage25_merge():
     ],
 )
 def test_extract_domain_uses_hostname_only(raw, expected):
-    assert injector._extract_domain(raw) == expected
+    assert common._extract_domain(raw) == expected
 
 
 def test_official_domain_match_rejects_suffix_spoof():
-    assert injector._official_domain_matches("evilpbc.gov.cn.example.com", "pbc.gov.cn") is False
-    assert injector._official_domain_matches("evil.com", "pbc.gov.cn") is False
-    assert injector._official_domain_matches("www.pbc.gov.cn", "pbc.gov.cn") is True
+    assert manual_official._official_domain_matches("evilpbc.gov.cn.example.com", "pbc.gov.cn") is False
+    assert manual_official._official_domain_matches("evil.com", "pbc.gov.cn") is False
+    assert manual_official._official_domain_matches("www.pbc.gov.cn", "pbc.gov.cn") is True
 
 
 @pytest.mark.parametrize(
@@ -3188,7 +3195,7 @@ def test_official_domain_match_rejects_suffix_spoof():
     ],
 )
 def test_extract_source_url_requires_parseable_http_hostname(payload, expected):
-    assert injector._extract_source_url(payload) == expected
+    assert common._extract_source_url(payload) == expected
 
 
 def test_manual_official_mlf_payload_is_not_estimated(tmp_path: Path, monkeypatch):
@@ -3244,7 +3251,7 @@ def test_manual_official_mlf_payload_is_not_estimated(tmp_path: Path, monkeypatc
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["monetary_policy"]["mlf"]
@@ -3310,7 +3317,7 @@ def test_manual_official_usdcny_payload_is_not_estimated(tmp_path: Path, monkeyp
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["forex"][0]
@@ -3377,7 +3384,7 @@ def test_manual_third_party_mlf_url_with_official_text_stays_estimated(tmp_path:
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["monetary_policy"]["mlf"]
@@ -3439,7 +3446,7 @@ def test_manual_third_party_mlf_query_string_official_domain_stays_estimated(tmp
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["monetary_policy"]["mlf"]
@@ -3502,7 +3509,7 @@ def test_manual_malformed_mlf_url_with_official_text_stays_estimated(tmp_path: P
     )
 
     with pytest.raises(ValueError, match="monetary_policy.mlf"):
-        injector.inject_websearch_results(market_path, manual_path, output_path)
+        core.inject_websearch_results(market_path, manual_path, output_path)
 
 
 def test_manual_mlf_source_embedded_third_party_url_stays_estimated(tmp_path: Path, monkeypatch):
@@ -3557,7 +3564,7 @@ def test_manual_mlf_source_embedded_third_party_url_stays_estimated(tmp_path: Pa
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["monetary_policy"]["mlf"]
@@ -3621,7 +3628,7 @@ def test_manual_mlf_conflicting_untrusted_source_url_and_official_note_stays_est
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["monetary_policy"]["mlf"]
@@ -3683,7 +3690,7 @@ def test_manual_mlf_conflicting_trusted_and_malformed_url_stays_estimated(tmp_pa
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["monetary_policy"]["mlf"]
@@ -3745,11 +3752,11 @@ def test_manual_mlf_malformed_source_token_blocks_official_fallback(tmp_path: Pa
     )
 
     with pytest.raises(ValueError, match="monetary_policy.mlf"):
-        injector.inject_websearch_results(market_path, manual_path, output_path)
+        core.inject_websearch_results(market_path, manual_path, output_path)
 
 
 def test_manual_official_helper_no_url_issuer_text_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3761,7 +3768,7 @@ def test_manual_official_helper_no_url_issuer_text_blocks_official():
 
 
 def test_manual_official_helper_malformed_http_token_blocks_issuer_fallback():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3773,7 +3780,7 @@ def test_manual_official_helper_malformed_http_token_blocks_issuer_fallback():
 
 
 def test_manual_official_helper_source_url_text_does_not_count_as_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3784,7 +3791,7 @@ def test_manual_official_helper_source_url_text_does_not_count_as_official():
 
 
 def test_manual_official_helper_trusted_explicit_source_url_is_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3796,7 +3803,7 @@ def test_manual_official_helper_trusted_explicit_source_url_is_official():
 
 
 def test_manual_official_helper_explicit_trusted_url_with_conflicting_note_url_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3817,14 +3824,14 @@ def test_manual_official_helper_bcom_decimal_note_does_not_count_as_url_evidence
         "is_estimated": True,
     }
 
-    evidence = injector._iter_url_like_evidence(payload)
+    evidence = common._iter_url_like_evidence(payload)
 
     assert "131.4824" not in evidence
-    assert injector._is_manual_official_value("commodities", "BCOM", payload) is True
+    assert manual_official._is_manual_official_value("commodities", "BCOM", payload) is True
 
 
 def test_manual_official_helper_explicit_source_url_with_prefix_text_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3836,7 +3843,7 @@ def test_manual_official_helper_explicit_source_url_with_prefix_text_blocks_offi
 
 
 def test_manual_official_helper_explicit_source_url_with_suffix_text_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3848,7 +3855,7 @@ def test_manual_official_helper_explicit_source_url_with_suffix_text_blocks_offi
 
 
 def test_manual_official_helper_http_trusted_explicit_source_url_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3860,7 +3867,7 @@ def test_manual_official_helper_http_trusted_explicit_source_url_blocks_official
 
 
 def test_manual_official_helper_container_explicit_source_url_blocks_text_fallback():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3872,7 +3879,7 @@ def test_manual_official_helper_container_explicit_source_url_blocks_text_fallba
 
 
 def test_manual_official_helper_bare_domain_text_blocks_issuer_fallback():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3883,7 +3890,7 @@ def test_manual_official_helper_bare_domain_text_blocks_issuer_fallback():
 
 
 def test_manual_official_helper_trusted_explicit_source_url_with_port_is_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3895,7 +3902,7 @@ def test_manual_official_helper_trusted_explicit_source_url_with_port_is_officia
 
 
 def test_manual_official_helper_invalid_port_source_url_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3907,7 +3914,7 @@ def test_manual_official_helper_invalid_port_source_url_blocks_official():
 
 
 def test_manual_official_helper_conflicting_explicit_source_urls_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3919,7 +3926,7 @@ def test_manual_official_helper_conflicting_explicit_source_urls_blocks_official
 
 
 def test_manual_official_helper_multi_trusted_explicit_source_urls_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3931,7 +3938,7 @@ def test_manual_official_helper_multi_trusted_explicit_source_urls_blocks_offici
 
 
 def test_manual_official_helper_fullwidth_split_explicit_source_urls_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3943,7 +3950,7 @@ def test_manual_official_helper_fullwidth_split_explicit_source_urls_blocks_offi
 
 
 def test_manual_official_helper_nested_explicit_source_url_blocks_official():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -3955,7 +3962,7 @@ def test_manual_official_helper_nested_explicit_source_url_blocks_official():
 
 
 def test_manual_official_helper_name_url_evidence_blocks_issuer_fallback():
-    assert injector._is_manual_official_value(
+    assert manual_official._is_manual_official_value(
         "monetary_policy",
         "mlf",
         {
@@ -4019,7 +4026,7 @@ def test_manual_third_party_usdcny_url_path_with_chinamoney_stays_estimated(tmp_
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["forex"][0]
@@ -4071,7 +4078,7 @@ def test_manual_third_party_bcom_url_with_bloomberg_text_stays_estimated(tmp_pat
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["commodities"][0]
@@ -4129,7 +4136,7 @@ def test_manual_etf_eastmoney_estimate_stays_estimated_and_blocked(tmp_path: Pat
         },
     )
 
-    injector.inject_websearch_results(market_path, manual_path, output_path)
+    core.inject_websearch_results(market_path, manual_path, output_path)
 
     output = json.loads(output_path.read_text(encoding="utf-8"))
     entry = output["fund_flow"]["etf"]
@@ -4205,7 +4212,7 @@ def test_stage25_writes_unified_quality_state_files(tmp_path: Path, monkeypatch)
         encoding="utf-8",
     )
 
-    injector.inject_websearch_data(
+    core.inject_websearch_data(
         market_path,
         manual_path,
         output_path,
@@ -4291,7 +4298,7 @@ def test_stage25_preserves_manual_source_url_and_fund_flow_metric_basis(tmp_path
         encoding="utf-8",
     )
 
-    injector.inject_websearch_data(
+    core.inject_websearch_data(
         market_path,
         manual_path,
         output_path,
@@ -4318,7 +4325,7 @@ def test_apply_fund_flow_entry_forces_news_summary_estimated_when_marked_false()
         "is_estimated": False,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "etf", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "etf", payload)
 
     assert updated is True
     assert entry["recent_5d"] == -50.0
@@ -4342,9 +4349,9 @@ def test_fund_flow_forced_estimated_records_summary_details():
         "metric_basis": "news_net_flow",
         "is_estimated": False,
     }
-    summary = injector.InjectionSummary()
+    summary = core.InjectionSummary()
 
-    updated = injector._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
 
     assert updated is True
     assert entry["is_estimated"] is True
@@ -4367,9 +4374,9 @@ def test_fund_flow_forced_estimated_records_summary_when_estimate_flag_missing()
         "source_url": "https://finance.sina.com.cn/news.html",
         "metric_basis": "news_net_flow",
     }
-    summary = injector.InjectionSummary()
+    summary = core.InjectionSummary()
 
-    updated = injector._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "etf", payload, summary=summary)
 
     assert updated is True
     assert entry["is_estimated"] is True
@@ -4431,7 +4438,7 @@ def test_stage2_results_fund_flow_forced_estimated_summary_details(tmp_path: Pat
         },
     )
 
-    injector.inject_websearch_data(
+    core.inject_websearch_data(
         market_path,
         websearch_path,
         output_path,
@@ -4466,7 +4473,7 @@ def test_apply_fund_flow_entry_keeps_structured_direct_window_not_estimated():
         "is_estimated": False,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert entry["recent_5d"] == 85.6
@@ -4492,7 +4499,7 @@ def test_apply_fund_flow_entry_rejects_spoofed_source_tier_for_gate():
         "is_estimated": False,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert entry["source_tier"] == "unknown"
@@ -4516,7 +4523,7 @@ def test_apply_fund_flow_entry_rejects_non_structured_eastmoney_page_for_gate():
         "is_estimated": False,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert entry["source_tier"] == "unknown"
@@ -4539,7 +4546,7 @@ def test_apply_fund_flow_entry_rejects_non_structured_fund_eastmoney_page_for_ga
         "is_estimated": False,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "etf", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "etf", payload)
 
     assert updated is True
     assert entry["source_tier"] == "unknown"
@@ -4562,7 +4569,7 @@ def test_apply_fund_flow_entry_normalizes_trusted_direct_window_estimated_true_t
         "is_estimated": True,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert entry["source_tier"] == "tier2"
@@ -4590,7 +4597,7 @@ def test_apply_fund_flow_entry_clears_stale_claimed_source_tier_when_absent():
         "is_estimated": False,
     }
 
-    updated = injector._apply_fund_flow_entry(entry, "northbound", payload)
+    updated = entry_mergers._apply_fund_flow_entry(entry, "northbound", payload)
 
     assert updated is True
     assert "claimed_source_tier" not in entry
@@ -4606,7 +4613,7 @@ def test_merge_commodity_entry_recomputes_daily_change_from_previous_price():
         "source_url": "https://example.com/brent",
     }
 
-    merged = injector._merge_commodity_entry(
+    merged = entry_mergers._merge_commodity_entry(
         {},
         payload,
         is_manual=True,
@@ -4622,7 +4629,7 @@ def test_merge_commodity_entry_recomputes_daily_change_from_previous_price():
         "current_price": 68.0,
         "daily_change": 3.47,
     }
-    merged_existing = injector._merge_commodity_entry(
+    merged_existing = entry_mergers._merge_commodity_entry(
         existing,
         payload,
         is_manual=True,
@@ -4643,7 +4650,7 @@ def test_merge_commodity_entry_respects_daily_change_over_previous_value():
         "source_url": "https://example.com/brent",
     }
 
-    merged = injector._merge_commodity_entry(
+    merged = entry_mergers._merge_commodity_entry(
         {"symbol": "BZ=F", "current_price": 68.0, "daily_change": 3.47},
         payload,
         is_manual=True,
@@ -4663,7 +4670,7 @@ def test_merge_commodity_entry_zero_current_price_does_not_fallback_to_existing(
         "source_url": "https://example.com/brent",
     }
 
-    merged = injector._merge_commodity_entry(
+    merged = entry_mergers._merge_commodity_entry(
         {"symbol": "BZ=F", "current_price": 68.0, "daily_change": 3.47},
         payload,
         is_manual=True,
@@ -4704,7 +4711,7 @@ def test_merge_commodity_entry_does_not_put_5d_into_daily_or_120d_into_ytd(monke
         },
     )
 
-    merged = injector._merge_commodity_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_commodity_entry(existing, payload, is_manual=True)
 
     assert merged["daily_change"] is None
     assert merged["ytd_change"] is None
@@ -4744,7 +4751,7 @@ def test_merge_commodity_entry_preserves_payload_change_120d_and_source_url(monk
         },
     )
 
-    merged = injector._merge_commodity_entry(existing, payload, is_manual=True)
+    merged = entry_mergers._merge_commodity_entry(existing, payload, is_manual=True)
 
     assert merged["change_120d"] == pytest.approx(12.3)
     assert merged["change_120d_basis"] == "websearch_manual"
@@ -4785,7 +4792,7 @@ def test_build_forex_entry_keeps_unknown_changes_as_none(monkeypatch):
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
 
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {"pair": "USDCNY", "current_rate": "7.1", "source": "manual https://example.com/fx", "source_url": "https://example.com/fx"}
     )
 
@@ -4809,7 +4816,7 @@ def test_build_forex_entry_stamps_trend_history_120d_evidence(monkeypatch):
         lambda *args, **kwargs: {"change_1d": None, "reason_1d": "trend_history_missing"},
     )
 
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "7.1",
@@ -4841,7 +4848,7 @@ def test_build_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch)
         },
     )
 
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "6.8184",
@@ -4855,11 +4862,11 @@ def test_build_forex_entry_stamps_trend_history_daily_zero_evidence(monkeypatch)
     assert entry["daily_change_basis"] == "trend_history"
     assert entry["daily_change_base_date"] == "2026-06-02"
     assert "reason_1d" not in entry
-    assert injector._should_backfill_forex_daily_change(entry) is False
+    assert trend_backfill._should_backfill_forex_daily_change(entry) is False
 
 
 def test_build_forex_entry_preserves_payload_daily_change_evidence():
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "6.8184",
@@ -4879,11 +4886,11 @@ def test_build_forex_entry_preserves_payload_daily_change_evidence():
     assert entry["daily_change_base_date"] == "2026-06-02"
     assert entry["daily_change_source_url"] == "https://example.com/fx"
     assert entry["daily_change_base_price"] == pytest.approx(6.8184)
-    assert injector._should_backfill_forex_daily_change(entry) is False
+    assert trend_backfill._should_backfill_forex_daily_change(entry) is False
 
 
 def test_build_forex_entry_ignores_invalid_payload_daily_base_date():
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "6.8184",
@@ -4896,11 +4903,11 @@ def test_build_forex_entry_ignores_invalid_payload_daily_base_date():
     )
 
     assert "daily_change_base_date" not in entry
-    assert injector._should_backfill_forex_daily_change(entry) is True
+    assert trend_backfill._should_backfill_forex_daily_change(entry) is True
 
 
 def test_build_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "6.8184",
@@ -4918,7 +4925,7 @@ def test_build_forex_entry_does_not_infer_flat_trend_from_unevidenced_zero():
 
 @pytest.mark.parametrize("trend", ["flat", "sideways"])
 def test_build_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zero(trend):
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "6.8184",
@@ -4934,7 +4941,7 @@ def test_build_forex_entry_does_not_preserve_raw_flat_trend_from_unevidenced_zer
 
 
 def test_build_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
-    entry = injector._build_forex_entry(
+    entry = entry_mergers._build_forex_entry(
         {
             "pair": "USDCNY",
             "current_rate": "6.8184",
@@ -4950,5 +4957,5 @@ def test_build_forex_entry_drops_raw_flat_when_daily_unusable_but_120d_usable():
     )
 
     assert entry["change_120d"] == pytest.approx(1.2)
-    assert injector._should_backfill_forex_daily_change(entry) is True
+    assert trend_backfill._should_backfill_forex_daily_change(entry) is True
     assert entry["trend"] != "flat"

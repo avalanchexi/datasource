@@ -4,9 +4,9 @@ import sys
 from types import SimpleNamespace
 
 from datasource.engines import deepseek_reasoner
+from datasource.engines.stage2 import cli as stage2_cli
 from datasource.engines.deepseek_reasoner import DeepSeekExtractionAgent
 from datasource.generators import simple_report
-from scripts import stage2_unified_enhancer
 
 
 def test_deepseek_extraction_agent_defaults_to_v4_pro() -> None:
@@ -22,7 +22,7 @@ def test_stage2_cli_deepseek_model_defaults_to_v4_pro(monkeypatch) -> None:
         ["stage2_unified_enhancer.py", "--market-data", "market_data.json"],
     )
 
-    args = stage2_unified_enhancer._parse_args()
+    args = stage2_cli._parse_args()
 
     assert args.deepseek_model == "deepseek-v4-pro"
 
@@ -34,7 +34,7 @@ def test_stage2_cli_deepseek_timeouts_match_v4_pro_latency(monkeypatch) -> None:
         ["stage2_unified_enhancer.py", "--market-data", "market_data.json"],
     )
 
-    args = stage2_unified_enhancer._parse_args()
+    args = stage2_cli._parse_args()
 
     assert args.deepseek_timeout == 30.0
     assert args.llm_hard_timeout == 35.0
@@ -47,7 +47,7 @@ def test_stage2_cli_uses_parallel_deepseek_defaults(monkeypatch) -> None:
         ["stage2_unified_enhancer.py", "--market-data", "market_data.json"],
     )
 
-    args = stage2_unified_enhancer._parse_args()
+    args = stage2_cli._parse_args()
 
     assert args.use_queue is True
     assert args.queue_concurrency == 3
@@ -261,7 +261,7 @@ def test_stage2_cli_can_disable_queue_explicitly(monkeypatch) -> None:
         ],
     )
 
-    args = stage2_unified_enhancer._parse_args()
+    args = stage2_cli._parse_args()
 
     assert args.use_queue is False
     assert args.queue_concurrency == 3

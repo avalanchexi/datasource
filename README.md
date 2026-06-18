@@ -344,7 +344,7 @@ datasource/
 │   ├── utils/                     # 速率限制/重试工具
 │   ├── cache/                     # 内存缓存
 │   ├── calculators/               # 技术指标/债券/资金流/普林格分析
-│   ├── engines/                   # 数据引擎
+│   ├── engines/                   # 数据引擎（Stage1/2/2.5 分别在 stage1/、stage2/、stage2_5/）
 │   └── generators/                # 报告生成器
 ├── docs/                          # 📚 文档中心
 │   ├── README.md                  # 文档导航索引
@@ -357,14 +357,13 @@ datasource/
 │   ├── test_datasource.py         # 集成测试入口
 │   ├── test_fund_flow_pipeline.py # 当前资金流/MCP 混合测试
 │   └── integration/               # 保留的集成测试
-├── scripts/                       # 🔧 Stage1-4 与诊断脚本
+├── scripts/                       # 🔧 Stage1-4 薄入口
 │   ├── stage1_data_collector.py
 │   ├── stage2_unified_enhancer.py
 │   ├── stage2_5_injector.py
 │   ├── stage3_pring_analyzer.py
 │   ├── stage4_report_generator.py
-│   ├── utility/                   # 当前保留的手工/辅助工具
-│   └── archive/                   # 归档/手工分析脚本，不跑正常 Stage1-4
+│   └── tools/                     # 诊断/运维工具（trend history、Stage2 health/audit、sanitize 等）
 ├── templates/                     # 📝 报告模板
 ├── assets/                        # 🖼️ 图片和静态资源
 ├── data/                          # 💾 数据文件和样本

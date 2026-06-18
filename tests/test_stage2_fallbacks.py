@@ -3,12 +3,12 @@ import json
 from pathlib import Path
 import pytest
 
-from scripts.stage2_unified_enhancer import (
-    _execute_tasks,
+from datasource.engines.stage2.errors import (
     _is_tavily_quota_error,
     _is_tavily_quota_response,
     _tavily_error_metadata,
 )
+from datasource.engines.stage2.execution import _execute_tasks
 
 
 class FakeClient422:

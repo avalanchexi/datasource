@@ -7,11 +7,11 @@ import pandas as pd
 import pytest
 
 from datasource.engines.stage2 import cli as stage2_cli
+from datasource.engines.stage2 import diagnostics as stage2_diagnostics
+from datasource.engines.stage2.execution import _execute_tasks
 from datasource.providers.stage2_structured import StructuredProviderError, StructuredResult
 from datasource.providers.stage2_structured.registry import StructuredProviderRegistry
 from datasource.providers.stage2_structured.tushare_etf import TuShareETFProvider
-import scripts.stage2_unified_enhancer as stage2
-from scripts.stage2_unified_enhancer import _execute_tasks
 
 
 def _commodity_task() -> dict:
@@ -585,7 +585,7 @@ def test_build_structured_registry_for_args_defaults_to_registry(monkeypatch):
     registry = object()
     monkeypatch.setattr(stage2_cli, "build_default_registry", lambda: registry)
 
-    result = stage2._build_structured_registry_for_args(
+    result = stage2_cli._build_structured_registry_for_args(
         SimpleNamespace(disable_structured_providers=False)
     )
 
@@ -595,7 +595,7 @@ def test_build_structured_registry_for_args_defaults_to_registry(monkeypatch):
 def test_build_structured_registry_for_args_disable_returns_none(monkeypatch):
     monkeypatch.setattr(stage2_cli, "build_default_registry", lambda: object())
 
-    result = stage2._build_structured_registry_for_args(
+    result = stage2_cli._build_structured_registry_for_args(
         SimpleNamespace(disable_structured_providers=True)
     )
 
@@ -608,7 +608,7 @@ def test_build_structured_registry_for_args_failure_returns_none(monkeypatch):
 
     monkeypatch.setattr(stage2_cli, "build_default_registry", boom)
 
-    result = stage2._build_structured_registry_for_args(
+    result = stage2_cli._build_structured_registry_for_args(
         SimpleNamespace(disable_structured_providers=False)
     )
 
@@ -616,8 +616,8 @@ def test_build_structured_registry_for_args_failure_returns_none(monkeypatch):
 
 
 def test_stage2_effective_hit_rate():
-    assert stage2._stage2_effective_hit_rate(2, 1) == pytest.approx(2 / 3)
-    assert stage2._stage2_effective_hit_rate(0, 0) == 0.0
+    assert stage2_diagnostics._stage2_effective_hit_rate(2, 1) == pytest.approx(2 / 3)
+    assert stage2_diagnostics._stage2_effective_hit_rate(0, 0) == 0.0
 
 
 def test_stage2_summary_includes_structured_provider_diagnostics():
@@ -629,7 +629,7 @@ def test_stage2_summary_includes_structured_provider_diagnostics():
             "write_back_success": True,
         }
     ]
-    summary = stage2._build_stage2_summary_diagnostics(
+    summary = stage2_diagnostics._build_stage2_summary_diagnostics(
         completed,
         failures=[],
         websearch_results=[],

@@ -8,17 +8,13 @@ from __future__ import annotations
 
 import importlib
 import json
-import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = ROOT / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
 
-INJ = importlib.import_module("stage2_5_injector")
 COMMON = importlib.import_module("datasource.engines.stage2_5.common")
 FF = importlib.import_module("datasource.engines.stage2_5.fund_flow")
 SC = importlib.import_module("datasource.engines.stage2_5.schema_coercion")
@@ -89,8 +85,22 @@ C4_MOVED_NAMES = [
 ]
 
 
+def _canonical_namespace() -> SimpleNamespace:
+    names = set(C4_MOVED_NAMES)
+    names.update({"_apply_pipeline_quality_state", "_has_rrr_type_conflict"})
+    namespace = {}
+    for module in (COMMON, FF, SC, GS, MO):
+        for name in names:
+            if hasattr(module, name):
+                namespace[name] = getattr(module, name)
+    return SimpleNamespace(**namespace)
+
+
+INJ = _canonical_namespace()
+
+
 @pytest.mark.parametrize("name", C4_MOVED_NAMES)
-def test_import_surface_monolith(name):
+def test_c4_canonical_modules_export_moved_names(name):
     assert hasattr(INJ, name)
 
 
@@ -102,7 +112,7 @@ def test_new_modules_export_moved_names():
     assert hasattr(MO, "_apply_manual_official_estimation_rule")
 
 
-def test_moved_fn_identity_via_monolith():
+def test_moved_fn_identity_via_canonical_namespace():
     assert INJ._coerce_float is COMMON._coerce_float
     assert INJ._infer_fund_flow_window_evidence is FF._infer_fund_flow_window_evidence
     assert INJ._coerce_stage2_results_to_schema is SC._coerce_stage2_results_to_schema

@@ -5,11 +5,11 @@ from datasource.providers.stage2_structured.base import (
     StructuredProviderError,
     StructuredResult,
 )
-from scripts.stage2_unified_enhancer import (
+from datasource.engines.stage2.diagnostics import (
     _build_stage2_summary_diagnostics,
-    _execute_tasks,
     _stage2_effective_hit_rate,
 )
+from datasource.engines.stage2.execution import _execute_tasks
 
 
 P0_SUCCESS = {

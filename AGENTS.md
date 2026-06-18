@@ -9,7 +9,7 @@
 - 生成日报/背景扫描报告前，先列出 3-5 步 plan，覆盖 Stage2.5 补数、Stage3 分析、Report 输出和收尾校验。仅重跑已齐全数据的报告时，可明确说明“任务简单，按既定流程直接执行”。
 
 ## 1. Repo Map
-- Core: `src/datasource/`（adapters, managers, calculators, engines, cache helpers, utils）。
+- Core: `src/datasource/`（adapters, managers, calculators, engines, cache helpers, utils）。Stage1/Stage2/Stage2.5 业务逻辑分别在 `src/datasource/engines/stage1/`、`src/datasource/engines/stage2/`、`src/datasource/engines/stage2_5/`；`scripts/stage*_*.py` 仅作薄入口。
 - Config: `src/datasource/config/indices_config.py`, `src/datasource/config/search_profiles.py`, root `config/`（`quality_thresholds.json`, `policy_rules.yaml`）。
 - Data: `data/runs/YYYYMMDD/`（单次运行产物），`data/trend_history/`（趋势历史滚动窗口，非 SQLite），`data/cache/tavily_cache.sqlite`。
 - Logs: `logs/runs/YYYYMMDD/observability.json`。

@@ -12,6 +12,9 @@ import os
 import sys
 from pathlib import Path
 
+from datasource.engines.stage2 import cli as stage2_cli
+from datasource.engines.stage2 import execution as stage2_execution
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "stage2_replay"
 META = json.loads((FIXTURES / "fixture_meta.json").read_text(encoding="utf-8"))
 PARSE_ERROR_KEY = META["parse_error_key"]  # 合成 parse_error,不参与 oracle
@@ -362,7 +365,7 @@ def assert_recorded_oracle(websearch_items):
     return outcome
 
 
-def _freeze_stage2_datetime(stage2, monkeypatch):
+def _freeze_stage2_datetime(monkeypatch):
     """Keep replay's frozen clock aligned across Stage2 helper modules.
 
     Future Stage2 splits that move helpers using datetime.now() must add their
@@ -375,9 +378,9 @@ def _freeze_stage2_datetime(stage2, monkeypatch):
     from datasource.engines.stage2 import snippet_filters as stage2_snippet_filters
     from datasource.utils import policy_rules
 
-    fixed_now = stage2.datetime(2026, 6, 13, 0, 0, 0)
+    fixed_now = stage2_cli.datetime(2026, 6, 13, 0, 0, 0)
 
-    class FixedDatetime(stage2.datetime):
+    class FixedDatetime(stage2_cli.datetime):
         @classmethod
         def now(cls, tz=None):
             if tz is not None:
@@ -385,7 +388,7 @@ def _freeze_stage2_datetime(stage2, monkeypatch):
             return fixed_now
 
     for module in (
-        stage2,
+        stage2_cli,
         stage2_errors,
         stage2_execution,
         stage2_query_planner,
@@ -448,18 +451,16 @@ class Level1ReplayRegistry(ReplayRegistry):
 def test_replay_execute_tasks_chains(tmp_path, monkeypatch):
     import asyncio
 
-    import scripts.stage2_unified_enhancer as stage2
-
     market = json.loads(
         (FIXTURES / "market_data_input.json").read_text(encoding="utf-8")
     )
     # Stabilize replay timing fields; this does not alter business behavior.
     counter = itertools.count()
-    monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
+    monkeypatch.setattr(stage2_execution.time, "perf_counter", lambda: next(counter) / 1000.0)
 
     client = ReplayTavilyClient()
     completed, failures, websearch = asyncio.run(
-        stage2._execute_tasks(
+        stage2_execution._execute_tasks(
             _load_tasks(),
             market,
             client=client,
@@ -501,9 +502,6 @@ def test_replay_execute_tasks_chains(tmp_path, monkeypatch):
 def test_replay_full_main(tmp_path, monkeypatch):
     import asyncio
 
-    from datasource.engines.stage2 import cli as stage2_cli
-    import scripts.stage2_unified_enhancer as stage2
-
     market_out = tmp_path / "market_data_stage2.json"
     websearch_out = tmp_path / "websearch_results_auto.json"
     log_out = tmp_path / "stage2_unified_log.json"
@@ -511,20 +509,17 @@ def test_replay_full_main(tmp_path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "replay-deepseek-key")
     monkeypatch.setenv("EXA_API_KEY", "")
     monkeypatch.setattr(
-        stage2, "AsyncTavilyClient", lambda *args, **kwargs: ReplayTavilyClient()
+        stage2_cli, "AsyncTavilyClient", lambda *args, **kwargs: ReplayTavilyClient()
     )
     monkeypatch.setattr(
-        stage2, "DeepSeekExtractionAgent", lambda *args, **kwargs: ReplayDeepSeek()
-    )
-    monkeypatch.setattr(
-        stage2, "build_default_registry", lambda: Level1ReplayRegistry()
+        stage2_cli, "DeepSeekExtractionAgent", lambda *args, **kwargs: ReplayDeepSeek()
     )
     monkeypatch.setattr(
         stage2_cli, "build_default_registry", lambda: Level1ReplayRegistry()
     )
     counter = itertools.count()
-    monkeypatch.setattr(stage2.time, "perf_counter", lambda: next(counter) / 1000.0)
-    _freeze_stage2_datetime(stage2, monkeypatch)
+    monkeypatch.setattr(stage2_execution.time, "perf_counter", lambda: next(counter) / 1000.0)
+    _freeze_stage2_datetime(monkeypatch)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -554,7 +549,7 @@ def test_replay_full_main(tmp_path, monkeypatch):
         ],
     )
 
-    rc = asyncio.run(stage2.main())
+    rc = asyncio.run(stage2_cli.main())
 
     # Replay fixture intentionally includes manual_required records, so production main returns nonzero.
     assert rc == 1

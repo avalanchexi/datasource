@@ -26,20 +26,8 @@
 **Priority:** P2
 **Depends on:** PR1 semantic utils extraction landing separately.
 
-## Data Pipeline
-
-### Split Stage2 And Stage2.5 Large Scripts
-
-**What:** Split `scripts/stage2_unified_enhancer.py` and `scripts/stage2_5_injector.py` into smaller modules around search, extraction, injection, quality gates, and trend_history backfill.
-
-**Why:** These scripts are over 3000 lines each, making reviews and regression analysis expensive. The split should happen only after the key contracts and replay tests exist.
-
-**Context:** Stage2 and Stage2.5 split work has landed through PR-C5. C1-C5 moved the Stage2.5 helpers into `src/datasource/engines/stage2_5/` while preserving the `scripts/stage2_5_injector.py` re-export surface. Current focus: terminal cleanup/global validation, including slimming the Stage2.5 script entrypoint toward the planned <=30-line endpoint.
-
-**Effort:** L
-**Priority:** P2
-**Depends on:** PR1 semantic utils extraction; PR3 canonical key registry; test-safe trend_history fixture replay.
-
 ## Completed
 
 - [x] PR-C5 Stage2.5 split: extracted `trend_backfill`, `entry_mergers`, `core`, and `cli`; repointed monkeypatches to owning modules; added re-export identity and qualified-patch reach characterization.
+- [x] PR-C6 Stage1 entry slim: relocated the Stage1 collector into `src/datasource/engines/stage1/collector.py` and kept `scripts/stage1_data_collector.py` as a thin entrypoint.
+- [x] PR-C7 C terminal cleanup: removed the remaining batch-B path shims, thinned `scripts/stage2_unified_enhancer.py` and `scripts/stage2_5_injector.py` to <=30-line entrypoints, repointed tests/imports/monkeypatches to canonical `engines`/`utils` modules, and completed full validation.

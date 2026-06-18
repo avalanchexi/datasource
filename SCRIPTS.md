@@ -399,9 +399,9 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 
 | 脚本 | 状态 | 阶段 | 优先级 |
 |------|------|------|--------|
-| `stage1_data_collector.py` | ✅ ACTIVE | Stage 1 | 必须 |
-| `scripts/stage2_unified_enhancer.py` | ✅ ACTIVE | Stage 2 | 必须 |
-| `scripts/stage2_5_injector.py` | ✅ RECOMMENDED | Stage 2.5 | 必须 |
+| `scripts/stage1_data_collector.py` → `src/datasource/engines/stage1/` | ✅ ACTIVE | Stage 1 | 必须 |
+| `scripts/stage2_unified_enhancer.py` → `src/datasource/engines/stage2/` | ✅ ACTIVE | Stage 2 | 必须 |
+| `scripts/stage2_5_injector.py` → `src/datasource/engines/stage2_5/` | ✅ RECOMMENDED | Stage 2.5 | 必须 |
 | `scripts/stage3_pring_analyzer.py` | ✅ RECOMMENDED | Stage 3 | 必须 |
 | `scripts/stage4_report_generator.py` | ✅ RECOMMENDED | Stage 4 | 必须 |
 | `archive/py_unused/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | Stage 2a | 不在当前流程执行 |

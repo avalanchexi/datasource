@@ -1,5 +1,4 @@
 from datasource.engines.stage2 import cli as stage2_cli
-from scripts import stage2_unified_enhancer as stage2
 
 
 def test_validate_proxies_uses_https_proxy_for_tavily_https_probe(monkeypatch):
@@ -23,7 +22,7 @@ def test_validate_proxies_uses_https_proxy_for_tavily_https_probe(monkeypatch):
 
     monkeypatch.setattr(stage2_cli, "httpx", FakeHttpx)
 
-    assert stage2._validate_proxies(proxies) == proxies
+    assert stage2_cli._validate_proxies(proxies) == proxies
     assert calls == [
         {
             "url": "https://api.tavily.com",

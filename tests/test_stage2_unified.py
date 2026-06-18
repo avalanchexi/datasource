@@ -1,29 +1,58 @@
+import asyncio
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from datasource.config.search_profiles import SEARCH_PROFILES
+from datasource.engines.stage2 import cli as stage2_cli
+from datasource.engines.stage2 import diagnostics as stage2_diagnostics
+from datasource.engines.stage2 import errors as stage2_errors
+from datasource.engines.stage2 import evidence as stage2_evidence
+from datasource.engines.stage2 import execution as stage2_execution
+from datasource.engines.stage2 import extraction_apply as stage2_extraction_apply
+from datasource.engines.stage2 import query_planner as stage2_query_planner
+from datasource.engines.stage2 import snippet_filters as stage2_snippet_filters
+from datasource.engines.stage2 import validation as stage2_validation
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
-import asyncio
-import scripts.stage2_unified_enhancer as stage2
 
-from scripts.stage2_unified_enhancer import (
-    _apply_extraction,
-    _candidate_query_quality,
-    _flag_fund_flow_anomalies,
-    _compute_derived_metrics,
-    _update_missing_items,
-    _gap_monitor,
-    _merge_missing_items,
-    _validate_fund_flow_extraction,
-    _validate_general_extraction,
-    _execute_tasks,
-    _augment_extraction_metadata,
-    _is_environment_proxy_error,
-    _build_environment_proxy_error_records,
-    _DeepSeekCircuitBreaker,
+_apply_extraction = stage2_extraction_apply._apply_extraction
+_augment_extraction_metadata = stage2_extraction_apply._augment_extraction_metadata
+_build_environment_proxy_error_records = stage2_errors._build_environment_proxy_error_records
+_candidate_query_quality = stage2_query_planner._candidate_query_quality
+_compute_derived_metrics = stage2_cli._compute_derived_metrics
+_DeepSeekCircuitBreaker = stage2_execution._DeepSeekCircuitBreaker
+_execute_tasks = stage2_execution._execute_tasks
+_flag_fund_flow_anomalies = stage2_validation._flag_fund_flow_anomalies
+_gap_monitor = stage2_cli._gap_monitor
+_is_environment_proxy_error = stage2_errors._is_environment_proxy_error
+_merge_missing_items = stage2_cli._merge_missing_items
+_update_missing_items = stage2_execution._update_missing_items
+_validate_fund_flow_extraction = stage2_validation._validate_fund_flow_extraction
+_validate_general_extraction = stage2_validation._validate_general_extraction
+
+stage2 = SimpleNamespace(
+    _apply_extraction=stage2_extraction_apply._apply_extraction,
+    _build_manual_required_details=stage2_diagnostics._build_manual_required_details,
+    _build_retrieval_diagnostics=stage2_diagnostics._build_retrieval_diagnostics,
+    _build_stage2_result_count_fields=stage2_diagnostics._build_stage2_result_count_fields,
+    _build_stage2_summary_diagnostics=stage2_diagnostics._build_stage2_summary_diagnostics,
+    _expand_query_candidates=stage2_query_planner._expand_query_candidates,
+    _filter_by_official_extract_domain=stage2_snippet_filters._filter_by_official_extract_domain,
+    _format_stage2_hit_rate_line=stage2_diagnostics._format_stage2_hit_rate_line,
+    _format_stage2_task_count_line=stage2_diagnostics._format_stage2_task_count_line,
+    _mark_post_writeback_manual_required=stage2_diagnostics._mark_post_writeback_manual_required,
+    _parse_args=stage2_cli._parse_args,
+    _post_writeback_manual_reason=stage2_diagnostics._post_writeback_manual_reason,
+    _should_enable_exa_fallback=stage2_cli._should_enable_exa_fallback,
+    _should_initialize_exa_client=stage2_cli._should_initialize_exa_client,
+    _stage2_effective_hit_rate=stage2_diagnostics._stage2_effective_hit_rate,
+    _STAGE2_BACKEND_SUMMARY_KEYS=stage2_diagnostics._STAGE2_BACKEND_SUMMARY_KEYS,
+    _value_evidence_score=stage2_evidence._value_evidence_score,
+    main=stage2_cli.main,
+    run_tasks_lc=stage2_cli.run_tasks_lc,
 )
 
 
@@ -433,7 +462,7 @@ def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_
         ]
         return completed, failures, []
 
-    monkeypatch.setattr(stage2, "_execute_tasks", fake_execute_tasks)
+    monkeypatch.setattr(stage2_execution, "_execute_tasks", fake_execute_tasks)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -456,7 +485,7 @@ def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_
         ],
     )
 
-    exit_code = asyncio.run(stage2.main())
+    exit_code = asyncio.run(stage2_cli.main())
     stdout = capsys.readouterr().out
 
     assert exit_code == 1
@@ -3011,7 +3040,7 @@ def test_apply_extraction_writes_to_array_sections():
 
 
 def test_stage2_scrubs_forex_zero_compare_fields_without_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3045,7 +3074,7 @@ def test_stage2_scrubs_forex_zero_compare_fields_without_evidence():
 
 
 def test_stage2_keeps_forex_zero_compare_fields_with_explicit_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3066,7 +3095,7 @@ def test_stage2_keeps_forex_zero_compare_fields_with_explicit_evidence():
 
 
 def test_stage2_copies_forex_compare_fields_and_clears_pending():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3100,7 +3129,7 @@ def test_stage2_copies_forex_compare_fields_and_clears_pending():
 
 
 def test_stage2_scrubs_forex_zero_compare_fields_from_extraction_without_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3133,7 +3162,7 @@ def test_stage2_scrubs_forex_zero_compare_fields_from_extraction_without_evidenc
 
 
 def test_stage2_keeps_forex_zero_compare_when_note_says_no_change():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3156,7 +3185,7 @@ def test_stage2_keeps_forex_zero_compare_when_note_says_no_change():
 
 
 def test_stage2_keeps_forex_zero_compare_when_note_is_bare_no_change():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3179,7 +3208,7 @@ def test_stage2_keeps_forex_zero_compare_when_note_is_bare_no_change():
 
 
 def test_stage2_keeps_forex_zero_compare_when_chinese_note_says_unchanged():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3202,7 +3231,7 @@ def test_stage2_keeps_forex_zero_compare_when_chinese_note_says_unchanged():
 
 
 def test_stage2_keeps_forex_zero_compare_when_chinese_note_says_no_change():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3225,7 +3254,7 @@ def test_stage2_keeps_forex_zero_compare_when_chinese_note_says_no_change():
 
 
 def test_stage2_uses_forex_source_text_with_explicit_compare_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3247,7 +3276,7 @@ def test_stage2_uses_forex_source_text_with_explicit_compare_evidence():
 
 
 def test_stage2_preserves_existing_forex_zero_compare_with_entry_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3276,7 +3305,7 @@ def test_stage2_preserves_existing_forex_zero_compare_with_entry_evidence():
 
 
 def test_stage2_preserves_existing_forex_zero_compare_with_previous_note_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3305,7 +3334,7 @@ def test_stage2_preserves_existing_forex_zero_compare_with_previous_note_evidenc
 
 
 def test_stage2_preserves_existing_120d_zero_compare_with_note_direct_window():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3334,7 +3363,7 @@ def test_stage2_preserves_existing_120d_zero_compare_with_note_direct_window():
 
 
 def test_stage2_preserves_existing_120d_zero_compare_with_direct_window_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3363,7 +3392,7 @@ def test_stage2_preserves_existing_120d_zero_compare_with_direct_window_evidence
 
 
 def test_stage2_preserves_existing_120d_zero_compare_with_metric_direct_window():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3392,7 +3421,7 @@ def test_stage2_preserves_existing_120d_zero_compare_with_metric_direct_window()
 
 
 def test_stage2_preserves_existing_120d_zero_compare_with_field_specific_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3422,7 +3451,7 @@ def test_stage2_preserves_existing_120d_zero_compare_with_field_specific_evidenc
 
 
 def test_stage2_preserves_existing_daily_zero_compare_with_window_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3451,7 +3480,7 @@ def test_stage2_preserves_existing_daily_zero_compare_with_window_evidence():
 
 
 def test_stage2_preserves_existing_daily_zero_compare_with_source_direct_daily_series():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3480,7 +3509,7 @@ def test_stage2_preserves_existing_daily_zero_compare_with_source_direct_daily_s
 
 
 def test_stage2_preserves_existing_daily_zero_compare_with_field_specific_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3510,7 +3539,7 @@ def test_stage2_preserves_existing_daily_zero_compare_with_field_specific_eviden
 
 
 def test_stage2_rejects_provider_only_daily_change_field_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3539,7 +3568,7 @@ def test_stage2_rejects_provider_only_daily_change_field_evidence():
 
 
 def test_stage2_rejects_daily_change_rate_as_120d_field_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3568,7 +3597,7 @@ def test_stage2_rejects_daily_change_rate_as_120d_field_evidence():
 
 
 def test_stage2_preserves_120d_zero_when_daily_missing_reason_is_unrelated():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3598,7 +3627,7 @@ def test_stage2_preserves_120d_zero_when_daily_missing_reason_is_unrelated():
 
 
 def test_stage2_preserves_existing_daily_zero_compare_with_daily_change_period():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3627,7 +3656,7 @@ def test_stage2_preserves_existing_daily_zero_compare_with_daily_change_period()
 
 
 def test_stage2_rejects_daily_quote_only_as_daily_change_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3649,7 +3678,7 @@ def test_stage2_rejects_daily_quote_only_as_daily_change_evidence():
 
 
 def test_stage2_does_not_use_forex_source_name_as_compare_evidence():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3671,7 +3700,7 @@ def test_stage2_does_not_use_forex_source_name_as_compare_evidence():
 
 
 def test_stage2_rejects_negative_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3694,7 +3723,7 @@ def test_stage2_rejects_negative_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_no_window_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3717,7 +3746,7 @@ def test_stage2_rejects_no_window_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_bare_no_window_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3740,7 +3769,7 @@ def test_stage2_rejects_bare_no_window_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_machine_no_value_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3764,7 +3793,7 @@ def test_stage2_rejects_machine_no_value_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_no_deepseek_key_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3787,7 +3816,7 @@ def test_stage2_rejects_no_deepseek_key_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_no_change_120d_value_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3810,7 +3839,7 @@ def test_stage2_rejects_no_change_120d_value_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_bare_chinese_unavailable_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3833,7 +3862,7 @@ def test_stage2_rejects_bare_chinese_unavailable_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_spaced_chinese_negative_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3856,7 +3885,7 @@ def test_stage2_rejects_spaced_chinese_negative_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_missing_synonym_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3879,7 +3908,7 @@ def test_stage2_rejects_missing_synonym_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_undisclosed_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},
@@ -3902,7 +3931,7 @@ def test_stage2_rejects_undisclosed_forex_compare_evidence_text():
 
 
 def test_stage2_rejects_reversed_negative_forex_compare_evidence_text():
-    from scripts.stage2_unified_enhancer import _apply_extraction
+    from datasource.engines.stage2.extraction_apply import _apply_extraction
 
     market_payload = {
         "metadata": {"date": "2026-06-10"},

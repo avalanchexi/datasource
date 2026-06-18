@@ -37,16 +37,22 @@ async def run_tasks_lc(
     """
 
     # 延迟导入避免循环依赖
-    from scripts.stage2_unified_enhancer import (
-        _validate_fund_flow_extraction,
-        _validate_general_extraction,
-        _update_missing_items,
+    from datasource.engines.stage2.diagnostics import (
+        _mark_post_writeback_manual_required,
+        _post_writeback_manual_reason,
+    )
+    from datasource.engines.stage2.execution import _update_missing_items
+    from datasource.engines.stage2.extraction_apply import (
         _apply_extraction,
         _augment_extraction_metadata,
-        _post_writeback_manual_reason,
-        _mark_post_writeback_manual_required,
+    )
+    from datasource.engines.stage2.snippet_filters import (
         _filter_by_domain,
         _prefer_fresh_snippets,
+    )
+    from datasource.engines.stage2.validation import (
+        _validate_fund_flow_extraction,
+        _validate_general_extraction,
     )
 
     forex_keys = {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}

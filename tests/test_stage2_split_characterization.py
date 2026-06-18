@@ -2,16 +2,24 @@
 搬移后(Task 6)断言新模块行为一致。全离线、秒级。
 expected 真值采自 main 0187b00 实跑(规划方预计算)。"""
 import importlib
-import sys
-from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+ERRORS = importlib.import_module("datasource.engines.stage2.errors")
+SNIP = importlib.import_module("datasource.engines.stage2.snippet_filters")
+EVID = importlib.import_module("datasource.engines.stage2.evidence")
+REGEX = importlib.import_module("datasource.engines.stage2.regex_extraction")
 
-ENH = importlib.import_module("stage2_unified_enhancer")  # scripts/ 在 sys.path(conftest)
+ENH = SimpleNamespace(
+    _is_tavily_quota_response=ERRORS._is_tavily_quota_response,
+    _text_indicates_quota_or_rate_limit=ERRORS._text_indicates_quota_or_rate_limit,
+    _host_matches_official_domain=SNIP._host_matches_official_domain,
+    _snippet_contains_number=EVID._snippet_contains_number,
+    _value_evidence_score=EVID._value_evidence_score,
+    _regex_fallback=REGEX._regex_fallback,
+    _infer_rrr_type=REGEX._infer_rrr_type,
+)
 
 
 # ---- errors:quota status(_is_tavily_quota_response 读 status_code/status 键)----
@@ -94,8 +102,8 @@ def test_infer_rrr_type(text, expected):
     assert ENH._infer_rrr_type(text) == expected
 
 
-# ---- import-surface:主脚本 re-export 生效 ----
-def test_import_surface_monolith_reexports():
+# ---- import-surface:canonical modules expose moved helpers ----
+def test_import_surface_canonical_modules():
     for name in [
         "_is_tavily_quota_response",
         "_text_indicates_quota_or_rate_limit",
@@ -105,13 +113,7 @@ def test_import_surface_monolith_reexports():
         "_regex_fallback",
         "_infer_rrr_type",
     ]:
-        assert hasattr(ENH, name), f"主脚本应仍可调 {name}(re-export)"
-
-
-ERRORS = importlib.import_module("datasource.engines.stage2.errors")
-SNIP = importlib.import_module("datasource.engines.stage2.snippet_filters")
-EVID = importlib.import_module("datasource.engines.stage2.evidence")
-REGEX = importlib.import_module("datasource.engines.stage2.regex_extraction")
+        assert hasattr(ENH, name), f"canonical namespace should expose {name}"
 
 
 def test_new_modules_export_moved_names():
@@ -122,8 +124,8 @@ def test_new_modules_export_moved_names():
     assert hasattr(REGEX, "_regex_fallback")
 
 
-def test_moved_fn_identity_via_monolith():
-    # 主脚本 re-export 的对象与新模块为同一函数(zero call-site churn 证明)
+def test_moved_fn_identity_via_canonical_namespace():
+    # Canonical namespace points at the same function objects as their modules.
     assert ENH._is_tavily_quota_response is ERRORS._is_tavily_quota_response
     assert ENH._value_evidence_score is EVID._value_evidence_score
     assert ENH._regex_fallback is REGEX._regex_fallback
