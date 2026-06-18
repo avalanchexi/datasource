@@ -32,7 +32,8 @@ def to_compact_date(value: str) -> str:
 def infer_date_from_payload(payload: Any) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
-    metadata = payload.get("metadata", {}) if isinstance(payload.get("metadata"), dict) else {}
+    raw_metadata = payload.get("metadata")
+    metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     for key in ("date", "end_date", "start_date"):
         value = metadata.get(key)
         if not value:
@@ -129,6 +130,10 @@ class RunPaths:
         return self.data_dir / "quality_metrics.json"
 
     @property
+    def quality_trend(self) -> Path:
+        return self.data_dir / "quality_trend.csv"
+
+    @property
     def policy_evaluation(self) -> Path:
         return self.data_dir / "policy_evaluation.json"
 
@@ -137,12 +142,28 @@ class RunPaths:
         return self.data_dir / "run_snapshot.json"
 
     @property
+    def source_conflicts(self) -> Path:
+        return self.data_dir / "source_conflicts.json"
+
+    @property
+    def stage4_risk_review(self) -> Path:
+        return self.data_dir / "stage4_risk_review.json"
+
+    @property
     def recap_facts(self) -> Path:
         return self.data_dir / "recap_facts.json"
 
     @property
     def trend_history_gap(self) -> Path:
         return self.data_dir / "trend_history_gap.json"
+
+    @property
+    def stage2_log_data(self) -> Path:
+        return self.data_dir / "stage2_log.json"
+
+    @property
+    def run_lock(self) -> Path:
+        return self.data_dir / ".run.lock"
 
     @property
     def stage2_log(self) -> Path:
@@ -167,6 +188,28 @@ class RunPaths:
     @property
     def cache_path(self) -> Path:
         return Path("data") / "cache" / "tavily_cache.sqlite"
+
+    def data_dir_whitelist(self) -> set[str]:
+        return {
+            self.market_data.name,
+            self.market_data_stage2.name,
+            self.market_data_complete.name,
+            self.pring_result.name,
+            self.search_tasks_stage2.name,
+            self.websearch_results_auto.name,
+            self.websearch_results_manual.name,
+            self.gap_monitor.name,
+            self.quality_metrics.name,
+            self.quality_trend.name,
+            self.policy_evaluation.name,
+            self.run_snapshot.name,
+            self.source_conflicts.name,
+            self.stage4_risk_review.name,
+            self.trend_history_gap.name,
+            self.recap_facts.name,
+            self.stage2_log_data.name,
+            self.run_lock.name,
+        }
 
 
 def build_run_paths(date: str) -> RunPaths:
