@@ -93,6 +93,7 @@
 
 ## 全局验收(收尾)
 
+- [x] 跨模块耦合审计(2026-06-17,C7 后):`src/` 对 `scripts` 零 import,反向分层耦合彻底消解;C4 fund_flow reclaim + C7 入口瘦身已清掉"模块 import 脚本私名"模式。无清理 PR,留痕收口。
 - [ ] `scripts/` 全部入口 ≤300 行(stage2/2.5 终态 ≤30 行)
 - [ ] run 目录无白名单外文件;无 `.bak`/时间戳副本/`_new` 文件产生
 - [ ] `stage2_effective_hit_rate` 不低于重构前 5 日均值 - 5pp
