@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from datasource.utils.json_io import atomic_write_json
+from datasource.utils.contract_validation import validate_market_data
 from datasource.utils.forex_evidence import (
     STAGE25_FOREX_DAILY_CHANGE_SOURCE_MARKERS as FOREX_DAILY_CHANGE_SOURCE_MARKERS,  # noqa: E501
     STAGE25_FOREX_120D_CHANGE_SOURCE_MARKERS as FOREX_120D_CHANGE_SOURCE_MARKERS,  # noqa: E501
@@ -1251,6 +1252,7 @@ def _run_post_write_trend_backfill(
     _cleanup_metadata_missing(metadata, market_data)
     _apply_pipeline_quality_state(market_data)
 
+    validate_market_data(market_data)
     atomic_write_json(market_data, output_path)
     return stats
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import scripts.stage3_pring_analyzer as stage3
 from datasource.engines.stage2_5 import cli as stage25_cli
+from datasource.engines.stage2_5 import trend_backfill
 
 
 def _write_stage3_inputs(tmp_path: Path) -> tuple[Path, Path]:
@@ -119,6 +120,63 @@ def test_stage25_no_validate_output_sets_env_before_core(tmp_path, monkeypatch):
         ],
     )
 
-    stage25_cli.main()
+    try:
+        stage25_cli.main()
+    finally:
+        os.environ.pop("DATASOURCE_NO_VALIDATE_OUTPUT", None)
 
     assert seen_env == ["1"]
+
+
+def test_stage25_post_write_backfill_validates_before_contract_write(
+    tmp_path, monkeypatch
+):
+    output_path = tmp_path / "market_data_complete.json"
+    events = []
+    market_data = {
+        "metadata": {"date": "2026-02-09"},
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+
+    def fake_validate(payload):
+        events.append(("validate", payload))
+        assert not any(event[0] == "write" for event in events)
+
+    def fake_write(payload, path):
+        events.append(("write", Path(path)))
+
+    monkeypatch.setattr(
+        trend_backfill,
+        "_backfill_trend_changes",
+        lambda *args, **kwargs: {"forex": 0},
+    )
+    monkeypatch.setattr(
+        trend_backfill, "_refresh_stage2_gap_monitor", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(
+        trend_backfill, "_refresh_stage2_notes", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        trend_backfill, "_cleanup_metadata_missing", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(
+        trend_backfill, "_apply_pipeline_quality_state", lambda *args, **kwargs: {}
+    )
+    monkeypatch.setattr(
+        trend_backfill, "validate_market_data", fake_validate, raising=False
+    )
+    monkeypatch.setattr(trend_backfill, "atomic_write_json", fake_write)
+
+    stats = trend_backfill._run_post_write_trend_backfill(
+        market_data, output_path, base_dir=tmp_path / "trend_history"
+    )
+
+    assert stats == {"forex": 0}
+    assert events[0][0] == "validate"
+    assert events[1] == ("write", output_path)

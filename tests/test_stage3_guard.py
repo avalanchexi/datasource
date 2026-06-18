@@ -15,6 +15,42 @@ import json
 import scripts.stage3_pring_analyzer as s3
 
 
+def _valid_pring_result(stage="Expansion", confidence=0.9):
+    return {
+        "stage": stage,
+        "confidence": confidence,
+        "asset_signals": {
+            "bond": "Neutral",
+            "stock": "Neutral",
+            "commodity": "Neutral",
+        },
+        "layer_1_inventory_cycle": {
+            "cycle_stage": "被动补库存",
+            "commodity_bias": "中性",
+            "fundamental_score": 30.0,
+            "indicators": {},
+        },
+        "layer_2_monetary_cycle": {
+            "cycle_stage": "中性",
+            "equity_bias": "中性",
+            "bond_bias": "中性",
+            "monetary_score": 50.0,
+            "indicators": {},
+        },
+        "layer_3_pring_final": {
+            "base_stage": stage,
+            "final_stage": stage,
+            "confidence": confidence,
+            "monetary_adjustment": 0.0,
+            "asset_allocation": {
+                "bond": "中性",
+                "stock": "中性",
+                "commodity": "中性",
+            },
+        },
+    }
+
+
 def test_require_data_completeness_pass():
     payload = {
         "metadata": {"data_completeness": 0.85},
@@ -387,7 +423,7 @@ def test_run_analysis_does_not_block_on_stale_policy_file_when_live_state_clean(
             pass
 
         async def analyze_pring_stage(self, days):
-            return {"stage": "Expansion", "confidence": 0.9}
+            return _valid_pring_result()
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
@@ -599,7 +635,7 @@ def test_run_analysis_does_not_block_on_stale_gap_monitor_when_live_state_clean(
             pass
 
         async def analyze_pring_stage(self, days):
-            return {"stage": "Expansion", "confidence": 0.9}
+            return _valid_pring_result()
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
@@ -705,7 +741,7 @@ def test_run_analysis_records_fund_flow_downgrade_metadata(tmp_path: Path, monke
             pass
 
         async def analyze_pring_stage(self, days):
-            return {"stage": "Expansion", "confidence": 0.9}
+            return _valid_pring_result()
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(s3, "MarketDataContract", DummyContract)

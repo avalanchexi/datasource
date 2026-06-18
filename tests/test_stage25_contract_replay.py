@@ -62,6 +62,7 @@ def test_stage25_refreshes_trend_history_gap_from_custom_base_dir(
                         "pair": "USDCNY",
                         "name": "USD/CNY",
                         "current_rate": 7.12,
+                        "trend": "平稳",
                         "source": "manual https://example.com/usdcny",
                         "source_url": "https://example.com/usdcny",
                     }
@@ -164,6 +165,7 @@ def test_stage25_outputs_are_accepted_by_unified_quality_state(
                         "previous_value": 5.0,
                         "change_rate": 4.0,
                         "unit": "%",
+                        "date": "2026-04",
                         "source": "websearch_manual https://example.com/industrial",
                         "source_url": "https://example.com/industrial",
                     }
