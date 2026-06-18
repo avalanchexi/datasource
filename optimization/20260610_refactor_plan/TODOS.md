@@ -13,7 +13,7 @@
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
 | 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1/C2/C3/C4/C5/C6 完成;下一步 C 终态/全局验收) | B |
-| 批次 D | run 目录契约 | 2 | 未开始 | C(D1 可与 C4 并行) |
+| 批次 D | run 目录契约 | 2 | 🚧 进行中(D1 完成;D2 待做) | C(D1 可与 C4 并行) |
 | 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
 
 **当前焦点:C 批次终态/全局验收——确认 `scripts/` 入口瘦身、命令文档与重构后结构一致。**
@@ -80,7 +80,7 @@
 
 ## 批次 D — run 目录契约(§7,2 个 PR)
 
-- [ ] **PR-D1**:原子写(`atomic_write_json`)+ run 目录文件白名单 + `run_dir_audit` 工具(可与 C4 并行,worktree 支线)
+- [x] **PR-D1**:原子写(`atomic_write_json`)+ run 目录文件白名单 + `run_dir_audit` 工具(可与 C4 并行,worktree 支线)
 - [ ] **PR-D2**:写盘前 contract 校验(hard fail + `--no-validate-output` 逃生门)
 - [ ] 合入后首个交易日 live smoke:run 目录文件数 == 白名单数
 
