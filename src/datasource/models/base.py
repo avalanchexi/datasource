@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Optional, Union
 from datetime import datetime
+from typing import Any, Dict, List, Optional
+
 import pandas as pd
 from pydantic import BaseModel, Field
 
@@ -32,47 +33,74 @@ class DataResponse(BaseModel):
     source: str
     timestamp: datetime = Field(default_factory=datetime.now)
     error: Optional[str] = None
-    
+
     class Config:
         arbitrary_types_allowed = True
 
 
 class BaseDataSource(ABC):
     """数据源基类"""
-    
+
     def __init__(self, config: DataSourceConfig):
         self.config = config
         self.name = config.name
-        
+
     @abstractmethod
     async def get_stock_basic(self, **kwargs) -> DataResponse:
         """获取股票基本信息"""
         pass
-    
-    @abstractmethod 
-    async def get_stock_daily(self, symbol: str, start_date: str, end_date: str, **kwargs) -> DataResponse:
+
+    @abstractmethod
+    async def get_stock_daily(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        **kwargs
+    ) -> DataResponse:
         """获取股票日线数据"""
         pass
 
-    async def get_fund_daily(self, symbol: str, start_date: str, end_date: str, **kwargs) -> DataResponse:
+    async def get_fund_daily(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        **kwargs
+    ) -> DataResponse:
         """获取基金/ETF日线数据，默认回退至股票日线接口"""
-        return await self.get_stock_daily(symbol, start_date, end_date, **kwargs)
+        return await self.get_stock_daily(
+            symbol,
+            start_date,
+            end_date,
+            **kwargs
+        )
 
     @abstractmethod
-    async def get_stock_realtime(self, symbols: List[str], **kwargs) -> DataResponse:
+    async def get_stock_realtime(
+        self,
+        symbols: List[str],
+        **kwargs
+    ) -> DataResponse:
         """获取股票实时数据"""
         pass
-    
+
     @abstractmethod
-    async def get_index_daily(self, symbol: str, start_date: str, end_date: str, **kwargs) -> DataResponse:
+    async def get_index_daily(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+        **kwargs
+    ) -> DataResponse:
         """获取指数日线数据"""
         pass
-    
+
     @abstractmethod
     async def get_financial_data(self, symbol: str, **kwargs) -> DataResponse:
         """获取财务数据"""
         pass
-    
+
     @abstractmethod
     async def is_available(self) -> bool:
         """检查数据源是否可用"""
