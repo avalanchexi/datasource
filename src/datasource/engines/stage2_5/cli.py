@@ -106,7 +106,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.no_validate_output:
+    if getattr(args, "no_validate_output", False):
         os.environ["DATASOURCE_NO_VALIDATE_OUTPUT"] = "1"
 
     market_data_arg = getattr(

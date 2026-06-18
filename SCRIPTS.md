@@ -21,6 +21,7 @@
 - 实时类：language=chinese, topic=news, time_range=day, max_results<=8, search_depth=advanced
 - 宏观/低时效：time_range=year/month, max_results<=6, search_depth=basic
 - 默认启用队列：`--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查可传 `--no-use-queue`
+- 输出 `market_data_stage2.json` 写盘前默认执行 contract validation；失败会在写入前 hard fail。应急逃生门：`--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`
 
 **使用**:
 ```bash
@@ -81,6 +82,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 - 从TuShare/International Finance收集股票、外汇、债券数据
 - 生成初始market_data.json
 - 数据完整性: 25-42%
+- 输出 `market_data.json` 写盘前默认执行 contract validation；失败会在写入前 hard fail。应急逃生门：`--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`
 
 **使用**:
 ```bash
@@ -105,6 +107,7 @@ bash run_clean.sh python scripts/stage1_data_collector.py \
 - 将AI收集的WebSearch数据注入到market_data JSON
 - 支持宏观、货币、资金流向、债券、商品数据
 - 提升数据完整性至95%
+- 输出 `market_data_complete.json` 写盘前默认执行 contract validation；失败会在写入前 hard fail。应急逃生门：`--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`
 
 **使用**:
 ```bash
@@ -139,6 +142,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 基于完整数据执行Pring V4.0三层框架分析
 - 使用参考判断法（API限制）
 - 生成置信度约60%的分析结果
+- 输出 `pring_result.json` 写盘前默认执行 contract validation；失败会在写入前 hard fail。应急逃生门：`--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`
 
 **使用**:
 ```bash
@@ -304,6 +308,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 直接复用 `datasource.calculators.pring_analyzer.PringAnalyzer`
 - 支持 DR007 领先指标平移、阶段关注资产等最新逻辑
 - 默认输出 `data/runs/YYYYMMDD/pring_result.json`，可被 Stage 4 直接消费
+- 写盘前默认执行 `pring_result.json` contract validation；失败会在写入前 hard fail。应急逃生门：`--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`
 
 **用法**:
 ```bash

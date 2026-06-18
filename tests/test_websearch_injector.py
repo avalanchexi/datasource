@@ -1844,6 +1844,7 @@ def test_run_post_write_trend_backfill_persists_output_and_resets_issues(monkeyp
     monkeypatch.setattr(trend_backfill, "_refresh_stage2_gap_monitor", lambda payload: {"top_level": 0, "metadata": 0})
     monkeypatch.setattr(trend_backfill, "_refresh_stage2_notes", lambda metadata, gap: None)
     monkeypatch.setattr(trend_backfill, "_cleanup_metadata_missing", lambda metadata, payload: None)
+    monkeypatch.setattr(trend_backfill, "validate_market_data", lambda payload: None)
 
     stats = trend_backfill._run_post_write_trend_backfill(market_data, output_path)
     saved = json.loads(output_path.read_text(encoding="utf-8"))

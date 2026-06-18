@@ -29,6 +29,7 @@
 - `0/None`、窗口值缺失、`no_value/deepseek_no_value/no_deepseek_key` 一律进入 `manual_required`；零值标记为 `异常零值-需核查`。
 - forex 的 `daily_change/change_120d=0.0` 只有在 snippets/结构化字段明确证明无变化或直接窗口计算时才保留；仅有当前汇率、`no_value`、`no_deepseek_key`、`no change_120d value` 等占位/缺值短语时必须清洗为待补 compare 字段并进入 Stage2.5。
 - Stage3 的 `--allow-estimated` 只允许 `is_estimated=True` 数据参与评分，不绕过 `compare_gaps`、`stale_redlist` 或 policy gate。
+- Stage1/2/2.5/3 写 `market_data*.json`/`pring_result.json` 前默认执行 contract validation；contract failure 会在写入前 hard fail。应急绕过仅用 `--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`，必须罕用并记录原因。
 
 ## 3. Setup & Health Check
 0. Shell/venv 探活（任何 Stage1/Stage2 前先跑）:

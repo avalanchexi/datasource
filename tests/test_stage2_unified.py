@@ -463,6 +463,7 @@ def test_stage2_main_summary_writes_result_count_helper_fields(monkeypatch, tmp_
         return completed, failures, []
 
     monkeypatch.setattr(stage2_execution, "_execute_tasks", fake_execute_tasks)
+    monkeypatch.setattr(stage2_cli, "validate_market_data", lambda payload: None)
     monkeypatch.setattr(
         "sys.argv",
         [

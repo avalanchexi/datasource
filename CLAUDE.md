@@ -20,8 +20,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 4. Stage1 → Stage2 → Stage2.5 → Stage3 → Stage4，每日按序一次性跑完。**Tavily 每日只能跑 1 次** — 422/quota 后改走 Stage2.5 manual，不要重跑 Stage2。
 5. Stage2.5/Stage3/Stage4 同日写产物会持有 `data/runs/YYYYMMDD/.run.lock`；遇到 live owner 先确认/停止并行会话，不手动删锁。
 6. `data/runs/YYYYMMDD/` 遵守 `RunPaths.data_dir_whitelist()` 白名单契约；正常流程不保留 `.bak`、时间戳副本、`_new` 文件，写 JSON/text 产物使用 atomic write 工具。
-7. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
-8. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
+7. Stage1/2/2.5/3 写 `market_data*.json`/`pring_result.json` 前默认 contract validation；失败会在写入前 hard fail。应急绕过用 `--no-validate-output` 或 `DATASOURCE_NO_VALIDATE_OUTPUT=1`，必须罕用并记录原因。
+8. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
+9. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
 
 ## Critical Constraints
 
@@ -232,7 +233,7 @@ if comp < 0.8:
 - **Stage4 报告** (`stage4_report_generator.py`) → `generators/simple_report.py` + gate/路径工具;`generators/report_generator.py`、`comparators/`、`mappers/`、`analyzers/` 已按批次 0 审计归档至 `archive/py_unused/datasource/`
 - **120 日背景扫描 agent** → 已归档至 `archive/py_unused/datasource/agents/`(批次 0 审计 unreachable,未接入 Stage1-4 流水线)
 
-跨阶段公共件：`models/market_data_contract` 数据契约（`models/pring_result_contract` 经批次 0 审计为 `unreachable`，当前无流水线引用；按重构批次 D2 计划接线写盘校验，不作删除候选）；`utils/` 横切工具（`coercion`/`json_io` 数值与 IO、`run_paths` 路径契约、`quality_metrics`/`observability` 指标、`source_trust`/`source_priority`/`source_conflicts` 来源信任、`text_markers` MLF marker、`gate_formatting`）。
+跨阶段公共件：`models/market_data_contract` 用于 Stage1/2/2.5 的 `market_data*.json` 写盘前校验，`models/pring_result_contract` 用于 Stage3 `pring_result.json` 写盘前校验；`utils/contract_validation` 提供默认 hard-fail 校验与应急 bypass。`utils/` 横切工具（`coercion`/`json_io` 数值与 IO、`run_paths` 路径契约、`quality_metrics`/`observability` 指标、`source_trust`/`source_priority`/`source_conflicts` 来源信任、`text_markers` MLF marker、`gate_formatting`）。
 
 ### Key Pattern
 
