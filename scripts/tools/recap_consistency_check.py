@@ -15,7 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from datasource.utils.json_io import load_json_optional
+from datasource.utils.json_io import atomic_write_json, load_json_optional
 from datasource.utils.run_paths import build_run_paths
 
 
@@ -208,8 +208,7 @@ def main() -> None:
     facts["warnings"] = warnings
 
     output_path = Path(args.output) if args.output else run_paths.recap_facts
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(facts, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_json(facts, output_path)
 
     print("[OK] recap fact sheet generated")
     print(f"  - date: {date_ymd}")

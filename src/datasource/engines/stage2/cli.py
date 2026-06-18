@@ -780,11 +780,6 @@ async def main() -> int:
     if websearch_results:
         websearch_results, conflicts_payload = resolve_websearch_results(websearch_results)
         _dump_json({"results": websearch_results}, websearch_results_path)
-        split_dir = websearch_results_path.parent / "websearch_results"
-        split_dir.mkdir(parents=True, exist_ok=True)
-        for item in websearch_results:
-            tid = item["task"]["task_id"]
-            _dump_json(item, split_dir / f"{tid}.json")
         try:
             conflicts_path = run_paths.data_dir / "source_conflicts.json"
             write_source_conflicts(conflicts_payload, conflicts_path)

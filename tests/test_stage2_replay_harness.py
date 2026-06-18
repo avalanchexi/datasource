@@ -575,6 +575,7 @@ def test_replay_full_main(tmp_path, monkeypatch):
     assert_or_update_golden(produced_market, "level2_market_data_stage2.json")
 
     produced_websearch = json.loads(websearch_out.read_text(encoding="utf-8"))
+    assert not (websearch_out.parent / "websearch_results").exists()
     websearch_sorted = sort_results(produced_websearch.get("results") or [])
     assert_or_update_golden(
         {"results": websearch_sorted},

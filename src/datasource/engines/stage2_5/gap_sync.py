@@ -1,6 +1,5 @@
 """Stage2.5 gap and missing-items synchronization helpers."""
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,6 +17,7 @@ from datasource.utils.key_aliases import (
     canonical_monetary_key,
 )
 from datasource.utils.missing_items import append_missing_item
+from datasource.utils.json_io import atomic_write_json
 from datasource.utils.run_paths import build_run_paths_from_reference
 
 
@@ -425,9 +425,5 @@ def _rewrite_gap_monitor_after_injection(
         "quality_blockers": list(state.get("quality_blockers") or []),
     }
 
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(payload, target_path)
     return target_path

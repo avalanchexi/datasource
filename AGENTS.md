@@ -278,7 +278,7 @@ if comp < 0.8:
   ```bash
   bash run_clean.sh python scripts/tools/stage2_low_score_audit.py \
     --date YYYY-MM-DD \
-    --output "data/runs/${DATE_NH}/low_score_audit.json"
+    --output "/tmp/low_score_audit_${DATE_NH}.json"
   ```
 
 ## 7. WebSearch JSON Schema

@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 from datasource.config.search_profiles import SEARCH_PROFILES, get_profile_key
 from datasource.utils.coercion import is_stage2_task_placeholder
+from datasource.utils.json_io import atomic_write_text
 from datasource.utils.key_aliases import canonical_monetary_key
 from datasource.utils.pipeline_quality_state import build_pipeline_quality_state
 from datasource.utils.run_paths import build_run_paths_from_reference
@@ -680,10 +681,8 @@ class Stage2TaskPlanner:
         return unique_tasks
 
     def write_jsonl(self, tasks: List[Dict[str, Any]]) -> Path:
-        self.task_file.parent.mkdir(parents=True, exist_ok=True)
-        with self.task_file.open("w", encoding="utf-8") as f:
-            for task in tasks:
-                f.write(json.dumps(task, ensure_ascii=False) + "\n")
+        text = "".join(json.dumps(task, ensure_ascii=False) + "\n" for task in tasks)
+        atomic_write_text(text, self.task_file)
         logger.info(f"[Stage2TaskPlanner] 已写入 {self.task_file}")
         return self.task_file
 
