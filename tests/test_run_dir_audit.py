@@ -9,7 +9,10 @@ def test_audit_flags_bak_and_timestamp(tmp_path, monkeypatch):
 
     stray = audit.find_stray_files("2026-06-10", base=tmp_path)
 
-    assert set(stray) == {"market_data.json.bak", "market_data_20260610085557.json"}
+    assert set(stray) == {
+        "market_data.json.bak",
+        "market_data_20260610085557.json",
+    }
 
 
 def test_audit_clean_dir_returns_empty(tmp_path):
@@ -29,7 +32,9 @@ def test_audit_missing_run_dir_returns_empty(tmp_path):
     assert audit.find_stray_files("2026-06-10", base=tmp_path) == []
 
 
-def test_cli_dirty_default_exits_zero_and_prints_stray(tmp_path, monkeypatch, capsys):
+def test_cli_dirty_default_exits_zero_and_prints_stray(
+    tmp_path, monkeypatch, capsys
+):
     import scripts.tools.run_dir_audit as audit
 
     d = tmp_path / "data" / "runs" / "20260610"

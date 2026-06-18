@@ -22,12 +22,16 @@ def find_stray_files(date: str, base: Path | str = Path(".")) -> list[str]:
         return []
 
     allowed = run_paths.data_dir_whitelist()
-    return sorted(entry.name for entry in run_dir.iterdir() if entry.name not in allowed)
+    return sorted(
+        entry.name for entry in run_dir.iterdir() if entry.name not in allowed
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Audit data/runs/YYYYMMDD for files outside RunPaths whitelist."
+        description=(
+            "Audit data/runs/YYYYMMDD for files outside RunPaths whitelist."
+        )
     )
     parser.add_argument(
         "--date",
