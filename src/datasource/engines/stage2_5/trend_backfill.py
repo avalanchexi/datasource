@@ -39,7 +39,6 @@ from datasource.engines.stage2_5.common import (
     DEFAULT_SOURCE_LABEL,
     SOURCE_ANOMALY_LABEL,
     _apply_pipeline_quality_state,
-    _calc_change_rate_pct,
     _coerce_float,
     _has_valid_value,
     _merge_quality_issues,
@@ -450,9 +449,15 @@ def _calc_prev_from_event_history(
     reference_date: Optional[str],
     *,
     base_dir: Path = DEFAULT_BASE_DIR,
-) -> Dict[str, Optional[float]]:
+    current_period: Optional[str] = None,
+    unit: Optional[str] = None,
+) -> Dict[str, Any]:
     """为宏观指标从事件序列回推 previous_value 与 change_rate。"""
-    result = {"previous_value": None, "change_rate": None, "reason": None}
+    result: Dict[str, Any] = {
+        "previous_value": None,
+        "change_rate": None,
+        "reason": None,
+    }
     if current_value is None:
         return result
     events = _load_event_history(indicator, base_dir=base_dir)
@@ -460,90 +465,81 @@ def _calc_prev_from_event_history(
         result["reason"] = "trend_history_missing"
         return result
 
-    def _parse_date(date_text: Optional[str]) -> Optional[datetime]:
-        if not date_text:
-            return None
-        text = str(date_text)[:10]
-        for fmt in ("%Y-%m-%d", "%Y-%m", "%Y%m%d", "%Y%m"):
-            try:
-                dt = datetime.strptime(text, fmt)
-                if fmt == "%Y-%m":
-                    return datetime(dt.year, dt.month, 1)
-                if fmt == "%Y%m":
-                    return datetime(dt.year, dt.month, 1)
-                return dt
-            except Exception:
-                continue
-        return None
-
+    anchor_dt = _parse_date(current_period)
     ref_dt = _parse_date(reference_date) or datetime.now()
-    parsed = []
-    if indicator in {"industrial", "industrial_sales"}:
-        for event in events:
-            if not isinstance(event, dict):
-                continue
-            period = event.get("report_period")
-            if not isinstance(period, str) or not re.match(
-                r"20\\d{2}-\\d{2}$", period
-            ):
-                continue
-            dt = _parse_date(period)
-            if dt is None or dt > ref_dt:
-                continue
-            val = _coerce_float(event.get("value"))
-            if val is None:
-                continue
-            parsed.append((dt, val))
-        if len(parsed) < 2:
-            result["reason"] = "no_previous_value"
-            return result
-        parsed.sort(key=lambda x: x[0])
-        latest_val = parsed[-1][1]
-        prev_val = (
-            parsed[-2][1]
-            if abs(latest_val - float(current_value)) < 1e-6
-            else latest_val
+
+    def _event_period(
+        event: Dict[str, Any], *, allow_date_fallback: bool
+    ) -> Optional[datetime]:
+        period = event.get("report_period")
+        if isinstance(period, str) and period.strip():
+            period_text = period.strip()
+            if re.match(r"20\d{2}-\d{2}$", period_text):
+                return _parse_date(period_text)
+            parsed_period = _parse_date(period_text)
+            if parsed_period is not None:
+                return parsed_period
+        if not allow_date_fallback:
+            return None
+        return _parse_date(event.get("release_date") or event.get("date"))
+
+    def _event_visible_at(event: Dict[str, Any]) -> Optional[datetime]:
+        visible_dt = _parse_date(
+            event.get("release_date") or event.get("date")
         )
-        result["previous_value"] = prev_val
-        change_rate_pct = _calc_change_rate_pct(
-            float(current_value), float(prev_val)
-        )
-        if change_rate_pct is None:
-            result["reason"] = "change_rate_pct_div_by_zero"
-        else:
-            result["change_rate"] = change_rate_pct
-        return result
+        if visible_dt is not None:
+            return visible_dt
+        return _event_period(event, allow_date_fallback=True)
+
+    parsed: List[Tuple[datetime, float]] = []
+    current_float = float(current_value)
     for event in events:
         if not isinstance(event, dict):
             continue
-        dt = _parse_date(event.get("release_date") or event.get("date"))
-        if dt is None or dt > ref_dt:
+        dt = _event_period(
+            event,
+            allow_date_fallback=anchor_dt is None,
+        )
+        if dt is None:
             continue
         val = _coerce_float(event.get("value"))
         if val is None:
             continue
-        parsed.append((dt, val))
+        if anchor_dt is not None:
+            if dt >= anchor_dt:
+                continue
+        else:
+            visible_dt = _event_visible_at(event)
+            if visible_dt is None or visible_dt > ref_dt:
+                continue
+        parsed.append((dt, float(val)))
 
-    if len(parsed) < 2:
+    if not parsed:
         result["reason"] = "no_previous_value"
         return result
 
     parsed.sort(key=lambda x: x[0])
-    latest_val = parsed[-1][1]
-    prev_val = (
-        parsed[-2][1]
-        if abs(latest_val - float(current_value)) < 1e-6
-        else latest_val
-    )
+    if anchor_dt is None and abs(parsed[-1][1] - current_float) < 1e-6:
+        parsed = parsed[:-1]
+        if not parsed:
+            result["reason"] = "no_previous_value"
+            return result
+    prev_val = parsed[-1][1]
 
     result["previous_value"] = prev_val
-    change_rate_pct = _calc_change_rate_pct(
-        float(current_value), float(prev_val)
+    change_rate, note = _macro_change_rate(
+        indicator,
+        current_float,
+        float(prev_val),
+        unit=unit,
     )
-    if change_rate_pct is None:
-        result["reason"] = "change_rate_pct_div_by_zero"
+    if change_rate is None:
+        result["reason"] = note or "change_rate_pct_div_by_zero"
     else:
-        result["change_rate"] = change_rate_pct
+        result["change_rate"] = change_rate
+    result["value_source"] = "event_history_backfill"
+    if note is not None:
+        result["caliber_note"] = note
     return result
 
 

@@ -403,7 +403,13 @@ def test_trend_backfill_history_calculations_locked(tmp_path):
         7.5,
         "2026-01-10",
         base_dir=tmp_path,
-    ) == {"previous_value": 7.0, "change_rate": 7.1429, "reason": None}
+    ) == {
+        "previous_value": 7.0,
+        "change_rate": 7.1429,
+        "reason": None,
+        "value_source": "event_history_backfill",
+        "caliber_note": "caliber_inferred",
+    }
 
 
 def test_trend_backfill_forex_and_confidence_helpers_locked():
