@@ -224,6 +224,7 @@ class MarketDataContract(BaseModel):
             "data_completeness"
         )
     )
+    missing_items: List[Any] = Field(default_factory=list)
     stock_indices: List[StockIndexData]
     commodities: List[CommodityData]
     forex: List[ForexData]
