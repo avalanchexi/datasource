@@ -299,3 +299,4 @@ bash run_clean.sh python -m pytest -q    # baseline 必须与主 checkout 一致
 6. **依赖封闭**:新增工具依赖(如 coverage)只装 `.venv`,不改 `requirements.txt`/`setup.py`,除非 plan 显式声明。
 7. **行号保鲜**:从当时 HEAD 现生成,不引用已漂移的行号;涉及搬移的代码块直接给完整代码,不写"同 Task N"。
 8. **writing-plans 自带三查**:spec 覆盖度、placeholder 扫描、跨任务类型/签名一致性。
+9. **反向依赖核查(C4/C7 教训)**:任何"搬模块 / 瘦入口 / 删 re-export / 把脚本私名移走"的 plan,必须先枚举**谁 import 了被动的东西**——`grep -rn "from <被动模块> import\|import <被动模块>" src/ scripts/ tests/`、并查 `src/` 内是否有函数体内**延迟 import 脚本私名**(`grep -rn "from scripts\.\|import scripts\." src/`)。只看正向调用图会漏判反向依赖方:C4 漏了 `extraction_apply` 跨脚本 import fund_flow helper;C7 漏了 `stage2_lc_pipeline` 延迟 import 脚本私名。fan-out 勘探与 plan 都要把这步列为强制项。
