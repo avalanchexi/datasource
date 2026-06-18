@@ -31,3 +31,5 @@
 - [x] PR-C5 Stage2.5 split: extracted `trend_backfill`, `entry_mergers`, `core`, and `cli`; repointed monkeypatches to owning modules; added re-export identity and qualified-patch reach characterization.
 - [x] PR-C6 Stage1 entry slim: relocated the Stage1 collector into `src/datasource/engines/stage1/collector.py` and kept `scripts/stage1_data_collector.py` as a thin entrypoint.
 - [x] PR-C7 C terminal cleanup: removed the remaining batch-B path shims, thinned `scripts/stage2_unified_enhancer.py` and `scripts/stage2_5_injector.py` to <=30-line entrypoints, repointed tests/imports/monkeypatches to canonical `engines`/`utils` modules, and completed full validation.
+- [x] PR-D1 run directory contract: moved configured scratch outputs outside `data/runs`, added atomic JSON/text writes, and introduced run-dir audit coverage.
+- [x] PR-D2 pre-write contract validation: aligned market/Pring contracts with real outputs and hard-fails Stage1/2/2.5/3 main JSON writes before disk, with `--no-validate-output` / `DATASOURCE_NO_VALIDATE_OUTPUT=1` as the documented escape hatch.
