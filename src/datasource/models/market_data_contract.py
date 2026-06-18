@@ -6,7 +6,6 @@ Market Data Contract - V3.1 解耦架构
 """
 
 import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, validator
@@ -34,7 +33,12 @@ class CommodityData(BaseModel):
     name: str
     current_price: Optional[float] = None
     unit: str  # $/oz, $/barrel, etc.
+    as_of_date: Optional[str] = None
+    confidence: Optional[float] = None
+    daily_change_basis: Optional[str] = None
     daily_change: Optional[float] = None
+    date: Optional[str] = None
+    is_estimated: bool = False
     ytd_change: Optional[float] = None
     change_120d: Optional[float] = None
     change_120d_basis: Optional[str] = None
@@ -43,6 +47,7 @@ class CommodityData(BaseModel):
     source_url: Optional[str] = None
     timestamp: str
     stage_task_id: Optional[str] = None
+    trend_history_confidence: Optional[str] = None
     note: Optional[str] = None
 
 
@@ -53,10 +58,19 @@ class ForexData(BaseModel):
     current_rate: float
     daily_change: Optional[float] = None
     change_120d: Optional[float] = None
+    change_120d_base_date: Optional[str] = None
+    change_120d_basis: Optional[str] = None
+    daily_change_base_date: Optional[str] = None
+    daily_change_basis: Optional[str] = None
+    date: Optional[str] = None
     trend: str
     source: str
     source_url: Optional[str] = None
     as_of_date: Optional[str] = None
+    stage_task_id: Optional[str] = None
+    trend_history_confidence: Optional[str] = None
+    confidence: Optional[float] = None
+    is_estimated: bool = False
     note: Optional[str] = None
 
 
@@ -73,7 +87,10 @@ class BondYieldData(BaseModel):
     as_of_date: Optional[str] = None
     report_period: Optional[str] = None
     is_estimated: bool = False
+    estimation_method: Optional[str] = None
+    source_url: Optional[str] = None
     stage_task_id: Optional[str] = None
+    trend_history_confidence: Optional[str] = None
     note: Optional[str] = None
 
 
@@ -86,8 +103,15 @@ class FundFlowData(BaseModel):
     trend: str
     source: str
     source_url: Optional[str] = None
+    as_of_date: Optional[str] = None
+    claimed_source_tier: Optional[str] = None
+    date: Optional[str] = None
+    estimation_method: Optional[str] = None
     metric_basis: Optional[str] = None
+    source_tier: Optional[str] = None
+    window_evidence: Optional[str] = None
     is_estimated: bool = False
+    manual_required: bool = False
     note: Optional[str] = None
     stage_task_id: Optional[str] = None
 
@@ -120,8 +144,11 @@ class FundFlowData(BaseModel):
             amount = float(match.group()) * multiplier
 
             # 若原文未显式带负号，但包含“净流出”等关键词，则补充符号
-            lowered = text.lower()
-            if ('净流出' in text or '流出' in text) and amount > 0 and '-' not in match.group():
+            if (
+                ('净流出' in text or '流出' in text)
+                and amount > 0
+                and '-' not in match.group()
+            ):
                 amount = -amount
 
             return amount
@@ -155,6 +182,10 @@ class MacroIndicatorData(BaseModel):
     value_type: Optional[str] = None    # 口径标记: yoy_month/yoy_ytd 等
     source: str
     is_estimated: bool = False
+    estimation_method: Optional[str] = None
+    report_period: Optional[str] = None
+    source_url: Optional[str] = None
+    confidence: Optional[float] = None
     is_stale: bool = False
     expected_period: Optional[str] = None
     stale_reason: Optional[str] = None
@@ -173,6 +204,11 @@ class MonetaryPolicyData(BaseModel):
     rrr_type: Optional[str] = None      # 存准率口径: weighted/statutory 等
     source: str
     is_estimated: bool = False
+    estimation_method: Optional[str] = None
+    report_period: Optional[str] = None
+    source_url: Optional[str] = None
+    trend_history_confidence: Optional[str] = None
+    confidence: Optional[float] = None
     is_stale: bool = False
     expected_period: Optional[str] = None
     stale_reason: Optional[str] = None
@@ -183,7 +219,10 @@ class MonetaryPolicyData(BaseModel):
 class MarketDataContract(BaseModel):
     """市场数据完整合约"""
     metadata: Dict = Field(
-        description="元数据: date, start_date, end_date, generation_time, data_completeness"
+        description=(
+            "元数据: date, start_date, end_date, generation_time, "
+            "data_completeness"
+        )
     )
     stock_indices: List[StockIndexData]
     commodities: List[CommodityData]
@@ -191,8 +230,12 @@ class MarketDataContract(BaseModel):
     bonds: List[BondYieldData]
     fund_flow: Dict[str, FundFlowData]
     financial_news: List[FinancialNewsItem] = Field(default_factory=list)
-    macro_indicators: Dict[str, MacroIndicatorData] = Field(default_factory=dict)
-    monetary_policy: Dict[str, MonetaryPolicyData] = Field(default_factory=dict)
+    macro_indicators: Dict[str, MacroIndicatorData] = Field(
+        default_factory=dict
+    )
+    monetary_policy: Dict[str, MonetaryPolicyData] = Field(
+        default_factory=dict
+    )
     derived_metrics: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
