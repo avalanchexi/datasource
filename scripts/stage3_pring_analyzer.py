@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -19,6 +20,7 @@ from typing import Any, Dict, List, Optional, Set
 from datasource import get_manager
 from datasource.calculators.pring_analyzer import PringAnalyzer
 from datasource.models.market_data_contract import MarketDataContract
+from datasource.utils.contract_validation import validate_pring_result
 from datasource.utils.gate_formatting import (
     GateBlock,
     format_gate_blocks,
@@ -721,6 +723,7 @@ async def _run_analysis(
     if isinstance(non_blocking_warnings, list) and non_blocking_warnings:
         pring_result["metadata"]["non_blocking_warnings"] = non_blocking_warnings
 
+    validate_pring_result(pring_result)
     atomic_write_json(pring_result, output_path)
 
     print("[SUCCESS] Pring 分析完成：")
@@ -819,11 +822,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="启用旧版静态阶段映射（回滚/对比用）"
     )
+    parser.add_argument(
+        "--no-validate-output",
+        action="store_true",
+        help="跳过写盘前 contract 校验(逃生门)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.no_validate_output:
+        os.environ["DATASOURCE_NO_VALIDATE_OUTPUT"] = "1"
+
     market_path = Path(args.market_data).resolve()
     min_completeness = float(args.min_completeness)
     days = int(args.days)

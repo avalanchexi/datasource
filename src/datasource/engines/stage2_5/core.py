@@ -8,6 +8,7 @@ from datasource.utils.key_aliases import (
     MONETARY_KEY_ALIASES,
     normalize_monetary_section,
 )
+from datasource.utils.contract_validation import validate_market_data
 from datasource.utils.json_io import atomic_write_json
 from datasource.utils.policy_rules import get_non_blocking_warning_rules
 from datasource.utils.quality_metrics import build_quality_metrics
@@ -937,6 +938,7 @@ def inject_websearch_data(
 
     # 保存到输出文件
     print(f"\n[INFO] 保存完整数据到: {output_path}")
+    validate_market_data(market_data)
     atomic_write_json(market_data, output_path)
 
     summary_counts = metadata["injection_summary"]["counts"]
@@ -1011,6 +1013,7 @@ def inject_websearch_data(
                 print("  - trend_history post-write backfill: no updates")
             quality_state = _apply_pipeline_quality_state(market_data)
             quality_blockers = quality_state.get("quality_blockers") or []
+            validate_market_data(market_data)
             atomic_write_json(market_data, output_path)
         except Exception as exc:  # noqa: BLE001
             print(f"  [WARN] trend_history post-write backfill failed: {exc}")

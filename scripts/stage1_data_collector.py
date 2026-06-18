@@ -6,11 +6,13 @@ Stage 1: Market Data Collector (V3.1 解耦架构)
 输出: data/runs/YYYYMMDD/market_data.json
 """
 
-import asyncio
 import argparse
+import asyncio
+import os
 from pathlib import Path
 
 from datasource.models.market_data_contract import FundFlowData  # noqa: F401
+from datasource.utils.contract_validation import validate_market_data
 from datasource.utils.json_io import atomic_write_json
 from datasource.utils.trend_history_store import (
     write_from_market_data,
@@ -33,8 +35,15 @@ async def main():
     parser = argparse.ArgumentParser(description='Stage 1: 市场数据收集器')
     parser.add_argument('--date', required=True, help='结束日期 (YYYY-MM-DD 或 YYYYMMDD)')
     parser.add_argument('--output', help='输出JSON文件路径 (默认: data/runs/YYYYMMDD/market_data.json)')
+    parser.add_argument(
+        "--no-validate-output",
+        action="store_true",
+        help="跳过写盘前 contract 校验(逃生门)",
+    )
 
     args = parser.parse_args()
+    if args.no_validate_output:
+        os.environ["DATASOURCE_NO_VALIDATE_OUTPUT"] = "1"
 
     # 统一日期格式，容忍 YYYYMMDD
     try:
@@ -79,6 +88,7 @@ async def main():
         print(f"[WARN] trend_history backfill failed: {exc}")
 
     # 保存JSON
+    validate_market_data(market_payload)
     atomic_write_json(market_payload, output_path)
 
     print(f"[OK] 数据已保存到: {output_path}")

@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 from pathlib import Path
 from typing import Tuple
@@ -40,6 +41,11 @@ def parse_args() -> argparse.Namespace:
         nargs="?",
         default=str(default_output),
         help="注入后的完整市场数据输出路径",
+    )
+    parser.add_argument(
+        "--no-validate-output",
+        action="store_true",
+        help="跳过写盘前 contract 校验(逃生门)",
     )
     parser.add_argument(
         "--date",
@@ -100,6 +106,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.no_validate_output:
+        os.environ["DATASOURCE_NO_VALIDATE_OUTPUT"] = "1"
+
     market_data_arg = getattr(
         args, "market_data_path", getattr(args, "input_file", None)
     )

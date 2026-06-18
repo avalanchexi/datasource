@@ -50,6 +50,7 @@ from datasource.engines.stage2.diagnostics import (
 from datasource.engines.stage2.snippet_filters import _percentile
 from datasource.engines.stage2.validation import _flag_fund_flow_anomalies
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
+from datasource.utils.contract_validation import validate_market_data
 from datasource.utils.json_io import atomic_write_json, load_json_strict
 from datasource.utils.key_aliases import normalize_monetary_section
 from datasource.utils.missing_items import sync_top_level_missing_view
@@ -90,6 +91,11 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage 2 Unified Enhancer (Tavily + DeepSeek)")  # noqa: E501
     parser.add_argument("--market-data", required=True, help="Stage1 生成的 market_data.json 路径")  # noqa: E501
     parser.add_argument("--output", help="增强后输出路径；默认覆盖输入")
+    parser.add_argument(
+        "--no-validate-output",
+        action="store_true",
+        help="跳过写盘前 contract 校验(逃生门)",
+    )
     parser.add_argument("--phase", choices=["essential", "assets", "all"], default="all")  # noqa: E501
     parser.add_argument("--search-backend", choices=["tavily"], default="tavily")  # noqa: E501
     parser.add_argument("--fund-flow-backend", choices=["tavily"], default="tavily")  # noqa: E501
@@ -521,6 +527,9 @@ async def main() -> int:
     from datasource.engines.stage2.execution import _execute_tasks
 
     args = _parse_args()
+    if args.no_validate_output:
+        os.environ["DATASOURCE_NO_VALIDATE_OUTPUT"] = "1"
+
     # Apply policy_rules defaults (if present)
     try:
         policy_rules = load_policy_rules()
@@ -791,6 +800,7 @@ async def main() -> int:
     metadata["ai_websearch_enhanced"] = True
     metadata["stage2_completed_at"] = datetime.now().isoformat()
 
+    validate_market_data(market_payload)
     _dump_json(market_payload, output_path)
 
     pending_manual = list(
