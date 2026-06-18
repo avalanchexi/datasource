@@ -107,7 +107,7 @@ def _copy_source_url(target: Dict[str, Any], payload: Dict[str, Any]) -> None:
 def _coerce_stage2_results_to_schema(raw: Dict[str, Any]) -> Dict[str, Any]:
     """
     将 Stage2 Unified 的 websearch_results（results 数组，含 task/extraction）转换为
-    stage2_5_injector 期望的 schema。
+    Stage2.5 期望的 schema。
     """
     if "results" not in raw or not isinstance(raw.get("results"), list):
         return raw
