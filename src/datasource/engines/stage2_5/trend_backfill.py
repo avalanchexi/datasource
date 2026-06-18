@@ -410,6 +410,40 @@ def _calc_change_from_event_history(
     return result
 
 
+MACRO_CHANGE_RATE_CALIBER = {
+    "cpi": "yoy_pp",
+    "ppi": "yoy_pp",
+    "pmi": "yoy_pp",
+    "pmi_new_orders": "yoy_pp",
+    "pmi_production": "yoy_pp",
+    "gdp": "yoy_pp",
+    "industrial": "yoy_pp",
+    "industrial_sales": "yoy_pp",
+    "bdi": "level_pct",
+}
+
+
+def _macro_change_rate(
+    indicator: str,
+    current: float,
+    previous: float,
+    *,
+    unit: Optional[str] = None,
+) -> Tuple[Optional[float], Optional[str]]:
+    caliber = MACRO_CHANGE_RATE_CALIBER.get(indicator)
+    inferred = caliber is None
+    if caliber is None:
+        caliber = "yoy_pp" if str(unit or "").strip() == "%" else "level_pct"
+
+    note = "caliber_inferred" if inferred else None
+    if caliber == "yoy_pp":
+        return round(current - previous, 4), note
+
+    if abs(previous) < 1e-9:
+        return None, "change_rate_pct_div_by_zero"
+    return round((current - previous) / abs(previous) * 100, 4), note
+
+
 def _calc_prev_from_event_history(
     indicator: str,
     current_value: Optional[float],
