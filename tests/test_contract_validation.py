@@ -8,7 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from datasource.models import market_data_contract as market_contract
-from datasource.models.market_data_contract import MarketDataContract
+from datasource.models.market_data_contract import (
+    MacroIndicatorData,
+    MarketDataContract,
+)
 from datasource.models.pring_result_contract import PringResultContract
 from datasource.utils.contract_validation import (
     ContractValidationError,
@@ -136,6 +139,24 @@ def test_validate_market_data_bad_type_raises():
 
     with pytest.raises(ContractValidationError):
         validate_market_data(payload)
+
+
+def test_macro_indicator_contract_preserves_value_source():
+    indicator = _model_validate(
+        MacroIndicatorData,
+        {
+            "indicator_name": "Custom Macro",
+            "current_value": 3.0,
+            "previous_value": 2.0,
+            "change_rate": 1.0,
+            "unit": "%",
+            "date": "2026-06",
+            "source": "manual",
+            "value_source": "event_history_backfill",
+        },
+    )
+
+    assert indicator.value_source == "event_history_backfill"
 
 
 def test_validate_market_data_non_validation_error_propagates(monkeypatch):

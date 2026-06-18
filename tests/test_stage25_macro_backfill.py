@@ -2,6 +2,8 @@ import json
 from pathlib import Path
 from typing import Dict, List
 
+from datasource.engines.stage2_5 import trend_backfill
+from datasource.engines.stage2_5.entry_mergers import _apply_macro_entry
 from datasource.engines.stage2_5.trend_backfill import (
     MACRO_CHANGE_RATE_CALIBER,
     _calc_prev_from_event_history,
@@ -359,3 +361,279 @@ def test_prev_history_old_call_filters_future_release_by_visibility(tmp_path):
     assert result["change_rate"] == 0.3
     assert result["value_source"] == "event_history_backfill"
     assert result["reason"] is None
+
+
+def test_apply_macro_entry_passes_period_and_unit_to_event_backfill(
+    tmp_path,
+):
+    _write_events(
+        tmp_path,
+        "custom_macro",
+        [
+            {
+                "report_period": "2026-05",
+                "release_date": "2026-06-09",
+                "value": 2.0,
+            },
+            {
+                "report_period": "2026-06",
+                "release_date": "2026-07-09",
+                "value": 3.0,
+            },
+        ],
+    )
+    entry = {
+        "indicator_name": "Custom Macro",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "",
+        "source": "待WebSearch补充",
+        "note": "",
+        "is_estimated": True,
+    }
+    payload = {
+        "indicator_name": "Custom Macro",
+        "current_value": 3.0,
+        "report_period": "2026-06",
+        "unit": "%",
+        "source": "manual",
+    }
+
+    assert _apply_macro_entry(
+        "custom_macro",
+        entry,
+        payload,
+        "2026-06-30",
+        trend_history_base_dir=tmp_path,
+    )
+
+    assert entry["previous_value"] == 2.0
+    assert entry["change_rate"] == 1.0
+    assert entry["value_source"] == "event_history_backfill"
+    assert "caliber_inferred" in entry["note"]
+
+
+def test_apply_macro_entry_wires_period_and_unit_arguments(
+    monkeypatch,
+    tmp_path,
+):
+    captured: Dict[str, object] = {}
+
+    def _fake_prev_from_history(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "previous_value": 2.0,
+            "change_rate": 1.0,
+            "reason": None,
+            "value_source": "event_history_backfill",
+            "caliber_note": "caliber_inferred",
+        }
+
+    monkeypatch.setattr(
+        trend_backfill,
+        "_calc_prev_from_event_history",
+        _fake_prev_from_history,
+    )
+    entry = {
+        "indicator_name": "Custom Macro",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "",
+        "source": "待WebSearch补充",
+        "note": "",
+    }
+    payload = {
+        "indicator_name": "Custom Macro",
+        "current_value": 3.0,
+        "report_period": "2026-06",
+        "unit": "%",
+        "source": "manual",
+    }
+
+    assert _apply_macro_entry(
+        "custom_macro",
+        entry,
+        payload,
+        "2026-06-30",
+        trend_history_base_dir=tmp_path,
+    )
+
+    assert captured["args"][:3] == (
+        "custom_macro",
+        3.0,
+        "2026-06-30",
+    )
+    assert captured["kwargs"]["current_period"] == "2026-06"
+    assert captured["kwargs"]["unit"] == "%"
+    assert captured["kwargs"]["base_dir"] == tmp_path
+
+
+def test_apply_macro_entry_preserves_existing_non_backfill_value_source(
+    tmp_path,
+):
+    _write_events(
+        tmp_path,
+        "custom_macro",
+        [
+            {"report_period": "2026-05", "value": 2.0},
+            {"report_period": "2026-06", "value": 3.0},
+        ],
+    )
+    entry = {
+        "indicator_name": "Custom Macro",
+        "current_value": None,
+        "previous_value": None,
+        "change_rate": None,
+        "unit": "%",
+        "date": "",
+        "source": "待WebSearch补充",
+        "value_source": "manual_override",
+    }
+    payload = {
+        "indicator_name": "Custom Macro",
+        "current_value": 3.0,
+        "report_period": "2026-06",
+        "unit": "%",
+        "source": "manual",
+    }
+
+    assert _apply_macro_entry(
+        "custom_macro",
+        entry,
+        payload,
+        "2026-06-30",
+        trend_history_base_dir=tmp_path,
+    )
+
+    assert entry["previous_value"] == 2.0
+    assert entry["change_rate"] == 1.0
+    assert entry["value_source"] == "manual_override"
+
+
+def test_backfill_trend_changes_tags_macro_event_history_source(tmp_path):
+    _write_events(
+        tmp_path,
+        "custom_macro",
+        [
+            {
+                "report_period": "2026-05",
+                "release_date": "2026-06-09",
+                "value": 2.0,
+            },
+            {
+                "report_period": "2026-06",
+                "release_date": "2026-07-09",
+                "value": 3.0,
+            },
+        ],
+    )
+    market_data = {
+        "metadata": {"date": "2026-06-30"},
+        "macro_indicators": {
+            "custom_macro": {
+                "indicator_name": "Custom Macro",
+                "current_value": 3.0,
+                "previous_value": None,
+                "change_rate": None,
+                "report_period": "2026-06",
+                "unit": "%",
+            }
+        },
+    }
+
+    stats = trend_backfill._backfill_trend_changes(
+        market_data,
+        base_dir=tmp_path,
+    )
+
+    indicator = market_data["macro_indicators"]["custom_macro"]
+    assert stats["macro_indicators"] == 1
+    assert indicator["previous_value"] == 2.0
+    assert indicator["change_rate"] == 1.0
+    assert indicator["value_source"] == "event_history_backfill"
+
+
+def test_backfill_trend_changes_wires_period_and_unit_arguments(
+    monkeypatch,
+):
+    captured: Dict[str, object] = {}
+
+    def _fake_prev_from_history(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return {
+            "previous_value": 2.0,
+            "change_rate": 1.0,
+            "reason": None,
+            "value_source": "event_history_backfill",
+        }
+
+    monkeypatch.setattr(
+        trend_backfill,
+        "_calc_prev_from_event_history",
+        _fake_prev_from_history,
+    )
+    market_data = {
+        "metadata": {"date": "2026-06-30"},
+        "macro_indicators": {
+            "custom_macro": {
+                "indicator_name": "Custom Macro",
+                "current_value": 3.0,
+                "previous_value": None,
+                "change_rate": None,
+                "report_period": "2026-06",
+                "unit": "%",
+            }
+        },
+    }
+
+    trend_backfill._backfill_trend_changes(
+        market_data,
+        base_dir=Path("/tmp/trend-history-test"),
+    )
+
+    assert captured["args"][:3] == (
+        "custom_macro",
+        3.0,
+        "2026-06-30",
+    )
+    assert captured["kwargs"]["current_period"] == "2026-06"
+    assert captured["kwargs"]["unit"] == "%"
+    assert captured["kwargs"]["base_dir"] == Path("/tmp/trend-history-test")
+
+
+def test_backfill_trend_changes_preserves_non_backfill_value_source(tmp_path):
+    _write_events(
+        tmp_path,
+        "custom_macro",
+        [
+            {"report_period": "2026-05", "value": 2.0},
+            {"report_period": "2026-06", "value": 3.0},
+        ],
+    )
+    market_data = {
+        "metadata": {"date": "2026-06-30"},
+        "macro_indicators": {
+            "custom_macro": {
+                "indicator_name": "Custom Macro",
+                "current_value": 3.0,
+                "previous_value": None,
+                "change_rate": None,
+                "report_period": "2026-06",
+                "unit": "%",
+                "value_source": "manual_override",
+            }
+        },
+    }
+
+    trend_backfill._backfill_trend_changes(market_data, base_dir=tmp_path)
+
+    indicator = market_data["macro_indicators"]["custom_macro"]
+    assert indicator["previous_value"] == 2.0
+    assert indicator["change_rate"] == 1.0
+    assert indicator["value_source"] == "manual_override"

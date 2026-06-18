@@ -1193,12 +1193,32 @@ def _backfill_trend_changes(
         change_missing = indicator.get("change_rate") is None
         if prev_missing or change_missing:
             hist_prev = _calc_prev_from_event_history(
-                key, current, reference_date, base_dir=base_dir
+                key,
+                current,
+                reference_date,
+                base_dir=base_dir,
+                current_period=(
+                    indicator.get("report_period")
+                    or indicator.get("date")
+                    or indicator.get("as_of_date")
+                ),
+                unit=indicator.get("unit"),
             )
+            filled_from_history = False
             if prev_missing and hist_prev.get("previous_value") is not None:
                 indicator["previous_value"] = hist_prev.get("previous_value")
+                filled_from_history = True
             if change_missing and hist_prev.get("change_rate") is not None:
                 indicator["change_rate"] = hist_prev.get("change_rate")
+                filled_from_history = True
+            existing_value_source = indicator.get("value_source")
+            if (
+                filled_from_history
+                and existing_value_source
+                in (None, "", "event_history_backfill")
+                and hist_prev.get("value_source")
+            ):
+                indicator["value_source"] = hist_prev.get("value_source")
             reason = hist_prev.get("reason") or "manual_incomplete"
             if indicator.get("previous_value") is None:
                 _append_note(indicator, f"reason={reason}")

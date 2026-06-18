@@ -195,6 +195,7 @@ class MacroIndicatorData(BaseModel):
     estimation_method: Optional[str] = None
     report_period: Optional[str] = None
     source_url: Optional[str] = None
+    value_source: Optional[str] = None
     confidence: Optional[float] = None
     is_stale: bool = False
     expected_period: Optional[str] = None

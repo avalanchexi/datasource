@@ -128,6 +128,8 @@ def _apply_macro_entry(
         entry["date"] = incoming_date
     if payload.get("expected_period"):
         entry["expected_period"] = payload.get("expected_period")
+    if payload.get("report_period"):
+        entry["report_period"] = payload.get("report_period")
     entry["as_of_date"] = (
         payload.get("as_of_date")
         or payload.get("report_period")
@@ -241,9 +243,24 @@ def _apply_macro_entry(
             entry["current_value"],
             reference_date,
             base_dir=trend_history_base_dir,
+            current_period=(
+                entry.get("report_period")
+                or entry.get("date")
+                or entry.get("as_of_date")
+            ),
+            unit=entry.get("unit"),
         )
         if hist_prev.get("previous_value") is not None:
             entry["previous_value"] = hist_prev.get("previous_value")
+            existing_value_source = entry.get("value_source")
+            if existing_value_source in (
+                None,
+                "",
+                "event_history_backfill",
+            ) and hist_prev.get("value_source"):
+                entry["value_source"] = hist_prev.get("value_source")
+            if hist_prev.get("caliber_note"):
+                _append_note(entry, "caliber_inferred")
             if (
                 entry["change_rate"] is None
                 and hist_prev.get("change_rate") is not None
