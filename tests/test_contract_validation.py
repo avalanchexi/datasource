@@ -1,7 +1,9 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from datasource.models.market_data_contract import MarketDataContract
 from datasource.models.pring_result_contract import PringResultContract
@@ -15,6 +17,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MARKET_DATA_PATTERN = "data/runs/2026*/market_data_complete.json"
 PRING_RESULT_PATTERN = "data/runs/2026*/pring_result.json"
 GOLDEN_DIR = ROOT / "tests/fixtures/pring_golden"
+GOLDEN_MARKET_DATA = GOLDEN_DIR / "market_data_complete.json"
+GOLDEN_PRING_RESULT = GOLDEN_DIR / "pring_result.json"
 
 
 def _discover_fixtures(pattern, fallback):
@@ -28,11 +32,11 @@ def _discover_fixtures(pattern, fallback):
 
 MD = _discover_fixtures(
     MARKET_DATA_PATTERN,
-    GOLDEN_DIR / "market_data_complete.json",
+    GOLDEN_MARKET_DATA,
 )
 PR = _discover_fixtures(
     PRING_RESULT_PATTERN,
-    GOLDEN_DIR / "pring_result.json",
+    GOLDEN_PRING_RESULT,
 )
 
 assert MD, (
@@ -51,11 +55,11 @@ def _load_json(path):
 
 
 def _good_market_payload():
-    return _load_json(MD[-1])
+    return _load_json(GOLDEN_MARKET_DATA)
 
 
 def _good_pring_payload():
-    return _load_json(PR[-1])
+    return _load_json(GOLDEN_PRING_RESULT)
 
 
 def _model_validate(model, payload):
@@ -79,19 +83,48 @@ def test_validate_market_data_ok():
     validate_market_data(_good_market_payload())
 
 
+def test_validate_market_data_does_not_mutate_payload():
+    payload = _good_market_payload()
+    before = deepcopy(payload)
+
+    validate_market_data(payload)
+
+    assert payload == before
+
+
 def test_validate_market_data_missing_required_raises():
     payload = _good_market_payload()
     del payload["stock_indices"]
+
+    with pytest.raises(ContractValidationError) as exc_info:
+        validate_market_data(payload)
+
+    assert "market_data contract validation failed" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, ValidationError)
+
+
+def test_validate_market_data_bad_type_raises():
+    payload = _good_market_payload()
+    assert payload["commodities"]
+    payload["commodities"][0]["current_price"] = "not-a-number"
 
     with pytest.raises(ContractValidationError):
         validate_market_data(payload)
 
 
-def test_validate_market_data_bad_type_raises():
+def test_validate_market_data_non_validation_error_propagates(monkeypatch):
     payload = _good_market_payload()
-    payload["commodities"][0]["current_price"] = "not-a-number"
+    message = "unexpected validation plumbing failure"
 
-    with pytest.raises(ContractValidationError):
+    def raise_unexpected_error(model, payload):
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(
+        "datasource.utils.contract_validation._model_validate",
+        raise_unexpected_error,
+    )
+
+    with pytest.raises(RuntimeError, match=message):
         validate_market_data(payload)
 
 

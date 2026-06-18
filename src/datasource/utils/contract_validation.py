@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from pydantic import ValidationError
+
 from datasource.models.market_data_contract import MarketDataContract
 from datasource.models.pring_result_contract import PringResultContract
 
@@ -29,7 +31,7 @@ def validate_market_data(payload: Any) -> None:
         return
     try:
         _model_validate(MarketDataContract, payload)
-    except Exception as exc:  # noqa: BLE001 - re-raise as contract error
+    except ValidationError as exc:
         raise ContractValidationError(
             f"market_data contract validation failed:\n{exc}"
         ) from exc
@@ -40,7 +42,7 @@ def validate_pring_result(payload: Any) -> None:
         return
     try:
         _model_validate(PringResultContract, payload)
-    except Exception as exc:  # noqa: BLE001
+    except ValidationError as exc:
         raise ContractValidationError(
             f"pring_result contract validation failed:\n{exc}"
         ) from exc
