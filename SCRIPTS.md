@@ -62,10 +62,10 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
   2) 合并多份 websearch 结果为一份：  
      ```bash
      jq -s 'reduce .[] as $it ({}; .fund_flow += ($it.fund_flow//{}) | .commodities += ($it.commodities//[]) | .bonds += ($it.bonds//[]) | .forex += ($it.forex//[]) | .macro_indicators += ($it.macro_indicators//{}) | .monetary_policy += ($it.monetary_policy//{}))' \
-       data/runs/DATE/websearch_results*.json > data/runs/DATE/websearch_results_merged.json
+       data/runs/${DATE_NH}/websearch_results*.json > /tmp/websearch_results_merged_${DATE_NH}.json
      ```
      （如需去重同一 symbol，可先清理旧文件或改用 `tac ... | jq 'reduce .[] as $it ({}; .fund_flow += $it.fund_flow // {} )'` 让后写覆盖前写。）
-  3) 注入：`bash run_clean.sh python scripts/stage2_5_injector.py "data/runs/${DATE_NH}/market_data_stage2.json" "data/runs/${DATE_NH}/websearch_results_merged.json" "data/runs/${DATE_NH}/market_data_complete.json"`
+  3) 注入：`bash run_clean.sh python scripts/stage2_5_injector.py "data/runs/${DATE_NH}/market_data_stage2.json" "/tmp/websearch_results_merged_${DATE_NH}.json" "data/runs/${DATE_NH}/market_data_complete.json"`
   4) 确认 `data/runs/DATE/gap_monitor.json` 为空，再跑 Stage3/报告。
 - 保留多个 stage2 版本时，请用不同文件名（如 `_stage2_v1.json` / `_stage2_fund.json`），但最终仅把“合并后注入”的 complete.json 传给 Stage3。
 
