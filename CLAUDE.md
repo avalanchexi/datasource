@@ -158,7 +158,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json                                       
   - **不要与 `config/policy_rules.yaml` 的 `estimated_allowlist_keys` 混淆**：后者当前 `CN10Y_CDB`、`bdi`，仅用于 Stage3/quality 对 `is_estimated=True` 评分/告警，与本 allowlist 互不相通。
 - `reserve_ratio` quality replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false` 且单一显式 HTTPS PBoC URL（`pbc.gov.cn`）；可替换估算 fallback 或缺 `change_from_120d` 且带“缺少发布机构”诊断的非官方 structured 值。`chinamoney.com.cn` 不释放该 quality override，文本 URL 只能作一致性证据，多个/conflicting 文本 URL 拒绝。
 - `CN10Y_CDB` 使用 `CN10Y plus observed CDB spread` 估算时，Stage2.5 可沿用 `CN10Y` 的 5d/120d bp 变化作为估算变化口径；必须保留 `is_estimated=true` 和 `cn10y_proxy_change_basis`。
-- Stage2.5 中 `macro_indicators.change_rate` 统一为百分比口径（`(current-previous)/abs(previous)*100`），分母为 0 时保留缺口并标记质量阻断。
+- Stage2.5 中 `macro_indicators.change_rate` 按指标口径计算：`cpi/ppi/pmi/pmi_new_orders/pmi_production/gdp/industrial/industrial_sales` 使用百分点差 `round(current - previous, 4)`；`bdi` 使用百分比变化 `round((current - previous)/abs(previous)*100, 4)`，分母为 0 时保留缺口并标记 `reason=change_rate_pct_div_by_zero`；未登记 key 按 `unit` 推断并追加 `caliber_inferred` note。
+- Stage2.5 从 event_history 自动回填 macro `previous_value/change_rate` 时，以自身 `report_period/date/as_of_date` 锚定，严格取早于当前期的最近一期；取不到则保留缺口。成功回填标记 `value_source=event_history_backfill`，不覆盖已有非 backfill 来源，不改变 `is_estimated`。
 - Stage2.5 manual 从 `data/runs/templates/manual_template.json` 复制起步；官方值默认 `is_estimated=false`。
 - `industrial` 使用“1-2月累计同比”时必须显式 `value_type: yoy_month` 和 `yoy_month`。
 - `bdi` 的 estimated allowlist 还有二级约束：`trusted_domains/max_age_days/value_range/unit_keywords`。
