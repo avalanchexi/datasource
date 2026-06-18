@@ -13,7 +13,10 @@ def _write_stage3_inputs(tmp_path: Path) -> tuple[Path, Path]:
     run_dir = tmp_path / "data" / "runs" / "20260209"
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "gap_monitor.json").write_text(
-        json.dumps({"manual_required": [], "pending_tasks": []}, ensure_ascii=False),
+        json.dumps(
+            {"manual_required": [], "pending_tasks": []},
+            ensure_ascii=False,
+        ),
         encoding="utf-8",
     )
     market_payload = {
@@ -33,11 +36,16 @@ def _write_stage3_inputs(tmp_path: Path) -> tuple[Path, Path]:
     }
     market_path = tmp_path / "market.json"
     output_path = tmp_path / "pring.json"
-    market_path.write_text(json.dumps(market_payload, ensure_ascii=False), encoding="utf-8")
+    market_path.write_text(
+        json.dumps(market_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
     return market_path, output_path
 
 
-def test_stage3_validates_pring_result_before_main_output_write(tmp_path, monkeypatch):
+def test_stage3_validates_pring_result_before_main_output_write(
+    tmp_path, monkeypatch
+):
     market_path, output_path = _write_stage3_inputs(tmp_path)
     events = []
 
@@ -82,7 +90,9 @@ def test_stage3_validates_pring_result_before_main_output_write(tmp_path, monkey
     assert events[1] == ("write", output_path)
 
 
-def test_stage25_no_validate_output_sets_env_before_core(tmp_path, monkeypatch):
+def test_stage25_no_validate_output_sets_env_before_core(
+    tmp_path, monkeypatch
+):
     run_dir = tmp_path / "data" / "runs" / "20260209"
     run_dir.mkdir(parents=True, exist_ok=True)
     market_path = run_dir / "market_data_stage2.json"
@@ -106,8 +116,16 @@ def test_stage25_no_validate_output_sets_env_before_core(tmp_path, monkeypatch):
         seen_env.append(os.getenv("DATASOURCE_NO_VALIDATE_OUTPUT"))
 
     monkeypatch.delenv("DATASOURCE_NO_VALIDATE_OUTPUT", raising=False)
-    monkeypatch.setattr(stage25_cli, "DailyRunLock", lambda *args, **kwargs: DummyLock())
-    monkeypatch.setattr(stage25_cli.core, "inject_websearch_data", fake_inject_websearch_data)
+    monkeypatch.setattr(
+        stage25_cli,
+        "DailyRunLock",
+        lambda *args, **kwargs: DummyLock(),
+    )
+    monkeypatch.setattr(
+        stage25_cli.core,
+        "inject_websearch_data",
+        fake_inject_websearch_data,
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -157,16 +175,24 @@ def test_stage25_post_write_backfill_validates_before_contract_write(
         lambda *args, **kwargs: {"forex": 0},
     )
     monkeypatch.setattr(
-        trend_backfill, "_refresh_stage2_gap_monitor", lambda *args, **kwargs: {}
+        trend_backfill,
+        "_refresh_stage2_gap_monitor",
+        lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(
-        trend_backfill, "_refresh_stage2_notes", lambda *args, **kwargs: None
+        trend_backfill,
+        "_refresh_stage2_notes",
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        trend_backfill, "_cleanup_metadata_missing", lambda *args, **kwargs: None
+        trend_backfill,
+        "_cleanup_metadata_missing",
+        lambda *args, **kwargs: None,
     )
     monkeypatch.setattr(
-        trend_backfill, "_apply_pipeline_quality_state", lambda *args, **kwargs: {}
+        trend_backfill,
+        "_apply_pipeline_quality_state",
+        lambda *args, **kwargs: {},
     )
     monkeypatch.setattr(
         trend_backfill, "validate_market_data", fake_validate, raising=False
