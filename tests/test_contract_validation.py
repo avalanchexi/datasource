@@ -1,10 +1,13 @@
+import importlib
 import json
+import warnings
 from copy import deepcopy
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from datasource.models import market_data_contract as market_contract
 from datasource.models.market_data_contract import MarketDataContract
 from datasource.models.pring_result_contract import PringResultContract
 from datasource.utils.contract_validation import (
@@ -67,6 +70,29 @@ def _model_validate(model, payload):
     if validate is not None:
         return validate(payload)
     return model.parse_obj(payload)
+
+
+def test_discover_fixtures_falls_back_to_tracked_golden_when_runs_missing():
+    fixtures = _discover_fixtures(
+        "data/runs/0000*/market_data_complete.json",
+        GOLDEN_MARKET_DATA,
+    )
+
+    assert fixtures == [GOLDEN_MARKET_DATA]
+
+
+def test_market_data_contract_import_has_no_v1_validator_warning():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        importlib.reload(market_contract)
+
+    v1_validator_warnings = [
+        warning
+        for warning in caught
+        if "Pydantic V1 style `@validator` validators are deprecated"
+        in str(warning.message)
+    ]
+    assert v1_validator_warnings == []
 
 
 @pytest.mark.parametrize("path", MD)

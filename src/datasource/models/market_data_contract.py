@@ -8,7 +8,17 @@ Market Data Contract - V3.1 解耦架构
 import re
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, validator
+try:
+    from pydantic import BaseModel, Field, field_validator
+except ImportError:
+    from pydantic import BaseModel, Field, validator as _pydantic_validator
+
+    def _amount_field_validator(*fields: str):
+        return _pydantic_validator(*fields, pre=True, allow_reuse=True)
+else:
+
+    def _amount_field_validator(*fields: str):
+        return field_validator(*fields, mode="before")
 
 
 class StockIndexData(BaseModel):
@@ -155,7 +165,7 @@ class FundFlowData(BaseModel):
 
         return None
 
-    @validator('recent_5d', 'total_120d', pre=True)
+    @_amount_field_validator('recent_5d', 'total_120d')
     def _coerce_amount(cls, value: Optional[Any]) -> Optional[float]:
         return cls._parse_amount(value)
 
