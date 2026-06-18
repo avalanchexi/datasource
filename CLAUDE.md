@@ -19,8 +19,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 3. 所有流水线脚本通过 `bash run_clean.sh python scripts/...` 执行；不要直跑。
 4. Stage1 → Stage2 → Stage2.5 → Stage3 → Stage4，每日按序一次性跑完。**Tavily 每日只能跑 1 次** — 422/quota 后改走 Stage2.5 manual，不要重跑 Stage2。
 5. Stage2.5/Stage3/Stage4 同日写产物会持有 `data/runs/YYYYMMDD/.run.lock`；遇到 live owner 先确认/停止并行会话，不手动删锁。
-6. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
-7. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
+6. `data/runs/YYYYMMDD/` 遵守 `RunPaths.data_dir_whitelist()` 白名单契约；正常流程不保留 `.bak`、时间戳副本、`_new` 文件，写 JSON/text 产物使用 atomic write 工具。
+7. 排障入口看 [Operational Pitfalls](#operational-pitfalls操作陷阱) 与 [Troubleshooting](#troubleshooting) — 它们覆盖 95% 的卡点（`missing_items` 双层、Stage3 三路 gate、inject 跳过 `is_estimated`、fund_flow 估算规则）。
+8. 完整命令、参数表、输出契约见 `SCRIPTS.md` 与 `AGENTS.md`；本文件只保留最小操作指引。
 
 ## Critical Constraints
 
@@ -287,6 +288,7 @@ EXA_API_KEY=xxx        # Optional but recommended: Tavily quota/rate/payment fai
 **诊断工具**:
 - `bash run_clean.sh python scripts/tools/stage2_health_check.py` — Stage2 前置健康检查（验证 Tavily/DeepSeek key、缓存路径可写、基本连通性）
 - `bash run_clean.sh python scripts/tools/stage2_low_score_audit.py --date YYYY-MM-DD` — 审计低分仍进入抽取的指标
+- `bash run_clean.sh python scripts/tools/run_dir_audit.py --date YYYY-MM-DD` — 只读审计 run-dir 白名单外文件；收尾/CI 可追加 `--strict`
 
 ## Code Standards
 

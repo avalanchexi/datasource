@@ -364,6 +364,12 @@ if comp < 0.8:
 | Stage3 | `data/runs/${DATE_NH}/pring_result.json` | Pring 分析输出 |
 | Stage4 | `reports/${DATE}-背景扫描120.md` | 最终报告 |
 
+`data/runs/YYYYMMDD/` 有长期白名单契约，由 `RunPaths.data_dir_whitelist()` 维护；新增运行产物前必须先更新该白名单和对应测试/文档。写 JSON/text 产物应使用 `atomic_write_json` / `atomic_write_text`，避免留下半写文件；`.bak`、时间戳副本、`_new` 文件不是预期输出，不应作为正常流程产物保留。`.run.lock` 是写锁特殊文件，仍由 Stage2.5/Stage3/Stage4 锁机制管理；诊断 stray files 时使用：
+```bash
+bash run_clean.sh python scripts/tools/run_dir_audit.py --date YYYY-MM-DD
+```
+需要让白名单外文件导致失败时追加 `--strict`。
+
 Stage2 summary 口径：`task_completed/task_total` 仅表示 legacy completion；日常判断 Stage2 是否达标优先看 `stage2_effective_hit_rate`，并用 `stage2_effective_success/stage2_effective_failure/stage2_effective_denominator` 审计分子分母。`stage2_effective_hit_rate` 包含 structured-provider 成功 + 搜索抽取成功，不含 `skipped_existing` 与 Stage2.5 manual 注入。质量缺口任务（`trigger_reason=quality_gap`）只有写回 `required_output_fields` 后才算 Stage2 成功；structured-provider 只写当前值但缺 `previous_value/change_rate/change_from_120d` 时，应继续 fallback 到搜索/抽取或转 `manual_required`，不得虚增命中率。搜索链路命中率只看 `task_search_success/task_search_failed/search_success_rate_incremental`；`search_success_rate_incremental=0.0` 只表示 Tavily/Exa 搜索链路未写回，不代表 Stage2 总命中率为 0，需同时看 `task_structured_success`、`structured_provider_success_count`。结构化源排障看 `structured_provider_attempt_count/structured_provider_success_count/structured_provider_fallback_to_search_count/structured_provider_error_breakdown`、`retrieval_diagnostics`、`manual_reason_breakdown`；已有值跳过看 `task_skipped_existing`，quota/rate/payment failover 看 `search_backend_final`、`tavily_to_exa_failover`、`tavily_to_exa_failover_count`、`exa_failover_success`、`exa_failover_empty`、`exa_failover_error`、`exa_unavailable`、`exa_error_breakdown`、`exa_error_samples`，同时保留查看 `tavily_unavailable_reason=quota_or_rate_limit`。若 `retrieval_hit` 高但写回低，优先看 `value_evidence_miss`、`deepseek_json_truncated/deepseek_json_parse_error`、`field_retry_merged_count`、`field_retry_missing_fields`。
 
 ## 12. Troubleshooting

@@ -343,6 +343,22 @@ bash run_clean.sh python scripts/stage3_pring_analyzer.py \
 **用途**: 计算缺失数据
 **状态**: ⚠️ 已归档至 `archive/py_unused/scripts_utility/calculate_na_data.py`，不作为当前流程命令
 
+### 10. run_dir_audit.py ✅ DIAGNOSTIC
+
+**位置**: `scripts/tools/run_dir_audit.py`
+**用途**: 只读审计 `data/runs/YYYYMMDD/` 运行目录，报告白名单外文件
+**状态**: ✅ 诊断工具，不修改任何产物
+
+**使用**:
+```bash
+bash run_clean.sh python scripts/tools/run_dir_audit.py --date YYYY-MM-DD
+```
+
+**说明**:
+- 默认只读扫描指定日期的 run-dir，并列出不符合运行目录白名单契约的文件。
+- `--strict` 会在发现白名单外文件时以非零退出码失败，适合 CI 或收尾校验。
+- `.bak`、时间戳副本、`_new` 等临时文件不是预期运行产物；若被报告，应确认来源后清理或修正写入逻辑。
+
 ---
 
 ## 完整执行流程 (推荐)
