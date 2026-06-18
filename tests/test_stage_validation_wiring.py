@@ -4,9 +4,13 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 import scripts.stage3_pring_analyzer as stage3
 from datasource.engines.stage2_5 import cli as stage25_cli
+from datasource.engines.stage2_5 import core
 from datasource.engines.stage2_5 import trend_backfill
+from datasource.utils.contract_validation import ContractValidationError
 
 
 def _write_stage3_inputs(tmp_path: Path) -> tuple[Path, Path]:
@@ -206,3 +210,64 @@ def test_stage25_post_write_backfill_validates_before_contract_write(
     assert stats == {"forex": 0}
     assert events[0][0] == "validate"
     assert events[1] == ("write", output_path)
+
+
+def test_stage25_core_propagates_post_backfill_contract_failure(
+    tmp_path, monkeypatch
+):
+    run_dir = tmp_path / "data" / "runs" / "20260209"
+    run_dir.mkdir(parents=True)
+    market_path = run_dir / "market_data_stage2.json"
+    manual_path = run_dir / "websearch_results_manual.json"
+    output_path = run_dir / "market_data_complete.json"
+    market_payload = {
+        "metadata": {"date": "2026-02-09"},
+        "missing_items": [],
+        "macro_indicators": {},
+        "monetary_policy": {},
+        "bonds": [],
+        "forex": [],
+        "commodities": [],
+        "stock_indices": [],
+        "fund_flow": {},
+    }
+    market_path.write_text(
+        json.dumps(market_payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    manual_path.write_text("{}", encoding="utf-8")
+    writes = []
+
+    def fake_post_backfill(*args, **kwargs):
+        raise ContractValidationError("post-backfill invalid")
+
+    monkeypatch.setattr(
+        core,
+        "write_from_market_data",
+        lambda *args, **kwargs: 0,
+    )
+    monkeypatch.setattr(
+        core,
+        "write_trend_history_gap_snapshot",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        core,
+        "atomic_write_json",
+        lambda *args: writes.append(args),
+    )
+    monkeypatch.setattr(
+        trend_backfill,
+        "_run_post_write_trend_backfill",
+        fake_post_backfill,
+    )
+
+    with pytest.raises(ContractValidationError):
+        core.inject_websearch_data(
+            market_path,
+            manual_path,
+            output_path,
+            trend_history_base_dir=tmp_path / "trend_history",
+        )
+
+    assert len(writes) == 1
