@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import argparse
-import json
 from datetime import datetime
 from pathlib import Path
 
+from datasource.utils.json_io import atomic_write_json
 from datasource.utils.run_paths import build_run_paths
 from datasource.utils.trend_history_store import scan_trend_history
 
@@ -29,9 +29,7 @@ def main() -> None:
     else:
         output_path = build_run_paths(date_str).trend_history_gap
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(result, f, ensure_ascii=False, indent=2)
+    atomic_write_json(result, output_path)
 
     print(f"[OK] trend_history gap report saved: {output_path}")
 

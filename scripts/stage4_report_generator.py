@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -207,8 +206,6 @@ def main() -> None:
         _assert_pring_matches_market(market_payload, pring_payload)
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        if output_path.exists():
-            shutil.copy2(output_path, output_path.with_suffix(output_path.suffix + ".bak"))
 
         print("[INFO] 开始生成 Markdown 报告 ...")
         generate_report(market_path, pring_path, output_path)

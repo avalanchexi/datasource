@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -25,6 +24,7 @@ from datasource.utils.gate_formatting import (
     format_gate_blocks,
     format_quality_issue,
 )
+from datasource.utils.json_io import atomic_write_json
 from datasource.utils.missing_items import flatten_missing_items as _shared_flatten_missing_items
 from datasource.utils.pipeline_gate import (
     collect_fund_flow_downgraded_items,
@@ -721,14 +721,7 @@ async def _run_analysis(
     if isinstance(non_blocking_warnings, list) and non_blocking_warnings:
         pring_result["metadata"]["non_blocking_warnings"] = non_blocking_warnings
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
-        backup = output_path.with_suffix(output_path.suffix + ".bak")
-        shutil.copy2(output_path, backup)
-    tmp = output_path.with_suffix(output_path.suffix + ".tmp")
-    with tmp.open('w', encoding='utf-8') as fp:
-        json.dump(pring_result, fp, ensure_ascii=False, indent=2)
-    tmp.replace(output_path)
+    atomic_write_json(pring_result, output_path)
 
     print("[SUCCESS] Pring 分析完成：")
     print(f"         最终阶段: {pring_result['final_stage']}")
@@ -763,11 +756,7 @@ async def _run_analysis(
         "runtime_sec": round(runtime, 2),
     }
     log_path = build_run_paths_from_reference(payload=market_payload, fallback_to_today=True).stage3_log
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_log = log_path.with_suffix(".tmp")
-    with tmp_log.open("w", encoding="utf-8") as fp:
-        json.dump(log_payload, fp, ensure_ascii=False, indent=2)
-    tmp_log.replace(log_path)
+    atomic_write_json(log_payload, log_path)
 
     return pring_result
 

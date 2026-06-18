@@ -2,6 +2,7 @@ import json
 import runpy
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,6 +34,22 @@ def _has_finding(review, severity, key, code):
 def _write_json(path, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+
+def test_write_review_under_lock_preserves_trailing_newline(tmp_path):
+    output_path = tmp_path / "stage4_risk_review.json"
+    args = SimpleNamespace(allow_fund_flow_downgrade=False)
+
+    stage4["_write_review_under_lock"](
+        args,
+        tmp_path / "missing_market.json",
+        tmp_path / "missing_gap.json",
+        tmp_path / "missing_quality.json",
+        output_path,
+        market_payload={"metadata": {"date": "2026-04-30"}},
+    )
+
+    assert output_path.read_bytes().endswith(b"\n")
 
 
 def test_run_path_does_not_import_datasource_package():

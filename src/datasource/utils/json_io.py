@@ -40,6 +40,5 @@ def atomic_write_text(text: str, path: Path) -> None:
     os.replace(tmp, target)
 
 
-def dump_json(payload: Any, path: Path, backup: bool = False) -> None:
-    _ = backup
+def dump_json(payload: Any, path: Path) -> None:
     atomic_write_json(payload, path)

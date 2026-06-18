@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -83,6 +84,14 @@ CURRENT_VALUE_FIELDS = (
     "price",
 )
 FUND_FLOW_VALUE_FIELDS = ("recent_5d", "total_120d", "current_value")
+
+
+def _atomic_write_text(text: str, path: Path) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, target)
 
 
 def _load_run_paths_module() -> ModuleType:
@@ -634,10 +643,10 @@ def _write_review_under_lock(
         missing_optional_files=missing_optional_files,
     )
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        json.dump(review, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
+    _atomic_write_text(
+        json.dumps(review, ensure_ascii=False, indent=2) + "\n",
+        output_path,
+    )
     return review
 
 

@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 
 import pytest
@@ -60,12 +61,19 @@ def test_atomic_write_json_writes_and_no_bak(tmp_path):
 def test_dump_json_delegates_to_atomic_write_json_without_bak(tmp_path):
     path = tmp_path / "payload.json"
     dump_json({"a": 1}, path)
-    dump_json({"a": 2}, path, backup=True)
+    dump_json({"a": 2}, path)
 
     assert load_json_strict(path) == {"a": 2}
     assert not (path.with_name(path.name + ".bak")).exists()
     assert not list(tmp_path.glob("*.tmp"))
     assert sorted(q.name for q in tmp_path.iterdir()) == ["payload.json"]
+
+
+def test_dump_json_has_no_backup_parameter(tmp_path):
+    assert "backup" not in inspect.signature(dump_json).parameters
+
+    with pytest.raises(TypeError):
+        dump_json({"a": 1}, tmp_path / "payload.json", backup=True)
 
 
 def test_atomic_write_text_writes_replaces_and_leaves_no_tmp(tmp_path):

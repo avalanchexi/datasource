@@ -8,6 +8,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from datasource.utils.json_io import atomic_write_json, atomic_write_text
+
 
 def _load_thresholds(path: Path) -> Dict[str, Any]:
     if not path.exists():
@@ -226,21 +228,25 @@ def build_quality_metrics(market_payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def write_quality_metrics(market_payload: Dict[str, Any], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = build_quality_metrics(market_payload)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    atomic_write_json(payload, output_path)
 
     # Append trend CSV (optional)
     try:
         trend_path = output_path.parent / "quality_trend.csv"
         header = "date,data_completeness,filled,total\n"
-        filled = sum(v.get("filled", 0) for v in payload.get("completeness_by_category", {}).values())
-        total = sum(v.get("total", 0) for v in payload.get("completeness_by_category", {}).values())
-        line = f"{payload.get('date')},{payload.get('data_completeness')},{filled},{total}\n"
-        if not trend_path.exists():
-            trend_path.write_text(header, encoding="utf-8")
-        with trend_path.open("a", encoding="utf-8") as f:
-            f.write(line)
+        completeness = payload.get("completeness_by_category", {})
+        filled = sum(v.get("filled", 0) for v in completeness.values())
+        total = sum(v.get("total", 0) for v in completeness.values())
+        line = (
+            f"{payload.get('date')},{payload.get('data_completeness')},"
+            f"{filled},{total}\n"
+        )
+        existing = (
+            trend_path.read_text(encoding="utf-8")
+            if trend_path.exists()
+            else header
+        )
+        atomic_write_text(existing + line, trend_path)
     except Exception:
         pass

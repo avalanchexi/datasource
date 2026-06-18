@@ -3,13 +3,14 @@
 """Run snapshot writer for auditability."""
 from __future__ import annotations
 
-import json
 import os
 import platform
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any
+
+from datasource.utils.json_io import atomic_write_json
 
 
 def _run_cmd(cmd: list[str]) -> str:
@@ -37,6 +38,4 @@ def write_run_snapshot(output_path: Path, cli_args: str) -> None:
     if req_path.exists():
         snapshot["requirements"] = req_path.read_text(encoding="utf-8")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(snapshot, f, ensure_ascii=False, indent=2)
+    atomic_write_json(snapshot, output_path)

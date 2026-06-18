@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 from datetime import datetime
 from pathlib import Path
+
+from datasource.utils.json_io import atomic_write_json
 
 
 def _run_cmd(cmd: list[str]) -> str:
@@ -37,9 +38,7 @@ def main() -> None:
     }
 
     output_path = Path(args.output)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(snapshot, f, ensure_ascii=False, indent=2)
+    atomic_write_json(snapshot, output_path)
 
     print(f"[OK] run snapshot saved: {output_path}")
 

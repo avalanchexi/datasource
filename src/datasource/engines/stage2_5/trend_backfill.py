@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from datasource.utils.json_io import atomic_write_json
 from datasource.utils.forex_evidence import (
     STAGE25_FOREX_DAILY_CHANGE_SOURCE_MARKERS as FOREX_DAILY_CHANGE_SOURCE_MARKERS,  # noqa: E501
     STAGE25_FOREX_120D_CHANGE_SOURCE_MARKERS as FOREX_120D_CHANGE_SOURCE_MARKERS,  # noqa: E501
@@ -1250,8 +1251,7 @@ def _run_post_write_trend_backfill(
     _cleanup_metadata_missing(metadata, market_data)
     _apply_pipeline_quality_state(market_data)
 
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(market_data, f, ensure_ascii=False, indent=2)
+    atomic_write_json(market_data, output_path)
     return stats
 
 
@@ -1321,7 +1321,4 @@ def _sync_backfill_issues_to_logs(
     if merged_warnings:
         payload["non_blocking_warnings"] = merged_warnings
 
-    observability_path.parent.mkdir(parents=True, exist_ok=True)
-    observability_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    atomic_write_json(payload, observability_path)

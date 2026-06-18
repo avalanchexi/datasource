@@ -3,11 +3,11 @@
 """Collect source conflicts from websearch results."""
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from .json_io import atomic_write_json
 from .source_priority import source_weight
 
 
@@ -77,6 +77,4 @@ def resolve_websearch_results(results: List[Dict[str, Any]]) -> Tuple[List[Dict[
 
 
 def write_source_conflicts(payload: Dict[str, Any], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    atomic_write_json(payload, output_path)

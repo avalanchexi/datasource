@@ -7,12 +7,11 @@ Stage 1: Market Data Collector (V3.1 解耦架构)
 """
 
 import asyncio
-import json
 import argparse
 from pathlib import Path
-import shutil
 
 from datasource.models.market_data_contract import FundFlowData  # noqa: F401
+from datasource.utils.json_io import atomic_write_json
 from datasource.utils.trend_history_store import (
     write_from_market_data,
     write_trend_history_gap_snapshot,
@@ -80,13 +79,7 @@ async def main():
         print(f"[WARN] trend_history backfill failed: {exc}")
 
     # 保存JSON
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
-        backup = output_path.with_suffix(output_path.suffix + ".bak")
-        shutil.copy2(output_path, backup)
-    with open(output_path.with_suffix(output_path.suffix + ".tmp"), 'w', encoding='utf-8') as f:
-        json.dump(market_payload, f, ensure_ascii=False, indent=2)
-    Path(output_path.with_suffix(output_path.suffix + ".tmp")).replace(output_path)
+    atomic_write_json(market_payload, output_path)
 
     print(f"[OK] 数据已保存到: {output_path}")
     print(f"   文件大小: {output_path.stat().st_size / 1024:.1f} KB")

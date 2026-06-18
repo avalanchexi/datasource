@@ -8,6 +8,7 @@ from datasource.utils.key_aliases import (
     MONETARY_KEY_ALIASES,
     normalize_monetary_section,
 )
+from datasource.utils.json_io import atomic_write_json
 from datasource.utils.policy_rules import get_non_blocking_warning_rules
 from datasource.utils.quality_metrics import build_quality_metrics
 from datasource.utils.run_paths import build_run_paths_from_reference
@@ -413,11 +414,7 @@ def _write_unified_quality_artifacts(
         "quality_blockers": list(state.get("quality_blockers") or []),
     }
     if gap_monitor_path is not None:
-        gap_monitor_path.parent.mkdir(parents=True, exist_ok=True)
-        gap_monitor_path.write_text(
-            json.dumps(gap_payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_json(gap_payload, gap_monitor_path)
 
     quality_payload = build_quality_metrics(market_data)
     quality_payload.update(
@@ -430,18 +427,11 @@ def _write_unified_quality_artifacts(
             "policy_evaluation": state.get("policy_evaluation") or {},
         }
     )
-    quality_metrics_path.parent.mkdir(parents=True, exist_ok=True)
-    quality_metrics_path.write_text(
-        json.dumps(quality_payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    atomic_write_json(quality_payload, quality_metrics_path)
 
-    policy_evaluation_path.parent.mkdir(parents=True, exist_ok=True)
-    policy_evaluation_path.write_text(
-        json.dumps(
-            state.get("policy_evaluation") or {}, ensure_ascii=False, indent=2
-        ),
-        encoding="utf-8",
+    atomic_write_json(
+        state.get("policy_evaluation") or {},
+        policy_evaluation_path,
     )
 
 
@@ -947,8 +937,7 @@ def inject_websearch_data(
 
     # 保存到输出文件
     print(f"\n[INFO] 保存完整数据到: {output_path}")
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(market_data, f, ensure_ascii=False, indent=2)
+    atomic_write_json(market_data, output_path)
 
     summary_counts = metadata["injection_summary"]["counts"]
     print("\n[SUCCESS] 数据注入完成！")
@@ -1022,8 +1011,7 @@ def inject_websearch_data(
                 print("  - trend_history post-write backfill: no updates")
             quality_state = _apply_pipeline_quality_state(market_data)
             quality_blockers = quality_state.get("quality_blockers") or []
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(market_data, f, ensure_ascii=False, indent=2)
+            atomic_write_json(market_data, output_path)
         except Exception as exc:  # noqa: BLE001
             print(f"  [WARN] trend_history post-write backfill failed: {exc}")
 

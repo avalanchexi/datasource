@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from datasource.utils.json_io import atomic_write_json
+
 DEFAULT_RULES = {
     "extract_422_threshold": 3,
     "extract_422_cooldown_sec": 300,
@@ -292,6 +294,4 @@ def evaluate_policy(
 
 
 def write_policy_evaluation(payload: Dict[str, Any], output_path: Path) -> None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    atomic_write_json(payload, output_path)

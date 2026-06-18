@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
+from datasource.utils.json_io import atomic_write_json
+
 
 PLACEHOLDER_THRESHOLD = 1e-9
 PLACEHOLDER_VALUE = 7.13
@@ -74,9 +76,7 @@ def main() -> None:
     commodity_cleaned, bond_cleaned = _sanitize(payload)
     target_path = Path(args.output).resolve() if args.output else input_path
 
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    with target_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+    atomic_write_json(payload, target_path)
 
     print(f"[OK] 已写入 {target_path} (商品修正 {commodity_cleaned} 项, 债券修正 {bond_cleaned} 项)")
 

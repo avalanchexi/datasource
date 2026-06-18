@@ -13,6 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from datasource.utils.json_io import atomic_write_json
+
 DEFAULT_BASE_DIR = Path("data/trend_history/min")
 SERIES_DIR = "series"
 EVENTS_DIR = "events"
@@ -76,11 +78,7 @@ def _safe_json_load(path: Path) -> Dict[str, Any]:
 
 
 def _safe_json_write(path: Path, payload: Dict[str, Any]) -> None:
-    _ensure_dir(path.parent)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
-    tmp_path.replace(path)
+    atomic_write_json(payload, path)
 
 
 def _is_placeholder_numeric(value: Any) -> bool:

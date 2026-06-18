@@ -50,7 +50,7 @@ from datasource.engines.stage2.diagnostics import (
 from datasource.engines.stage2.snippet_filters import _percentile
 from datasource.engines.stage2.validation import _flag_fund_flow_anomalies
 from datasource.engines.stage2_task_planner import Stage2TaskPlanner
-from datasource.utils.json_io import dump_json, load_json_strict
+from datasource.utils.json_io import atomic_write_json, load_json_strict
 from datasource.utils.key_aliases import normalize_monetary_section
 from datasource.utils.missing_items import sync_top_level_missing_view
 from datasource.utils.observability import build_observability_log, write_observability_log
@@ -435,8 +435,8 @@ def _check_task_completeness(tasks: List[Dict[str, Any]]) -> List[str]:
     return warnings
 
 
-def _dump_json(payload: Dict[str, Any], path: Path, backup: bool = False) -> None:
-    dump_json(payload, path, backup=backup)
+def _dump_json(payload: Dict[str, Any], path: Path) -> None:
+    atomic_write_json(payload, path)
 
 
 def _append_gap_monitor(output_path: Path, pending: List[str], manual: Optional[List[str]] = None) -> None:
@@ -796,7 +796,7 @@ async def main() -> int:
     metadata["ai_websearch_enhanced"] = True
     metadata["stage2_completed_at"] = datetime.now().isoformat()
 
-    _dump_json(market_payload, output_path, backup=True)
+    _dump_json(market_payload, output_path)
 
     pending_manual = list(
         dict.fromkeys([f["indicator_key"] for f in failures if f.get("manual_required") and f.get("indicator_key")])
