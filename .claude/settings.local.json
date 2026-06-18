@@ -94,7 +94,11 @@
       "Bash(fc-list :lang=zh)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(ALLOW_SYSTEM_PYTHON=1 bash run_preflight.sh)"
+      "Bash(ALLOW_SYSTEM_PYTHON=1 bash run_preflight.sh)",
+      "Bash(claude --version)",
+      "Bash(npm list *)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)"
     ],
     "deny": [],
     "ask": []
