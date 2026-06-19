@@ -14,10 +14,10 @@
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
 | 批次 C | 巨石拆分(含 C-0.5/C0/C7 终态)| 8 | ✅ 完成(C-0.5/C0/C1/C2/C3/C4/C5/C6/C7 全部合入 main)| B |
 | 批次 D | run 目录契约 | 2 | ✅ 完成(D1/D2 合入 main,含 D2 minor-hardening)| C |
-| 批次 E | 兜底产品化 | 3 | 🚧 进行中(E1 合入 main;E2 worktree 评审通过待补 etf;E3 spec+plan ready)| E1 可与 C 并行;E2/E3 依赖 D1 |
-| 批次 F | stage3 入口瘦身(全局验收2 补口)| 1 | 🚧 spec+plan ready(F1 stage3 relocate + stage4_risk_review 豁免)| C/D |
+| 批次 E | 兜底产品化 | 3 | 🚧 进行中(E1/E3 已合入 main;E2 worktree 评审通过待补 etf)| E1 可与 C 并行;E2/E3 依赖 D1 |
+| 批次 F | stage3 入口瘦身(全局验收2 补口)| 1 | 🚧 worktree 完成、评审通过,待合入 main(F1 through `b985872`;stage4_risk_review 豁免)| C/D |
 
-**当前状态(2026-06-20 全局验收复盘 @ main `434e6f1`,全量 1512 passed):验收 1/3/5 达成、验收2 转 F1+stage4 豁免、验收4 前向观察。剩余执行:E2-etf 补丁 / E3 / F1。**
+**当前状态(2026-06-20 状态校正 @ main `83d3bc6`):验收1、5 达成;验收2 待 F1 合入 main;验收3 代码级 producer 清理 PASS、首个 live whitelist smoke 前向观察;验收4 前向观察。剩余:E2-etf 补丁 / F1 merge / 前向观察 gates / coupling doc PR 收口。**
 
 ---
 
@@ -90,22 +90,21 @@
 
 - [x] **PR-E1**:macro `previous_value/change_rate` 从 event_history 正确回填(修双重转义 report_period 正则 + 周期锚定宁缺勿错 + change_rate 分口径[同比类 pp 差/水平值百分比]+ `value_source=event_history_backfill`)— 已合入 main
 - [~] **PR-E2**:`config/manual_fallback_policies.json`(非 yaml:项目无 PyYAML 显式依赖,见 spec §2)+ manual 模板 provenance-only 预填(数值不预填)— worktree 完成、评审通过**待补 etf policy**(补丁已给)→ 补完合
-- [~] **PR-E3**:`reserve_ratio` 错口径源屏蔽(删 trading_economics cash-reserve-ratio + 搜索/校验拒该 URL)+ `BCOM` 固定 quote 守卫测试 — spec+plan ready(PBoC/BCOM provider 已存在,实为减法+守卫),未执行
+- [x] **PR-E3**:`reserve_ratio` 错口径源屏蔽(删 trading_economics cash-reserve-ratio + 搜索/校验拒该 URL)+ `BCOM` 固定 quote 守卫测试 — 已合入 main `83d3bc6`
 - [ ] 验收观察(连续 5 个交易日):macro compare 类 manual = 0;日常手填 ≤ {etf}(前向观察)
 
 ## 全局验收(收尾)
 
-> **2026-06-20 全局验收复盘 @ main `434e6f1`(全量 1512 passed)**:
+> **2026-06-20 状态校正 @ main `83d3bc6`**:
 - [x] 跨模块耦合审计(2026-06-17,C7 后):`src/` 对 `scripts` 零 import,反向分层耦合彻底消解;C4 fund_flow reclaim + C7 入口瘦身已清掉"模块 import 脚本私名"模式。无清理 PR,留痕收口。(复盘复测 **PASS**)
-- [~] `scripts/` 全部入口 ≤300(stage2/2.5 ≤30):stage2=14 / stage2.5=9 / stage1=111 / stage4_report=216 ✅;**stage3=867、stage4_risk_review=708 未达 → PR-F1**。F1 = stage3 relocate 到 `engines/stage3`(≤300);**stage4_risk_review 豁免**——它是有意 standalone、运行时不 import datasource 包的只读 review gate(由 `test_run_path_does_not_import_datasource_package` 强制,run_paths/run_lock 经 importlib 按 path 加载),engines-relocate 会破该契约,故"全部入口 ≤300"细化为"有 engines 逻辑的 stage 入口(1/2/2.5/3)≤300"。
-- [x] run 目录无 `.bak`/时间戳副本/`_new` 产生:**代码级 PASS**(`src/` 内零 producer,D1 已清;旧 run 目录的 stray 是 D1 前遗留;新 run 前向确认)。
+- [~] `scripts/` 全部入口 ≤300(stage2/2.5 ≤30):main 当前 stage2=14 / stage2.5=9 / stage1=111 / stage4_report=216 ✅;**stage3=867 仍待 PR-F1 合入后达标**。F1 branch `codex/batch-f1-stage3-slim` 已实现到 `b985872`、测试/评审通过,待 merge;**stage4_risk_review 豁免**——它是有意 standalone、运行时不 import datasource 包的只读 review gate(由 `test_run_path_does_not_import_datasource_package` 强制,run_paths/run_lock 经 importlib 按 path 加载),engines-relocate 会破该契约,故"全部入口 ≤300"细化为"有 engines 逻辑的 stage 入口(1/2/2.5/3)≤300"。
+- [~] run 目录无白名单外文件、无 `.bak`/时间戳副本/`_new` 产生:**代码级 producer 清理 PASS**(`src/` 内零 producer,D1/D2 已清;旧 run 目录的 stray 是 D1 前遗留);**首个 live run-dir whitelist smoke 仍为前向观察**。
 - [ ] `stage2_effective_hit_rate` 不低于重构前 5 日均值 - 5pp:**前向观察**(重构后无 live run,数据驱动非代码驱动,合入后跟踪)。
 - [x] 文档同步:`SCRIPTS.md` / `CLAUDE.md` / `AGENTS.md` 与新结构一致(复盘 **PASS**,新结构关键词 14 处命中)。
 
 ## 待执行队列(交 Codex,2026-06-20)
 
 - [ ] E2 补 etf policy 补丁(fund_flow / is_estimated:true / metric_basis:estimated_net_flow / window_evidence:news_summary)+ 测试 → 合 E2
-- [ ] E3 执行(`docs/superpowers/plans/2026-06-19-batch-e3-reserve-ratio-source.md`)→ 合
-- [ ] F1 执行(`docs/superpowers/plans/2026-06-20-batch-f1-stage3-slim.md`,含 stage4_risk_review 豁免留痕)→ 合
-- [ ] 耦合审计 §11.2 反向依赖核查 + TODOS 体检单(docstring 已合,这两条待确认/补)
-- [ ] 前向观察 gate:D1 run 目录白名单 live smoke + E 批 5 日 macro-compare-manual=0 + hit-rate
+- [ ] F1 merge:`codex/batch-f1-stage3-slim` through `b985872` 已完成实现/测试/评审,待合入 main
+- [ ] 耦合审计 §11.2 反向依赖核查 + TODOS 体检单(docstring 已合,Task2 doc PR 状态校正待合)
+- [ ] 前向观察 gate:D1/D2 首个 live run 目录白名单 smoke + E 批 5 日 macro-compare-manual=0 + hit-rate
