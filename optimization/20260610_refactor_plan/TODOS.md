@@ -12,11 +12,12 @@
 | 批次 0 | 功能有效性审计 | 1 | ✅ 完成 | - |
 | 批次 A | 仓库清理 | 1 | ✅ 完成(squash `72dc42c`) | - |
 | 批次 B | 脚本命名收敛 | 1 | ✅ 完成(shim 删除延期至 C 后) | - |
-| 批次 C | 巨石拆分(含 C-0.5/C0) | 5–7 | 🚧 进行中(C-0.5/C0/C1/C2/C3/C4/C5/C6 完成;下一步 C 终态/全局验收) | B |
-| 批次 D | run 目录契约 | 2 | 🚧 进行中(D1 完成;D2 待做) | C(D1 可与 C4 并行) |
-| 批次 E | 兜底产品化 | 2–3 | 未开始 | E1 可与 C 并行;E2/E3 依赖 D1 |
+| 批次 C | 巨石拆分(含 C-0.5/C0/C7 终态)| 8 | ✅ 完成(C-0.5/C0/C1/C2/C3/C4/C5/C6/C7 全部合入 main)| B |
+| 批次 D | run 目录契约 | 2 | ✅ 完成(D1/D2 合入 main,含 D2 minor-hardening)| C |
+| 批次 E | 兜底产品化 | 3 | 🚧 进行中(E1 合入 main;E2 worktree 评审通过待补 etf;E3 spec+plan ready)| E1 可与 C 并行;E2/E3 依赖 D1 |
+| 批次 F | stage3 入口瘦身(全局验收2 补口)| 1 | 🚧 spec+plan ready(F1 stage3 relocate + stage4_risk_review 豁免)| C/D |
 
-**当前焦点:C 批次终态/全局验收——确认 `scripts/` 入口瘦身、命令文档与重构后结构一致。**
+**当前状态(2026-06-20 全局验收复盘 @ main `434e6f1`,全量 1512 passed):验收 1/3/5 达成、验收2 转 F1+stage4 豁免、验收4 前向观察。剩余执行:E2-etf 补丁 / E3 / F1。**
 
 ---
 
@@ -50,7 +51,7 @@
 - [x] 生成 PR-B 执行计划(从 HEAD 72dc42c):`docs/superpowers/plans/2026-06-12-batch-b-script-naming.md`;shim 清单按活文档引用实测定死为 8 个,测试修改锁定 2 文件(执行期确认 `test_fund_flow_pipeline.py` 第二组 `sys.path` 行漏计,已按机械路径修正处理)
 - [x] **PR-B**:非主链脚本移入 `scripts/tools/` + 旧路径 shim + 活文档命令引用同步
   - [x] Codex 执行 → Claude 评审 → 合入 main(commits `d92624b`/`104cf2d`/`2c2dbd8`/`aeb0ecd`/`7e65ccd`/`5c88b5f`/`7e81f97`)
-  - [ ] shim 删除(8 个:trend_history_backfill/trend_history_scan/sanitize_market_data/compare_stage2_runs/stage2_health_check/stage2_low_score_audit/setup_stage2_search_env/run_snapshot)——到期条件:批次 C 全部合入后
+  - [x] shim 删除(8 个:trend_history_backfill/trend_history_scan/sanitize_market_data/compare_stage2_runs/stage2_health_check/stage2_low_score_audit/setup_stage2_search_env/run_snapshot)——随 PR-C7 终态合入 main
 
 ## 批次 C — 巨石拆分(§6,5–7 个 PR,核心)
 
@@ -70,31 +71,41 @@
 - [x] **PR-C3**:`_execute_tasks` 执行车道拆分
   - [x] 新增 `src/datasource/engines/stage2/execution.py`;`_execute_tasks`/`_try_structured_provider`/DeepSeek 执行件/执行 glue 已机械搬移,主脚本保留 re-export 与 monkeypatch 合同
   - [x] 阶段级 characterization、replay datetime tie-in、replay byte-stable 与全量 pytest 通过
-  - [ ] C3 carry-forward: `_execute_tasks` 内部闭包 helper 暂不继续拆;终态 main 入口 <=30 行仍留 C 批次收尾
+  - [x] C3 carry-forward 已由 PR-C7 收尾(stage2 入口瘦到 14 行,main+glue 搬入 engines/stage2/cli)
 - [x] **PR-C4**:Stage2.5 拆分 — common / schema_coercion / manual_official(行为冻结区,单独评审)/ fund_flow / gap_sync
   - [x] 新增 `src/datasource/engines/stage2_5/` 包;主脚本保留 re-export;Stage2.5 contract replay + Stage2 replay harness + 全量 pytest 通过
   - [x] 回收 C2 `C4-cleanup`:Stage2 `extraction_apply`/`execution` fund_flow helper 改指 `engines.stage2_5.fund_flow`;无跨脚本 import 残留
 - [x] **PR-C5**:Stage2.5 拆分 — entry_mergers / trend_backfill / core / cli(续接 `engines/stage2_5/`) — squash `0c8f14b`
-- [x] (可选)**PR-C6**:stage1_data_collector 瘦身 — branch commits `1315e82`/`1b9bab7`/`1dfb241`; squash SHA pending merge
-- [ ] 每个 PR:生成计划 → Codex 执行 → fixture replay 全绿 → Claude 评审 → 合入(逐个勾选记在上面对应行)
+- [x] (可选)**PR-C6**:stage1_data_collector 瘦身 → `engines/stage1/collector.py`(108 行 re-export+main)— 已合入 main
+- [x] **PR-C7(C 终态)**:stage2/2.5 入口瘦身 ≤30(main+10 glue+CRITICAL_EXTRACT_KEYS → `engines/stage2/cli`,延迟 import 破 cli⇄execution 环)+ 删 8 个 batch-B shim + 全面 repoint(含 utils-alias)+ 文档同步 — 已合入 main(stage2 866→14、stage2.5 245→9;评审 replay byte-stable 非假绿)
+- [x] 每个 PR:生成计划 → Codex 执行 → fixture replay 全绿 → Claude 评审 → 合入
 
 ## 批次 D — run 目录契约(§7,2 个 PR)
 
-- [x] **PR-D1**:原子写(`atomic_write_json`)+ run 目录文件白名单 + `run_dir_audit` 工具(可与 C4 并行,worktree 支线)
-- [ ] **PR-D2**:写盘前 contract 校验(hard fail + `--no-validate-output` 逃生门)
-- [ ] 合入后首个交易日 live smoke:run 目录文件数 == 白名单数
+- [x] **PR-D1**:原子写(`atomic_write_json`/`atomic_write_text`)+ `RunPaths.data_dir_whitelist()` + `run_dir_audit` 工具 + 删 backup 污染 — 已合入 main
+- [x] **PR-D2**:写盘前 contract 校验(stage1/2/2.5/3 hard-fail + `--no-validate-output`/`DATASOURCE_NO_VALIDATE_OUTPUT=1` 逃生门;两 contract 对齐真实输出;含 minor-hardening:base.py lint + field_validator 兼容)— 已合入 main
+- [ ] 合入后首个交易日 live smoke:run 目录文件数 == 白名单数(前向观察)
 
 ## 批次 E — 兜底产品化(§8,2–3 个 PR)
 
-- [ ] **PR-E1**:macro `previous_value/change_rate` 从 trend_history/event_history 自动回填(可与 C 并行,worktree 支线)
-- [ ] **PR-E2**:`config/manual_fallback_policies.yaml` + manual 模板预填增强
-- [ ] **PR-E3**:`reserve_ratio` 错口径源屏蔽 + PBoC provider;`BCOM` 固定 quote provider
-- [ ] 验收观察(连续 5 个交易日):macro compare 类 manual = 0;日常手填 ≤ {etf}
+- [x] **PR-E1**:macro `previous_value/change_rate` 从 event_history 正确回填(修双重转义 report_period 正则 + 周期锚定宁缺勿错 + change_rate 分口径[同比类 pp 差/水平值百分比]+ `value_source=event_history_backfill`)— 已合入 main
+- [~] **PR-E2**:`config/manual_fallback_policies.json`(非 yaml:项目无 PyYAML 显式依赖,见 spec §2)+ manual 模板 provenance-only 预填(数值不预填)— worktree 完成、评审通过**待补 etf policy**(补丁已给)→ 补完合
+- [~] **PR-E3**:`reserve_ratio` 错口径源屏蔽(删 trading_economics cash-reserve-ratio + 搜索/校验拒该 URL)+ `BCOM` 固定 quote 守卫测试 — spec+plan ready(PBoC/BCOM provider 已存在,实为减法+守卫),未执行
+- [ ] 验收观察(连续 5 个交易日):macro compare 类 manual = 0;日常手填 ≤ {etf}(前向观察)
 
 ## 全局验收(收尾)
 
-- [x] 跨模块耦合审计(2026-06-17,C7 后):`src/` 对 `scripts` 零 import,反向分层耦合彻底消解;C4 fund_flow reclaim + C7 入口瘦身已清掉"模块 import 脚本私名"模式。无清理 PR,留痕收口。
-- [ ] `scripts/` 全部入口 ≤300 行(stage2/2.5 终态 ≤30 行)
-- [ ] run 目录无白名单外文件;无 `.bak`/时间戳副本/`_new` 文件产生
-- [ ] `stage2_effective_hit_rate` 不低于重构前 5 日均值 - 5pp
-- [ ] 文档同步:`SCRIPTS.md` / `CLAUDE.md` / `AGENTS.md` 与新结构一致
+> **2026-06-20 全局验收复盘 @ main `434e6f1`(全量 1512 passed)**:
+- [x] 跨模块耦合审计(2026-06-17,C7 后):`src/` 对 `scripts` 零 import,反向分层耦合彻底消解;C4 fund_flow reclaim + C7 入口瘦身已清掉"模块 import 脚本私名"模式。无清理 PR,留痕收口。(复盘复测 **PASS**)
+- [~] `scripts/` 全部入口 ≤300(stage2/2.5 ≤30):stage2=14 / stage2.5=9 / stage1=111 / stage4_report=216 ✅;**stage3=867、stage4_risk_review=708 未达 → PR-F1**。F1 = stage3 relocate 到 `engines/stage3`(≤300);**stage4_risk_review 豁免**——它是有意 standalone、运行时不 import datasource 包的只读 review gate(由 `test_run_path_does_not_import_datasource_package` 强制,run_paths/run_lock 经 importlib 按 path 加载),engines-relocate 会破该契约,故"全部入口 ≤300"细化为"有 engines 逻辑的 stage 入口(1/2/2.5/3)≤300"。
+- [x] run 目录无 `.bak`/时间戳副本/`_new` 产生:**代码级 PASS**(`src/` 内零 producer,D1 已清;旧 run 目录的 stray 是 D1 前遗留;新 run 前向确认)。
+- [ ] `stage2_effective_hit_rate` 不低于重构前 5 日均值 - 5pp:**前向观察**(重构后无 live run,数据驱动非代码驱动,合入后跟踪)。
+- [x] 文档同步:`SCRIPTS.md` / `CLAUDE.md` / `AGENTS.md` 与新结构一致(复盘 **PASS**,新结构关键词 14 处命中)。
+
+## 待执行队列(交 Codex,2026-06-20)
+
+- [ ] E2 补 etf policy 补丁(fund_flow / is_estimated:true / metric_basis:estimated_net_flow / window_evidence:news_summary)+ 测试 → 合 E2
+- [ ] E3 执行(`docs/superpowers/plans/2026-06-19-batch-e3-reserve-ratio-source.md`)→ 合
+- [ ] F1 执行(`docs/superpowers/plans/2026-06-20-batch-f1-stage3-slim.md`,含 stage4_risk_review 豁免留痕)→ 合
+- [ ] 耦合审计 §11.2 反向依赖核查 + TODOS 体检单(docstring 已合,这两条待确认/补)
+- [ ] 前向观察 gate:D1 run 目录白名单 live smoke + E 批 5 日 macro-compare-manual=0 + hit-rate
