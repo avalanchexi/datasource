@@ -469,7 +469,7 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 
 
 ### Stage2：统一增强（默认）
-默认 structured-provider-first：已知官方或结构化指标先尝试可信结构化源（Trading Economics、Stooq GSG、ChinaMoney JSON、NBS/PBC 详情页等），同一 key 支持 provider 级顺序兜底；全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。真实命中率优先看 `stage2_effective_hit_rate`。
+默认 structured-provider-first：已知官方或结构化指标先尝试可信结构化源（Trading Economics 商品/BDI/DXY/reverse_repo 页面、Stooq GSG、ChinaMoney JSON、NBS/PBC 详情页等），同一 key 支持 provider 级顺序兜底；全部失败、超时、解析失败或质量 gate 阻断时继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。`reserve_ratio` 结构化源仅允许 PBoC `official_china`；Trading Economics `cash-reserve-ratio` 7.50% 大行口径已从结构化与搜索可信来源中屏蔽，PBoC 失败时转搜索/manual。真实命中率优先看 `stage2_effective_hit_rate`。
 以下片段默认已设置 `DATE=$(date +%Y-%m-%d)` 与 `DATE_NH=${DATE//-/}`，并已执行 `bash run_preflight.sh`。
 
 `bash run_clean.sh python scripts/stage2_unified_enhancer.py --market-data "data/runs/${DATE_NH}/market_data.json" --output "data/runs/${DATE_NH}/market_data_stage2.json" --execute-search --fund-flow-backend tavily --cache-backend sqlite --cache-path data/cache/tavily_cache.sqlite --websearch-results "data/runs/${DATE_NH}/websearch_results_auto.json" --log-output "logs/runs/${DATE_NH}/stage2_unified_log.json" --gap-monitor "data/runs/${DATE_NH}/gap_monitor.json"`
@@ -533,7 +533,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 
 ## 关键默认值
 - `--fund-flow-backend` 默认 `tavily`
-- Stage2 uses structured-provider-first for known official or structured indicators, including Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages; then it falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
+- Stage2 uses structured-provider-first for known official or structured indicators, including Trading Economics commodity/BDI/DXY/reverse_repo pages, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages; `reserve_ratio` is PBoC `official_china` only and `cash-reserve-ratio` is blocked in structured and search fallback. Stage2 then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction.
 - `--deepseek-model` 默认 `deepseek-v4-pro`
 - `--deepseek-timeout` 默认 `30s`
 - `--llm-hard-timeout` 默认 `35s`

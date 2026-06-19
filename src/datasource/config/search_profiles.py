@@ -968,7 +968,13 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
     # ==================== 货币政策指标 ====================
     "rrr": _profile(
         query="China RRR reserve requirement ratio 存款准备金率 最新",
-        domains=["pbc.gov.cn", "eastmoney.com", "cls.cn", "xinhuanet.com", "tradingeconomics.com", "ceicdata.com"],
+        domains=[
+            "pbc.gov.cn",
+            "eastmoney.com",
+            "cls.cn",
+            "xinhuanet.com",
+            "ceicdata.com",
+        ],
         queries=[
             "PBOC RRR reserve ratio latest",
             "中国央行 存款准备金率 最新",
@@ -977,7 +983,7 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
         ],
         unit="%",
         issuer="中国人民银行",
-        issuer_aliases=["央行", "PBOC", "人行", "RRR", "Trading Economics", "CEIC"],
+        issuer_aliases=["央行", "PBOC", "人行", "RRR", "CEIC"],
         query_families=[
             {
                 "name": "official_pbc",
@@ -996,12 +1002,20 @@ SEARCH_PROFILES: Dict[str, SearchProfile] = {
                     "PBOC reserve requirement ratio latest",
                     "China reserve requirement ratio latest PBOC",
                 ],
-                "preferred_domains": ["tradingeconomics.com", "ceicdata.com", "eastmoney.com"],
-                "required_keywords": ["reserve requirement ratio", "rrr", "pboc"],
+                "preferred_domains": ["ceicdata.com", "eastmoney.com"],
+                "required_keywords": [
+                    "reserve requirement ratio",
+                    "rrr",
+                    "pboc",
+                ],
             },
         ],
         required_keywords=["存款准备金率", "降准", "人民银行"],
         exclude_keywords=["农业", "设施农业", "种植", "lpr", "loan prime rate"],
+        bad_url_patterns=[
+            "tradingeconomics.com/china/cash-reserve-ratio",
+            "cash-reserve-ratio",
+        ],
         max_age_days=365,
         low_score_threshold=0.02,
         allow_low_score_extract=False,
@@ -1658,8 +1672,12 @@ def _apply_report_usage_profiles() -> None:
                 "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
                 "China reserve requirement ratio current level PBOC latest",
             ],
-            "preferred_domains": ["pbc.gov.cn", "tradingeconomics.com", "ceicdata.com"],
-            "required_keywords": ["存款准备金率", "reserve requirement ratio", "rrr"],
+            "preferred_domains": ["pbc.gov.cn", "ceicdata.com"],
+            "required_keywords": [
+                "存款准备金率",
+                "reserve requirement ratio",
+                "rrr",
+            ],
         },
         {
             "name": "official_adjustment_notice",
@@ -1673,15 +1691,36 @@ def _apply_report_usage_profiles() -> None:
         *[
             item
             for item in SEARCH_PROFILES["rrr"].get("query_families", [])
-            if item.get("name") not in {"official_pbc", "current_level", "official_adjustment_notice"}
+            if item.get("name")
+            not in {
+                "official_pbc",
+                "current_level",
+                "official_adjustment_notice",
+            }
         ],
     ]
     SEARCH_PROFILES["rrr"].update(
         {
-            "evidence_keywords": ["存款准备金率", "金融机构", "加权平均", "当前水平", "人民银行"],
-            "good_url_patterns": ["pbc.gov.cn", "tradingeconomics.com", "ceicdata.com"],
-            "bad_url_patterns": ["农业", "设施农业", "种植", "lpr"],
-            "report_usage": "Stage4 monetary table requires current reserve requirement ratio level",
+            "evidence_keywords": [
+                "存款准备金率",
+                "金融机构",
+                "加权平均",
+                "当前水平",
+                "人民银行",
+            ],
+            "good_url_patterns": ["pbc.gov.cn", "ceicdata.com"],
+            "bad_url_patterns": [
+                "农业",
+                "设施农业",
+                "种植",
+                "lpr",
+                "tradingeconomics.com/china/cash-reserve-ratio",
+                "cash-reserve-ratio",
+            ],
+            "report_usage": (
+                "Stage4 monetary table requires current reserve "
+                "requirement ratio level"
+            ),
         }
     )
     SEARCH_PROFILES["reverse_repo"]["query_families"] = [

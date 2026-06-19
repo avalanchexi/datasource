@@ -1211,24 +1211,18 @@ async def test_trading_economics_provider_requires_brent_meta_for_brent():
 
 
 @pytest.mark.asyncio
-async def test_trading_economics_provider_parses_reserve_ratio_meta_description():
-    html = (
-        '<meta id="metaDesc" name="description" content="Cash Reserve Ratio in China '
-        'remained unchanged at 7.50 percent in April." />'
-        "<time>2026-04-30</time>"
-    )
+async def test_trading_economics_provider_rejects_reserve_ratio():
+    provider = TradingEconomicsProvider(fetch_text=None)
 
-    async def fetch_text(url, params=None):
-        assert "cash-reserve-ratio" in url
-        return html
+    with pytest.raises(StructuredProviderError) as exc_info:
+        await provider.fetch(
+            {"indicator_key": "reserve_ratio"},
+            {},
+            "2026-05-23",
+        )
 
-    provider = TradingEconomicsProvider(fetch_text=fetch_text)
-    result = await provider.fetch({"indicator_key": "reserve_ratio"}, {}, "2026-05-23")
-
-    extraction = result.to_extraction()
-    assert extraction["category"] == "monetary_policy"
-    assert extraction["value"] == 7.5
-    assert extraction["unit"] == "%"
+    assert exc_info.value.provider == "trading_economics"
+    assert exc_info.value.reason == "unsupported_key"
 
 
 @pytest.mark.asyncio

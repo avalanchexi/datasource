@@ -60,7 +60,7 @@ cp .env.example .env
 ## 快速运行 Stage2（structured-provider-first + Tavily + DeepSeek/Regex）
 - 运行前：`bash run_preflight.sh`；可选健康检查 `bash run_clean.sh python scripts/tools/stage2_health_check.py`（检查 Tavily/DeepSeek key、代理、缓存路径可写、基础连通性）。
 - 下列示例默认已设置 `DATE=$(date +%Y-%m-%d)` 与 `DATE_NH=${DATE//-/}`。
-- Stage2 uses structured-provider-first for known official or structured indicators, with provider-level fallback for the same key, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction. Current structured sources include Trading Economics, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages. 排障可加 `--disable-structured-providers` 回到原搜索链路。
+- Stage2 uses structured-provider-first for known official or structured indicators, with provider-level fallback for the same key, then falls back to Tavily-first search, Exa quota/rate/payment failover, and DeepSeek/regex extraction. Current structured sources include Trading Economics commodity/BDI/DXY/reverse_repo pages, Stooq GSG CSV, ChinaMoney USDCNY JSON, and NBS/PBC detail pages; `reserve_ratio` is PBoC `official_china` only, and Trading Economics `cash-reserve-ratio` is blocked in both structured and search fallback. 排障可加 `--disable-structured-providers` 回到原搜索链路。
 - 速度优先（regex，无 LLM）：
 ```bash
 bash run_clean.sh python scripts/stage2_unified_enhancer.py \

@@ -67,12 +67,6 @@ URLS: Dict[str, Dict[str, Any]] = {
         "label": "Copper",
         "category": "commodities",
     },
-    "reserve_ratio": {
-        "url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-        "unit": "%",
-        "label": "China Cash Reserve Ratio",
-        "category": "monetary_policy",
-    },
     "reverse_repo": {
         "url": "https://tradingeconomics.com/china/reverse-repo-rate",
         "unit": "%",
@@ -96,7 +90,10 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
                 provider=self.name,
                 indicator_key=key,
                 reason="unsupported_key",
-                message="Trading Economics provider does not support {0}".format(key),
+                message=(
+                    "Trading Economics provider does not support "
+                    "{0}".format(key)
+                ),
             )
 
         config = URLS[key]
@@ -128,7 +125,9 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
                 provider=self.name,
                 indicator_key=key,
                 reason="missing_value",
-                message="Trading Economics page did not contain a parseable value",
+                message=(
+                    "Trading Economics page did not contain a parseable value"
+                ),
                 diagnostics={"url": url},
             )
 
@@ -167,7 +166,9 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
         if chart_meta_value is not None:
             return chart_meta_value
 
-        description_value = TradingEconomicsProvider._parse_description_value(html)
+        description_value = TradingEconomicsProvider._parse_description_value(
+            html
+        )
         if description_value is not None:
             return description_value
 
@@ -188,7 +189,11 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
         required_tokens: Optional[list[str]] = None,
         exclude_tokens: Optional[list[str]] = None,
     ) -> Optional[float]:
-        match = re.search(r"TEChartsMeta\s*=\s*(\[.*?\]);", html, flags=re.DOTALL)
+        match = re.search(
+            r"TEChartsMeta\s*=\s*(\[.*?\]);",
+            html,
+            flags=re.DOTALL,
+        )
         if not match:
             return None
         try:
@@ -204,15 +209,25 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
                 continue
             haystack = " ".join(
                 str(record.get(field) or "")
-                for field in ("name", "full_name", "description", "symbol", "ticker")
+                for field in (
+                    "name",
+                    "full_name",
+                    "description",
+                    "symbol",
+                    "ticker",
+                )
             ).lower()
             if excluded and any(token in haystack for token in excluded):
                 continue
             if required and not all(token in haystack for token in required):
                 continue
             if expected and expected not in haystack:
-                expected_tokens = [token for token in expected.split() if len(token) > 2]
-                if expected_tokens and not all(token in haystack for token in expected_tokens):
+                expected_tokens = [
+                    token for token in expected.split() if len(token) > 2
+                ]
+                if expected_tokens and not all(
+                    token in haystack for token in expected_tokens
+                ):
                     continue
             for field in ("last", "value", "converted_value"):
                 value = record.get(field)
@@ -229,7 +244,8 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
         if not description:
             return None
         patterns = [
-            r"(?:fell|rose|unchanged|recorded|traded|remained)[^0-9]{0,40}(?:at|to)\s*([0-9,]+(?:\.\d+)?)",
+            r"(?:fell|rose|unchanged|recorded|traded|remained)"
+            r"[^0-9]{0,40}(?:at|to)\s*([0-9,]+(?:\.\d+)?)",
             r"last recorded at\s*([0-9,]+(?:\.\d+)?)",
         ]
         for pattern in patterns:
@@ -246,7 +262,10 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
         if parsed is not None:
             return parsed
 
-        last_update = re.search(r"TELastUpdate\s*=\s*['\"](\d{4})(\d{2})(\d{2})", html)
+        last_update = re.search(
+            r"TELastUpdate\s*=\s*['\"](\d{4})(\d{2})(\d{2})",
+            html,
+        )
         if last_update:
             year, month, day = last_update.groups()
             return "{0}-{1}-{2}".format(year, month, day)
@@ -299,7 +318,9 @@ class TradingEconomicsProvider(Stage2StructuredProvider):
         if period_match:
             month = months.get(period_match.group(1).lower())
             if month:
-                return "{0}-{1:02d}-01".format(int(period_match.group(2)), month)
+                return "{0}-{1:02d}-01".format(
+                    int(period_match.group(2)), month
+                )
         return None
 
 

@@ -112,18 +112,6 @@
     "source_tier": "tier1",
     "confidence": 0.9
   },
-  "reserve_ratio": {
-    "behavior": "success",
-    "payload": {
-      "value": 7.5,
-      "unit": "%",
-      "is_estimated": false
-    },
-    "source": "Trading Economics structured page",
-    "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-    "source_tier": "tier2",
-    "confidence": 0.85
-  },
   "reverse_repo": {
     "behavior": "parse_error"
   }

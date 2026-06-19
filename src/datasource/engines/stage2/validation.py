@@ -183,9 +183,21 @@ def _validate_general_extraction(
     src_netloc = ""
     if src:
         try:
-            src_netloc = urlparse(src).netloc
+            parsed_src = urlparse(src)
+            src_netloc = parsed_src.netloc
+            src_path = parsed_src.path or ""
         except Exception:
             src_netloc = ""
+            src_path = ""
+    else:
+        src_path = ""
+    if (
+        indicator_key_l in {"rrr", "reserve_ratio"}
+        and src_netloc.endswith("tradingeconomics.com")
+        and "cash-reserve-ratio" in src_path.lower()
+    ):
+        manual = True
+        note_append = (note_append + " 错口径来源(cash-reserve-ratio)").strip()
     if domains and src:
         try:
             netloc = src_netloc or urlparse(src).netloc
@@ -209,7 +221,7 @@ def _validate_general_extraction(
     # 发布机构校验：若提供 issuer_hint，需要在抽取或片段中出现
     if issuer_hint:
         issuer_relax_domains = {
-            "rrr": ["tradingeconomics.com", "ceicdata.com", "chinamoney.com.cn"],  # noqa: E501
+            "rrr": ["ceicdata.com", "chinamoney.com.cn"],
             "mlf": ["tradingeconomics.com", "chinamoney.com.cn"],
             "reverse_repo": ["tradingeconomics.com", "chinamoney.com.cn", "cls.cn"],  # noqa: E501
             "bcom": ["tradingeconomics.com", "investing.com", "bloomberg.com"],

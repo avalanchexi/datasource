@@ -280,8 +280,9 @@ class ReplayRegistry:
 # 当前 golden 可复现还隐性依赖两个开关关闭,不是靠 normalize:生产里 time.time()
 # (stage2 ~5651/5770)和 asyncio.sleep(0.5) 都只在 auto_disable_extract_on_422 与 Exa
 # failover 路径上;replay 把这两条都关掉(flag 默认 False、EXA_API_KEY="")才使其不可达。
-# 若将来扩展 replay 去覆盖 422-cooldown 或 Exa,需要在此登记新泄漏字段。
-VOLATILE_FIELDS = set()  # 实证后填充,如 {"created_at", "elapsed_ms", ...}
+# structured_provider_latency_ms is derived from perf_counter call count. It is
+# useful in runtime diagnostics, but not part of replay's business contract.
+VOLATILE_FIELDS = {"structured_provider_latency_ms"}
 
 
 def _result_sort_key(item):
@@ -556,20 +557,23 @@ def test_replay_full_main(tmp_path, monkeypatch):
     summary = json.loads(log_out.read_text(encoding="utf-8"))
     # Assert the integer numerator/denominator rather than the float ratio: same lock,
     # but robust to any future rounding of the derived hit-rate field.
-    assert summary["stage2_effective_success"] == 12
+    assert summary["stage2_effective_success"] == 11
     assert summary["stage2_effective_denominator"] == 18
-    assert summary["task_structured_success"] == 11
+    assert summary["task_structured_success"] == 10
     assert summary["task_search_success"] == 1
-    assert summary["task_search_failed"] == 6
+    assert summary["task_search_failed"] == 7
     assert summary["tavily_extract_calls"] == 1
     # USDCNY routes through search+extract and is blocked by today's forex zero-evidence
     # gate -> the single missing_compare_values entry; confirms the extract-lane indicator
     # lands where the gate dictates.
+    # reserve_ratio no longer falls back to Trading Economics'
+    # cash-reserve-ratio page, so it stays in the stale-refresh manual bucket
+    # when the PBoC fixture has no value.
     assert summary["manual_reason_breakdown"] == {
         "skipped_deepseek:strict_keyword_miss": 2,
         "missing_compare_values": 1,
         "skipped_deepseek:no_snippets stale_refresh_failed": 1,
-        "skipped_deepseek:strict_keyword_miss stale_refresh_failed": 1,
+        "skipped_deepseek:strict_keyword_miss stale_refresh_failed": 2,
     }
     produced_market = json.loads(market_out.read_text(encoding="utf-8"))
     assert_or_update_golden(produced_market, "level2_market_data_stage2.json")

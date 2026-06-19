@@ -165,6 +165,15 @@ def _candidate_query_quality(
         usable = []
         usable_scores = _score_usable(usable)
         scored_usable = usable_scores["scored"]
+    elif (
+        indicator_key_normalized.lower() in {"rrr", "reserve_ratio"}
+        and scored_usable
+        and all(item["bad_hits"] for item in scored_usable)
+    ):
+        unusable_reason = "search_result_scope_mismatch"
+        usable = []
+        usable_scores = _score_usable(usable)
+        scored_usable = usable_scores["scored"]
 
     if usable and not unusable_reason:
         issuer_hit = _snippets_have_issuer(

@@ -1,6 +1,6 @@
 {
-  "completed": 14,
-  "failures": 5,
+  "completed": 13,
+  "failures": 6,
   "outcome": {
     "BCOM": "manual_required",
     "BZ=F": "structured_success",
@@ -17,7 +17,7 @@
     "industrial_sales": "structured_success",
     "mlf": "structured_success",
     "northbound": "skipped_existing",
-    "reserve_ratio": "structured_success",
+    "reserve_ratio": "manual_required",
     "reverse_repo": "manual_required",
     "rrr": "search_success",
     "southbound": "skipped_existing"
@@ -84,7 +84,6 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/commodity/copper",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -308,7 +307,6 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/commodity/brent-crude-oil",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -1018,7 +1016,6 @@
       "source_tier": "tier1",
       "source_url": "https://www.stats.gov.cn/sj/zxfb/202604/t20260427_1963403.html",
       "structured_provider": "official_china",
-      "structured_provider_latency_ms": 0,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -1638,38 +1635,20 @@
             "value_evidence_score": 24
           },
           {
-            "bad_url_hit_count": 0,
+            "error": "ambiguous replay Tavily query without indicator: 'PBOC reserve requirement ratio latest'; candidate indicators/result_types: reserve_ratio:manual_required, rrr:search_success. Pass indicator_key, indicator, or task_indicator to ReplayTavilyClient.search.",
             "family": "macro_aggregator",
             "field_scope": null,
-            "good_url_hit_count": 0,
-            "issuer_hit": true,
-            "period_hit": true,
-            "quality_score": 817.0,
-            "query": "PBOC reserve requirement ratio latest",
-            "result_count": 3,
-            "score_max": null,
-            "trusted_count": 3,
-            "unusable_reason": null,
-            "usable_count": 3,
-            "usage_evidence_score": 0,
-            "value_evidence_score": 24
+            "manual_reason": null,
+            "manual_required": null,
+            "query": "PBOC reserve requirement ratio latest"
           },
           {
-            "bad_url_hit_count": 0,
+            "error": "ambiguous replay Tavily query without indicator: 'China reserve requirement ratio latest PBOC'; candidate indicators/result_types: reserve_ratio:manual_required, rrr:search_success. Pass indicator_key, indicator, or task_indicator to ReplayTavilyClient.search.",
             "family": "macro_aggregator",
             "field_scope": null,
-            "good_url_hit_count": 0,
-            "issuer_hit": true,
-            "period_hit": true,
-            "quality_score": 817.0,
-            "query": "China reserve requirement ratio latest PBOC",
-            "result_count": 3,
-            "score_max": null,
-            "trusted_count": 3,
-            "unusable_reason": null,
-            "usable_count": 3,
-            "usage_evidence_score": 0,
-            "value_evidence_score": 24
+            "manual_reason": null,
+            "manual_required": null,
+            "query": "China reserve requirement ratio latest PBOC"
           }
         ],
         "query_candidates_expanded": [
@@ -1722,9 +1701,9 @@
             ]
           }
         ],
-        "query_family_used": "macro_aggregator",
+        "query_family_used": "official_pbc",
         "query_template_id": "rrr",
-        "query_used": "PBOC reserve requirement ratio latest",
+        "query_used": "中国人民银行 存款准备金率 调整 公告 最新",
         "request_id": null,
         "required_keywords": [
           "存款准备金率",
@@ -1825,7 +1804,6 @@
       "source_tier": "tier2",
       "source_url": "https://stooq.com/q/l/?s=gsg.us&f=sd2t2ohlcv&h&e=csv",
       "structured_provider": "stooq",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -2346,7 +2324,6 @@
           "window_evidence": "direct_balance_delta"
         },
         "structured_provider_fallback_reason": "policy_gate_blocked",
-        "structured_provider_latency_ms": 83257,
         "structured_provider_name": "tushare_etf",
         "task_id": "62b63823-c23a-4fa0-adb3-03f5481353cc",
         "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
@@ -2423,7 +2400,6 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/commodity/crude-oil",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -2652,7 +2628,6 @@
       "source_tier": "tier1",
       "source_url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/2026052217453752767/index.html",
       "structured_provider": "official_china",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": false,
@@ -3101,7 +3076,6 @@
           "structured_provider_message": "CN10Y_CDB estimator requires explicit CDB spread provenance"
         },
         "structured_provider_fallback_reason": "missing_cdb_spread",
-        "structured_provider_latency_ms": 518,
         "structured_provider_name": "cdb_estimator",
         "task_id": "8d062b2f-0229-4f6b-bc90-9c2d0f71a8e3",
         "tavily_error_message": "{\"detail\":{\"error\":\"This request exceeds this API key's set usage limit. You can increase its limit on the Tavily dashboard.\"}}",
@@ -3380,7 +3354,6 @@
           "structured_provider_message": "replay fixture parse error"
         },
         "structured_provider_fallback_reason": "parse_error",
-        "structured_provider_latency_ms": 1,
         "structured_provider_name": "replay-fixture",
         "task_id": "8ee9d25c-aa01-4e6d-9d62-20c15796e534",
         "time_context_type": "daily_quote",
@@ -3599,7 +3572,6 @@
       "source_tier": "tier1",
       "source_url": "https://www.stats.gov.cn/sj/zxfb/202605/t20260518_1963731.html",
       "structured_provider": "official_china",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": null,
@@ -3738,101 +3710,43 @@
       "write_back_target": "macro_indicators"
     },
     {
-      "as_of_date": "2026-04-30",
-      "category": null,
-      "confidence": 0.85,
-      "diagnostics": {
-        "evidence_text": "China Cash Reserve Ratio 7.5 %",
-        "label": "China Cash Reserve Ratio",
-        "structured_provider_attempts": [
-          {
-            "evidence_text": "text/html; charset=utf-8 人民币存款准备金 2026-05-20 15:28:00 var _speedMark = new Date(); 人民币存款准备金 工作动态 货币政策司 zhengcehuobisi 初始化频道：人民币存款准备金 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{ width",
-            "structured_provider": "official_china",
-            "structured_provider_error": "missing_value",
-            "structured_provider_indicator_key": "reserve_ratio",
-            "structured_provider_message": "Official China source did not contain a parseable value",
-            "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html"
-          }
-        ]
-      },
       "extraction": {
-        "as_of_date": "2026-04-30",
-        "category": null,
-        "confidence": 0.85,
-        "diagnostics": {
-          "evidence_text": "China Cash Reserve Ratio 7.5 %",
-          "label": "China Cash Reserve Ratio",
-          "structured_provider_attempts": [
-            {
-              "evidence_text": "text/html; charset=utf-8 人民币存款准备金 2026-05-20 15:28:00 var _speedMark = new Date(); 人民币存款准备金 工作动态 货币政策司 zhengcehuobisi 初始化频道：人民币存款准备金 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{ width",
-              "structured_provider": "official_china",
-              "structured_provider_error": "missing_value",
-              "structured_provider_indicator_key": "reserve_ratio",
-              "structured_provider_message": "Official China source did not contain a parseable value",
-              "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html"
-            }
-          ]
-        },
-        "indicator_key": "reserve_ratio",
-        "is_estimated": false,
-        "note": "structured_provider:trading_economics 缺少发布机构(中国人民银行)",
-        "source": "Trading Economics structured page",
-        "source_tier": "tier2",
-        "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
+        "confidence": 0.0,
+        "llm_error": "skipped_deepseek:strict_keyword_miss",
+        "llm_latency_ms": 0,
+        "llm_timeout": false,
+        "manual_reason": "skipped_deepseek:strict_keyword_miss stale_refresh_failed",
+        "manual_required": true,
+        "note": "skipped_deepseek:strict_keyword_miss no_value 缺少发布机构(中国人民银行) stale_refresh_failed",
+        "source_url": null,
         "unit": "%",
-        "value": 7.5
+        "value": null
       },
-      "extraction_backend": "structured",
+      "extraction_backend": "deepseek",
+      "field_attempts": [],
       "force_refresh": true,
-      "indicator_key": "reserve_ratio",
-      "manual_reason": null,
-      "manual_required": false,
-      "note": "structured_provider:trading_economics",
-      "payload": {
-        "is_estimated": false,
-        "unit": "%",
-        "value": 7.5
-      },
-      "provider": "trading_economics",
-      "raw_results": [
-        {
-          "as_of_date": "2026-04-30",
-          "content": "structured_provider:trading_economics",
-          "score": 0.85,
-          "source_tier": "tier2",
-          "title": "Trading Economics structured page",
-          "url": "https://tradingeconomics.com/china/cash-reserve-ratio"
-        }
-      ],
-      "result_type": "structured_success",
-      "results": [
-        {
-          "as_of_date": "2026-04-30",
-          "content": "structured_provider:trading_economics",
-          "score": 0.85,
-          "source_tier": "tier2",
-          "title": "Trading Economics structured page",
-          "url": "https://tradingeconomics.com/china/cash-reserve-ratio"
-        }
-      ],
-      "search_backend": "structured",
-      "source": "Trading Economics structured page",
-      "source_tier": "tier2",
-      "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-      "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
+      "manual_reason": "skipped_deepseek:strict_keyword_miss stale_refresh_failed",
+      "manual_required": true,
+      "note": null,
+      "raw_results": [],
+      "result_type": "manual_required",
+      "search_backend": "tavily",
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": false,
+        "bad_url_hit_count": 0,
         "bad_url_patterns": [
+          "cash-reserve-ratio",
+          "lpr",
+          "tradingeconomics.com/china/cash-reserve-ratio",
           "农业",
-          "设施农业",
           "种植",
-          "lpr"
+          "设施农业"
         ],
         "chunks_per_source": null,
         "created_at": 1779843176,
         "days": null,
+        "domain_filtered_drop": 0,
         "evidence_keywords": [
           "存款准备金率",
           "金融机构",
@@ -3840,6 +3754,7 @@
           "当前水平",
           "人民银行"
         ],
+        "exa_request_id": null,
         "exclude_domains": [],
         "exclude_keywords": [
           "农业",
@@ -3858,13 +3773,17 @@
         "extract_policy": {
           "use_tavily_extract": false
         },
+        "extract_skipped_reason": null,
         "extraction_backend": "structured",
+        "extraction_skipped_reason": "strict_keyword_miss",
+        "failover_reason": null,
         "field_queries": {},
+        "field_scope": null,
         "force_refresh": true,
         "fund_flow_backend": null,
+        "good_url_hit_count": 0,
         "good_url_patterns": [
           "pbc.gov.cn",
-          "tradingeconomics.com",
           "ceicdata.com"
         ],
         "indicator_key": "reserve_ratio",
@@ -3874,20 +3793,20 @@
           "PBOC",
           "人行",
           "RRR",
-          "Trading Economics",
           "CEIC"
         ],
+        "issuer_hit": false,
         "language": "chinese",
         "low_score_threshold": 0.02,
         "max_age_days": 365,
         "max_query_candidates": null,
         "max_results": 6,
+        "period_hit": false,
         "preferred_domains": [
           "pbc.gov.cn",
           "eastmoney.com",
           "cls.cn",
           "xinhuanet.com",
-          "tradingeconomics.com",
           "ceicdata.com"
         ],
         "quality_gap_category": "monetary_policy",
@@ -3900,6 +3819,100 @@
           "China reserve requirement ratio 2026"
         ],
         "query": "China RRR reserve requirement ratio 存款准备金率 最新",
+        "query_attempts": [
+          {
+            "error": "unrecorded replay Tavily query: 'China RRR reserve requirement ratio 存款准备金率 最新 最新 官方 数据 单位% 发布机构中国人民银行 发布机构原文 2026年4月'",
+            "family": "directed_retry",
+            "field_scope": null,
+            "manual_reason": null,
+            "manual_required": null,
+            "query": "China RRR reserve requirement ratio 存款准备金率 最新 最新 官方 数据 单位% 发布机构中国人民银行 发布机构原文 2026年4月"
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "current_level",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": false,
+            "period_hit": false,
+            "quality_score": -1.0,
+            "query": "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
+            "result_count": 0,
+            "score_max": null,
+            "trusted_count": 0,
+            "unusable_reason": "strict_keyword_miss",
+            "usable_count": 0,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 0
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "current_level",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": false,
+            "period_hit": false,
+            "quality_score": -1.0,
+            "query": "China reserve requirement ratio current level PBOC latest",
+            "result_count": 0,
+            "score_max": null,
+            "trusted_count": 0,
+            "unusable_reason": "strict_keyword_miss",
+            "usable_count": 0,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 0
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "official_adjustment_notice",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": false,
+            "period_hit": false,
+            "quality_score": -1.0,
+            "query": "中国人民银行 决定 下调 金融机构 存款准备金率 公告",
+            "result_count": 0,
+            "score_max": null,
+            "trusted_count": 0,
+            "unusable_reason": "strict_keyword_miss",
+            "usable_count": 0,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 0
+          },
+          {
+            "bad_url_hit_count": 0,
+            "family": "official_adjustment_notice",
+            "field_scope": null,
+            "good_url_hit_count": 0,
+            "issuer_hit": false,
+            "period_hit": false,
+            "quality_score": -1.0,
+            "query": "人民银行 降准 存款准备金率 最新 公告",
+            "result_count": 0,
+            "score_max": null,
+            "trusted_count": 0,
+            "unusable_reason": "strict_keyword_miss",
+            "usable_count": 0,
+            "usage_evidence_score": 0,
+            "value_evidence_score": 0
+          },
+          {
+            "error": "ambiguous replay Tavily query without indicator: 'PBOC reserve requirement ratio latest'; candidate indicators/result_types: reserve_ratio:manual_required, rrr:search_success. Pass indicator_key, indicator, or task_indicator to ReplayTavilyClient.search.",
+            "family": "macro_aggregator",
+            "field_scope": null,
+            "manual_reason": null,
+            "manual_required": null,
+            "query": "PBOC reserve requirement ratio latest"
+          },
+          {
+            "error": "ambiguous replay Tavily query without indicator: 'China reserve requirement ratio latest PBOC'; candidate indicators/result_types: reserve_ratio:manual_required, rrr:search_success. Pass indicator_key, indicator, or task_indicator to ReplayTavilyClient.search.",
+            "family": "macro_aggregator",
+            "field_scope": null,
+            "manual_reason": null,
+            "manual_required": null,
+            "query": "China reserve requirement ratio latest PBOC"
+          }
+        ],
         "query_candidates_expanded": [
           "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
           "China reserve requirement ratio current level PBOC latest",
@@ -3913,7 +3926,6 @@
             "name": "current_level",
             "preferred_domains": [
               "pbc.gov.cn",
-              "tradingeconomics.com",
               "ceicdata.com"
             ],
             "queries": [
@@ -3945,7 +3957,6 @@
             "exclude_keywords": [],
             "name": "macro_aggregator",
             "preferred_domains": [
-              "tradingeconomics.com",
               "ceicdata.com",
               "eastmoney.com"
             ],
@@ -3960,10 +3971,12 @@
             ]
           }
         ],
+        "query_family_used": "current_level",
         "query_template_id": "rrr",
-        "query_used": "China RRR reserve requirement ratio 存款准备金率 最新",
+        "query_used": "金融机构 加权平均 存款准备金率 当前水平 最新 中国人民银行",
         "ref_date": null,
         "report_usage": "Stage4 monetary table requires current reserve requirement ratio level",
+        "request_id": null,
         "required_keywords": [
           "存款准备金率",
           "降准",
@@ -3974,8 +3987,20 @@
           "change_from_120d"
         ],
         "retry_count": 0,
-        "search_backend": "structured",
+        "score_filtered_drop": 0,
+        "score_low_all": false,
+        "score_low_threshold": 0.02,
+        "score_stats": {
+          "score_count": 0,
+          "score_max": null,
+          "score_min": null,
+          "score_p50": null,
+          "score_p95": null
+        },
+        "search_backend": "tavily",
+        "search_backend_state": null,
         "search_depth": "basic",
+        "selected_reason": "trusted=0 usable=0 issuer_hit=False period_hit=False usage_evidence=0 value_evidence=0 good_url=0 bad_url=0 score_max=None reason=strict_keyword_miss",
         "source_hint": null,
         "stage_phase": "essential",
         "strict_issuer_match": true,
@@ -3985,10 +4010,12 @@
         "time_range": "month",
         "topic": "news",
         "trigger_reason": "quality_gap",
-        "unit": "%"
-      },
-      "write_back_success": true,
-      "write_back_target": "fallback_macro"
+        "trusted_count": 0,
+        "unit": "%",
+        "usable_count_before_extract": 0,
+        "usage_evidence_score": 0,
+        "value_evidence_score": 0
+      }
     },
     {
       "as_of_date": "2026-05-27",
@@ -4051,7 +4078,6 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/commodity/gold",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 0,
       "task": {
         "allow_low_score_extract": false,
         "auto_parameters": true,
@@ -4280,7 +4306,6 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/united-states/currency",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": true,
         "auto_parameters": true,
@@ -4527,7 +4552,6 @@
       "source_tier": "tier2",
       "source_url": "https://tradingeconomics.com/commodity/baltic",
       "structured_provider": "trading_economics",
-      "structured_provider_latency_ms": 1,
       "task": {
         "allow_low_score_extract": true,
         "auto_parameters": false,

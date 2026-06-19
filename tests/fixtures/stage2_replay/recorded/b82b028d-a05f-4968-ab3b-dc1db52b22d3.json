@@ -13,7 +13,6 @@
       "eastmoney.com",
       "cls.cn",
       "xinhuanet.com",
-      "tradingeconomics.com",
       "ceicdata.com"
     ],
     "exclude_domains": [],
@@ -35,7 +34,6 @@
         ],
         "preferred_domains": [
           "pbc.gov.cn",
-          "tradingeconomics.com",
           "ceicdata.com"
         ],
         "required_keywords": [
@@ -66,7 +64,6 @@
           "China reserve requirement ratio latest PBOC"
         ],
         "preferred_domains": [
-          "tradingeconomics.com",
           "ceicdata.com",
           "eastmoney.com"
         ],
@@ -94,7 +91,6 @@
       "PBOC",
       "人行",
       "RRR",
-      "Trading Economics",
       "CEIC"
     ],
     "required_keywords": [
@@ -124,14 +120,15 @@
     ],
     "good_url_patterns": [
       "pbc.gov.cn",
-      "tradingeconomics.com",
       "ceicdata.com"
     ],
     "bad_url_patterns": [
+      "cash-reserve-ratio",
+      "lpr",
+      "tradingeconomics.com/china/cash-reserve-ratio",
       "农业",
-      "设施农业",
       "种植",
-      "lpr"
+      "设施农业"
     ],
     "report_usage": "Stage4 monetary table requires current reserve requirement ratio level",
     "language": "chinese",
@@ -167,87 +164,36 @@
     "extraction_backend": "structured",
     "query_used": "China RRR reserve requirement ratio 存款准备金率 最新"
   },
-  "search_backend": "structured",
-  "result_type": "structured_success",
-  "provider": "trading_economics",
-  "source": "Trading Economics structured page",
-  "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-  "source_tier": "tier2",
-  "as_of_date": "2026-04-30",
-  "confidence": 0.85,
-  "note": "structured_provider:trading_economics",
-  "payload": {
-    "value": 7.5,
-    "unit": "%",
-    "is_estimated": false
-  },
-  "diagnostics": {
-    "label": "China Cash Reserve Ratio",
-    "evidence_text": "China Cash Reserve Ratio 7.5 %",
-    "structured_provider_attempts": [
-      {
-        "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html",
-        "evidence_text": "text/html; charset=utf-8 人民币存款准备金 2026-05-20 15:28:00 var _speedMark = new Date(); 人民币存款准备金 工作动态 货币政策司 zhengcehuobisi 初始化频道：人民币存款准备金 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{ width",
-        "structured_provider": "official_china",
-        "structured_provider_indicator_key": "reserve_ratio",
-        "structured_provider_error": "missing_value",
-        "structured_provider_message": "Official China source did not contain a parseable value"
-      }
-    ]
-  },
-  "results": [
-    {
-      "title": "Trading Economics structured page",
-      "url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-      "content": "structured_provider:trading_economics",
-      "score": 0.85,
-      "source_tier": "tier2",
-      "as_of_date": "2026-04-30"
-    }
-  ],
+  "search_backend": "tavily",
+  "result_type": "manual_required",
+  "provider": null,
+  "source": "Stage2 manual_required",
+  "source_url": null,
+  "source_tier": null,
+  "as_of_date": null,
+  "confidence": 0.0,
+  "note": "manual_required:no_snippets; trading_economics cash-reserve-ratio disabled",
+  "payload": {},
+  "diagnostics": {},
+  "results": [],
   "extraction": {
-    "value": 7.5,
+    "value": null,
     "unit": "%",
-    "is_estimated": false,
     "indicator_key": "reserve_ratio",
     "category": "monetary_policy",
-    "source": "Trading Economics structured page",
-    "source_url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-    "source_tier": "tier2",
-    "note": "structured_provider:trading_economics 缺少发布机构(中国人民银行)",
-    "as_of_date": "2026-04-30",
-    "confidence": 0.85,
-    "diagnostics": {
-      "label": "China Cash Reserve Ratio",
-      "evidence_text": "China Cash Reserve Ratio 7.5 %",
-      "structured_provider_attempts": [
-        {
-          "url": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html",
-          "evidence_text": "text/html; charset=utf-8 人民币存款准备金 2026-05-20 15:28:00 var _speedMark = new Date(); 人民币存款准备金 工作动态 货币政策司 zhengcehuobisi 初始化频道：人民币存款准备金 /*导航css*/ body{margin:0;padding:0;} a{ text-decoration:none; color:#333333;font-size: 12px;} .header{ width",
-          "structured_provider": "official_china",
-          "structured_provider_indicator_key": "reserve_ratio",
-          "structured_provider_error": "missing_value",
-          "structured_provider_message": "Official China source did not contain a parseable value"
-        }
-      ]
-    }
+    "manual_required": true,
+    "manual_reason": "no_snippets",
+    "source": "Stage2 manual_required",
+    "source_url": null,
+    "note": "trading_economics cash-reserve-ratio disabled; requires PBoC evidence"
   },
-  "extraction_backend": "structured",
-  "raw_results": [
-    {
-      "title": "Trading Economics structured page",
-      "url": "https://tradingeconomics.com/china/cash-reserve-ratio",
-      "content": "structured_provider:trading_economics",
-      "score": 0.85,
-      "source_tier": "tier2",
-      "as_of_date": "2026-04-30"
-    }
-  ],
-  "manual_required": false,
-  "manual_reason": null,
-  "write_back_success": true,
-  "write_back_target": "monetary_policy",
-  "structured_provider": "trading_economics",
-  "structured_provider_latency_ms": 1689,
+  "extraction_backend": "deepseek",
+  "raw_results": [],
+  "manual_required": true,
+  "manual_reason": "no_snippets",
+  "write_back_success": false,
+  "write_back_target": null,
+  "structured_provider": null,
+  "structured_provider_latency_ms": null,
   "force_refresh": true
 }

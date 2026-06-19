@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 
 MAIN = Path(os.environ.get("MAIN", "/mnt/d/cursor/datasource"))
@@ -28,6 +29,27 @@ INPUT = MAIN / "data/runs/20260527/market_data.json"
 # skip Tavily extract, so client.extract is never called. USDCNY uses
 # use_tavily_extract=true, so routing it through search makes the extract call real.
 EXTRACT_SEARCH_KEY = "USDCNY"
+
+# The primary donor run predates PR-E3 and recorded reserve_ratio as a
+# Trading Economics structured_success. Keep regenerated fixtures aligned with
+# current policy: the TE cash-reserve-ratio page is disabled for this key.
+DISABLED_STRUCTURED_KEYS = {
+    "reserve_ratio": {
+        "bad_url_patterns": [
+            "tradingeconomics.com/china/cash-reserve-ratio",
+            "cash-reserve-ratio",
+        ],
+        "manual_reason": "no_snippets",
+        "note": (
+            "manual_required:no_snippets; "
+            "trading_economics cash-reserve-ratio disabled"
+        ),
+        "extraction_note": (
+            "trading_economics cash-reserve-ratio disabled; "
+            "requires PBoC evidence"
+        ),
+    },
+}
 
 HERE = Path(__file__).resolve().parent
 REC = HERE / "recorded"
@@ -86,6 +108,82 @@ def _structured_payload(rec):
     }
 
 
+def _disabled_structured_record(rec):
+    """Convert obsolete structured donor records into manual replay records."""
+    rec = deepcopy(rec)
+    key = rec["task"]["indicator_key"]
+    config = DISABLED_STRUCTURED_KEYS[key]
+    extraction = rec.get("extraction") or {}
+    task = rec.get("task") or {}
+    task["preferred_domains"] = [
+        domain
+        for domain in task.get("preferred_domains", [])
+        if domain != "tradingeconomics.com"
+    ]
+    task["issuer_aliases"] = [
+        alias
+        for alias in task.get("issuer_aliases", [])
+        if alias != "Trading Economics"
+    ]
+    task["good_url_patterns"] = [
+        pattern
+        for pattern in task.get("good_url_patterns", [])
+        if "tradingeconomics.com" not in pattern
+    ]
+    task["bad_url_patterns"] = sorted(
+        set(task.get("bad_url_patterns", [])) | set(config["bad_url_patterns"])
+    )
+    for family in task.get("query_families", []):
+        family["preferred_domains"] = [
+            domain
+            for domain in family.get("preferred_domains", [])
+            if domain != "tradingeconomics.com"
+        ]
+    category = (
+        rec.get("category")
+        or extraction.get("category")
+        or task.get("quality_gap_category")
+    )
+    unit = extraction.get("unit") or task.get("unit")
+
+    rec.update(
+        {
+            "search_backend": "tavily",
+            "result_type": "manual_required",
+            "provider": None,
+            "source": "Stage2 manual_required",
+            "source_url": None,
+            "source_tier": None,
+            "as_of_date": None,
+            "confidence": 0.0,
+            "note": config["note"],
+            "payload": {},
+            "diagnostics": {},
+            "results": [],
+            "raw_results": [],
+            "extraction": {
+                "value": None,
+                "unit": unit,
+                "indicator_key": key,
+                "category": category,
+                "manual_required": True,
+                "manual_reason": config["manual_reason"],
+                "source": "Stage2 manual_required",
+                "source_url": None,
+                "note": config["extraction_note"],
+            },
+            "extraction_backend": "deepseek",
+            "manual_required": True,
+            "manual_reason": config["manual_reason"],
+            "write_back_success": False,
+            "write_back_target": None,
+            "structured_provider": None,
+            "structured_provider_latency_ms": None,
+        }
+    )
+    return rec
+
+
 def main():
     _check_path(PRIMARY, "primary replay directory")
     _check_path(SEARCH_DONOR, "search donor replay directory")
@@ -106,8 +204,20 @@ def main():
         _put_unique(primary, rec["task"]["indicator_key"], (f, rec), PRIMARY)
 
     rtypes = {k: r["result_type"] for k, (_, r) in primary.items()}
-    structured_keys = sorted(k for k, t in rtypes.items() if t == "structured_success")
-    manual_keys = sorted(k for k, t in rtypes.items() if t == "manual_required")
+    disabled_structured_keys = sorted(
+        k
+        for k, t in rtypes.items()
+        if t == "structured_success" and k in DISABLED_STRUCTURED_KEYS
+    )
+    structured_keys = sorted(
+        k
+        for k, t in rtypes.items()
+        if t == "structured_success" and k not in DISABLED_STRUCTURED_KEYS
+    )
+    manual_keys = sorted(
+        k for k, t in rtypes.items() if t == "manual_required"
+    )
+    manual_keys = sorted(set(manual_keys) | set(disabled_structured_keys))
     skip_keys = sorted(k for k, t in rtypes.items() if t == "skipped_existing")
     if not (structured_keys and manual_keys and skip_keys):
         raise SystemExit(
@@ -172,6 +282,8 @@ def main():
     for key, (f, rec) in primary.items():
         if key in borrowed:
             continue
+        if key in DISABLED_STRUCTURED_KEYS:
+            rec = _disabled_structured_record(rec)
         (REC / f.name).write_text(
             json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -236,6 +348,7 @@ def main():
         # its recorded result_type is excluded from the strict oracle (golden still
         # locks the produced outcome).
         "oracle_skip_result_type_keys": [EXTRACT_SEARCH_KEY],
+        "disabled_structured_keys": sorted(DISABLED_STRUCTURED_KEYS),
         "structured_keys": structured_keys,
         "manual_keys": manual_keys,
         "skip_keys": skip_keys,

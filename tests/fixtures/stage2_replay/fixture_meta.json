@@ -5,6 +5,9 @@
   "oracle_skip_result_type_keys": [
     "USDCNY"
   ],
+  "disabled_structured_keys": [
+    "reserve_ratio"
+  ],
   "structured_keys": [
     "BZ=F",
     "CL=F",
@@ -16,13 +19,13 @@
     "industrial",
     "industrial_sales",
     "mlf",
-    "reserve_ratio",
     "reverse_repo"
   ],
   "manual_keys": [
     "BCOM",
     "CN10Y_CDB",
-    "etf"
+    "etf",
+    "reserve_ratio"
   ],
   "skip_keys": [
     "northbound",

@@ -143,7 +143,7 @@ bash run_clean.sh python scripts/stage2_unified_enhancer.py \
 ```
 
 - structured-provider-first 覆盖：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 会先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败后才进入搜索。
-- 当前结构化来源：商品期货优先 Trading Economics，`BCOM/GSG` 可用已验证 quote 页面收盘价，`GSG` 也可用 Stooq CSV 市价，`USDCNY` 使用 ChinaMoney JSON，工业/工业营收 follow 国家统计局详情页，逆回购/RRR 可用央行/Trading Economics，ETF 先尝试 TuShare `etf_share_size`，再走 EastMoney/search。
+- 当前结构化来源：商品期货优先 Trading Economics，`BCOM/GSG` 可用已验证 quote 页面收盘价，`GSG` 也可用 Stooq CSV 市价，`USDCNY` 使用 ChinaMoney JSON，工业/工业营收 follow 国家统计局详情页，逆回购可用 PBoC/Trading Economics，`reserve_ratio` 仅用 PBoC `official_china`，ETF 先尝试 TuShare `etf_share_size`，再走 EastMoney/search。
 - 结构化源失败、超时、解析失败或质量 gate 阻断时，继续 Tavily-first 搜索；Tavily quota/rate/payment 不可用时进入 Exa failover。
 - 排障可追加 `--disable-structured-providers`，只跑原 Tavily/Exa/DeepSeek 搜索链路。
 - Stage2 真实命中率优先看 `stage2_effective_hit_rate`；它包含 structured-provider 成功和搜索抽取成功，不包含 `skipped_existing`，也不包含 Stage2.5 manual 注入。
@@ -182,6 +182,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 - 官方发布值、官方中间价、交易所/指数商实时值默认 `is_estimated=false`；只有利差估算、公式推导、代理序列、外推或明确近似值才写 `is_estimated=true`。
 - Stage2.5 same-value merge 可在 incoming `current_value` 与 existing `current_value` 相同的情况下合并 `previous_value`、`change_rate`、`change_from_120d`、`value_type`、`rrr_type`、`is_estimated`、`source_url` 等 report-readiness 字段，用于关闭 Stage3 compare/window blockers；这不计入 Stage2 真实命中率。
 - `reserve_ratio` quality replacement 仅限 Stage2.5 manual payload 显式 `is_estimated=false`，且提供单一显式 HTTPS PBoC URL（`pbc.gov.cn`）。可替换估算 fallback，或替换缺 `change_from_120d` 且带“缺少发布机构”诊断的非官方 structured 值；`chinamoney.com.cn` 不释放 `reserve_ratio` quality override；文本 URL 只能作为一致性证据，多个或 conflicting 文本 URL 均拒绝。
+- `reserve_ratio` 结构化源仅允许 `official_china` PBoC；Trading Economics `cash-reserve-ratio` 是 7.50% 大行口径，已从结构化与搜索可信来源中屏蔽。PBoC 失败时转 Tavily/manual，搜索链路也会将 `cash-reserve-ratio` URL 视为错口径来源并进入人工处理，仍走上述 PBoC quality-replacement 通道。
 - `macro_indicators.industrial` 若使用“1-2月累计同比”等来源作为流水线当前值，必须显式写 `value_type: "yoy_month"` 和 `yoy_month`，否则会被识别为 `yoy_ytd` 并导致 `current_value` 缺失。
 - `bdi` 即使在 `estimated_allowlist_keys` 内，仍受 `bdi_estimated_allow_conditions` 约束：`trusted_domains`、`max_age_days`、`value_range`、`unit_keywords` 均需通过。
 - 默认允许覆盖 `is_stale=True` 的宏观/货币字段；仅补空值可加 `--no-override-stale`，应急强制覆盖可加 `--force-override`。
