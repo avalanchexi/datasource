@@ -43,7 +43,7 @@
 - [x] 批次 A 处置表已按批次 0 审计结果修订:保护 Stage2 structured provider 动态加载集群,删除前增加 `tests/ examples/ scripts/ docs/ optimization/` 引用复核闸;`pring_result_contract` 因批次 D2 依赖移出删除候选(评审修正)
 - [x] **PR-A**:根目录散件 / archive 双目录合并 / legacy 脚本归档 / MCP 链路延期 / optimization 归档 / logs 治理 / 最小 pre-commit
   - [x] Codex 执行 → Claude 评审(1 Important 修复 `11db191`)→ squash 合入 main `72dc42c` → worktree/分支已清理
-- [ ] MCP 链路(mcp_adapter/mcp_tools)归档延期:依赖 test_fund_flow_pipeline.py MCP 段下线(PR-A 评审记录)
+- [x] MCP 链路归档:mcp_adapter/mcp_tools → archive/py_unused/datasource;删 test_fund_flow_pipeline 两段 legacy MCP 测试;主链零 import
 
 ## 批次 B — 脚本命名收敛(§5,1 个 PR)
 

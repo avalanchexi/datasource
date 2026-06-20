@@ -5,8 +5,7 @@
 
 测试范围:
 1. Stage 1: collect_fund_flow()识别资金流缺口和TuShare可得项
-2. Stage 4: 识别占位符并生成 WebSearch 提示词
-3. manual_fund_flow_updater: 手动更新工具
+2. manual_fund_flow_updater: 手动更新工具
 """
 
 import asyncio
@@ -249,77 +248,6 @@ class TestFundFlowPipeline(unittest.TestCase):
                 source='Stage2.5 manual_required',
                 note='零值待确认'
             )
-
-    def test_stage4_generates_fund_flow_prompts(self):
-        """测试Stage 4生成资金流向 WebSearch 提示词"""
-        from src.datasource.mcp_adapter import MCPToolAdapter
-
-        adapter = MCPToolAdapter(enable_validation=True)
-
-        # 生成资金流向提示词
-        flow_keys = ['northbound', 'southbound', 'etf', 'margin']
-        prompts = adapter.generate_fund_flow_prompts(flow_keys)
-
-        # 验证生成了4个提示词
-        self.assertEqual(len(prompts), 4)
-
-        # 验证每个提示词的结构
-        for prompt in prompts:
-            self.assertEqual(prompt.tool, 'WebSearch')
-            self.assertEqual(prompt.category, 'fund_flow')
-            self.assertIn(prompt.item, flow_keys)
-            self.assertTrue(len(prompt.query) > 0)
-            self.assertTrue(len(prompt.data_source_hint) > 0)
-
-        print(f"[OK] Stage 4正确生成了{len(prompts)}个资金流向 WebSearch 提示词")
-
-    def test_integration_stage1_to_stage4(self):
-        """集成测试: Stage 1 → Stage 4完整流程"""
-
-        async def run_integration_test():
-            # Step 1: Stage 1收集数据
-            collector = MarketDataCollector(
-                end_date=self.test_date
-            )
-            self._stub_collect_fund_flow_sources(collector)
-            fund_flow = await collector.collect_fund_flow()
-
-            # 验证创建了4个占位符
-            self.assertEqual(len(fund_flow), 4)
-
-            # Step 2: 模拟扫描占位符
-            placeholders = []
-            for key, flow_data in fund_flow.items():
-                if flow_data.source == '待WebSearch补充':
-                    placeholders.append(key)
-
-            # 验证占位符识别与已填 TuShare 数据可以共存
-            self.assertLessEqual(len(placeholders), 4)
-
-            # Step 3: 生成 WebSearch 提示词
-            from src.datasource.mcp_adapter import MCPToolAdapter
-            adapter = MCPToolAdapter(enable_validation=True)
-            prompts = adapter.generate_fund_flow_prompts(placeholders)
-
-            # 验证按实际缺口生成提示词
-            self.assertEqual(len(prompts), len(placeholders))
-
-            # Step 4: 验证提示词格式化输出
-            formatted = adapter.format_prompts_for_ai(prompts)
-            self.assertIsInstance(formatted, str)
-            prompt_name_by_key = {
-                'northbound': '北向资金',
-                'southbound': '南向资金',
-                'etf': 'ETF资金流',
-                'margin': '融资融券',
-            }
-            for key in placeholders:
-                self.assertIn(prompt_name_by_key[key], formatted)
-
-            print("[OK] 集成测试: Stage 1 → Stage 4完整流程成功")
-
-        asyncio.run(run_integration_test())
-
 
 if __name__ == '__main__':
     # 运行测试
