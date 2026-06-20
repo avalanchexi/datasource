@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-import scripts.stage3_pring_analyzer as stage3
+from datasource.engines.stage3 import core as stage3_core
 from datasource.engines.stage2_5 import cli as stage25_cli
 from datasource.engines.stage2_5 import core
 from datasource.engines.stage2_5 import trend_backfill
@@ -74,14 +74,14 @@ def test_stage3_validates_pring_result_before_main_output_write(
         events.append(("write", Path(path)))
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(stage3, "MarketDataContract", DummyContract)
-    monkeypatch.setattr(stage3, "PringAnalyzer", DummyAnalyzer)
-    monkeypatch.setattr(stage3, "get_manager", lambda: object())
-    monkeypatch.setattr(stage3, "validate_pring_result", fake_validate)
-    monkeypatch.setattr(stage3, "atomic_write_json", fake_write)
+    monkeypatch.setattr(stage3_core, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(stage3_core, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(stage3_core, "get_manager", lambda: object())
+    monkeypatch.setattr(stage3_core, "validate_pring_result", fake_validate)
+    monkeypatch.setattr(stage3_core, "atomic_write_json", fake_write)
 
     result = asyncio.run(
-        stage3._run_analysis(
+        stage3_core._run_analysis(
             market_path=market_path,
             output_path=output_path,
             allow_fallback=False,

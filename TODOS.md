@@ -28,6 +28,7 @@
 
 ## Completed
 
+- [x] PR-F1 Stage3 entry slim: relocated Stage3 orchestration/gate into `src/datasource/engines/stage3/`, kept `scripts/stage3_pring_analyzer.py` <=300 lines as a thin shim, and documented the intentional `stage4_risk_review.py` standalone exemption to close acceptance item 2.
 - [x] PR-C5 Stage2.5 split: extracted `trend_backfill`, `entry_mergers`, `core`, and `cli`; repointed monkeypatches to owning modules; added re-export identity and qualified-patch reach characterization.
 - [x] PR-C6 Stage1 entry slim: relocated the Stage1 collector into `src/datasource/engines/stage1/collector.py` and kept `scripts/stage1_data_collector.py` as a thin entrypoint.
 - [x] PR-C7 C terminal cleanup: removed the remaining batch-B path shims, thinned `scripts/stage2_unified_enhancer.py` and `scripts/stage2_5_injector.py` to <=30-line entrypoints, repointed tests/imports/monkeypatches to canonical `engines`/`utils` modules, and completed full validation.

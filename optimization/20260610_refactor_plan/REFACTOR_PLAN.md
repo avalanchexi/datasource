@@ -15,7 +15,7 @@ CLAUDE.md 声称 "每个 `scripts/stageN_*.py` 只是薄入口,真正逻辑在 `
 | `scripts/stage2_unified_enhancer.py` | 7077 | 336KB | `_execute_tasks` 单函数 ~2600 行(L3792–L6439) |
 | `scripts/stage2_5_injector.py` | 4355 | 189KB | `inject_websearch_data` ~480 行;`_backfill_trend_changes` ~340 行 |
 | `scripts/stage1_data_collector.py` | 2300 | 106KB | 次优先级 |
-| `scripts/stage3_pring_analyzer.py` | ~800 | 33KB | 已基本符合"薄入口" |
+| `scripts/stage3_pring_analyzer.py` | ≤300 | 薄入口 | PR-F1 已迁移编排/gate 到 `src/datasource/engines/stage3/` |
 
 两脚本间存在**成对重复实现**(各自维护一份、易漂移):forex 证据判定族(`_is_forex_*` / `_has_forex_*`,Stage2 约 L1901–L2313,Stage2.5 约 L3406–L3645)、`_contains_ytd_marker`、`_append_note`、URL/数值 coercion 散件。
 
@@ -62,7 +62,7 @@ CLAUDE.md 声称 "每个 `scripts/stageN_*.py` 只是薄入口,真正逻辑在 `
 
 **目标**
 
-1. `scripts/` 全部回到"薄入口"(<300 行),逻辑下沉 `src/datasource/`,两脚本间重复实现合一。
+1. 有 engines 逻辑的 stage 入口(`stage1_data_collector.py`/`stage2_unified_enhancer.py`/`stage2_5_injector.py`/`stage3_pring_analyzer.py`)全部回到"薄入口"(<300 行),逻辑下沉 `src/datasource/`,两脚本间重复实现合一。`scripts/stage4_risk_review.py` 是有意 standalone、不 import `datasource` 包的只读 review gate；该契约由 `test_run_path_does_not_import_datasource_package` 强制，`run_paths`/`run_lock` 通过 importlib 按 path 加载，因此豁免 engines 瘦身。
 2. run 目录文件白名单 + 原子写,消灭 `.bak`/时间戳副本/`_new` 文件。
 3. 脚本命名统一为 `stageN_*`(流水线)与 `tools/*`(运维工具)两层。
 4. 常驻 manual 缺口从"每日手写"变为"declarative 配置 + 自动回填",目标把日常 Stage2.5 手填量压到 `etf` 一项以内。

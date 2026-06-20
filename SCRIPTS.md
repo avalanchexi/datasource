@@ -137,6 +137,7 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 **位置**: `scripts/stage3_pring_analyzer.py`
 **用途**: Stage 3 - Pring三层框架分析
 **状态**: ✅ 推荐正式入口
+**实现映射**: 脚本是薄入口；Stage3 编排与 gate 在 `src/datasource/engines/stage3/`（`core` + `cli`），Pring 评分在 `src/datasource/calculators/pring_analyzer.py` 与 `src/datasource/calculators/pring/`
 
 **功能**:
 - 基于完整数据执行Pring V4.0三层框架分析
@@ -296,15 +297,17 @@ bash run_clean.sh python scripts/stage2_5_injector.py \
 
 ---
 
-## 已知问题脚本
+## 补充脚本说明
 
 ### 6. scripts/stage3_pring_analyzer.py ✅ UPDATED
 
 **位置**: `scripts/stage3_pring_analyzer.py`
 **用途**: Stage 3 Pring 三层框架分析
 **状态**: ✅ 稳定
+**实现映射**: `scripts/stage3_pring_analyzer.py` → `src/datasource/engines/stage3/`（`core` 编排+gate / `cli`）+ `src/datasource/calculators/pring_analyzer.py` + `src/datasource/calculators/pring/`
 
 **亮点**:
+- Stage3 入口已瘦身为 re-export/转发 shim，主编排和 gate 位于 `datasource.engines.stage3`
 - 直接复用 `datasource.calculators.pring_analyzer.PringAnalyzer`
 - 支持 DR007 领先指标平移、阶段关注资产等最新逻辑
 - 默认输出 `data/runs/YYYYMMDD/pring_result.json`，可被 Stage 4 直接消费
@@ -423,7 +426,7 @@ powershell -Command "(Get-Item 'reports\${DATE}-背景扫描120.md').Length"
 | `scripts/stage1_data_collector.py` → `src/datasource/engines/stage1/` | ✅ ACTIVE | Stage 1 | 必须 |
 | `scripts/stage2_unified_enhancer.py` → `src/datasource/engines/stage2/` | ✅ ACTIVE | Stage 2 | 必须 |
 | `scripts/stage2_5_injector.py` → `src/datasource/engines/stage2_5/` | ✅ RECOMMENDED | Stage 2.5 | 必须 |
-| `scripts/stage3_pring_analyzer.py` | ✅ RECOMMENDED | Stage 3 | 必须 |
+| `scripts/stage3_pring_analyzer.py` → `src/datasource/engines/stage3/` | ✅ RECOMMENDED | Stage 3 | 必须 |
 | `scripts/stage4_report_generator.py` | ✅ RECOMMENDED | Stage 4 | 必须 |
 | `archive/py_unused/legacy/stage2a_mcp_enhancer.py` | ⚠️ ARCHIVED | Stage 2a | 不在当前流程执行 |
 | `generate_simple_report.py` | ⚠️ LEGACY | 报告生成 | 不推荐 |

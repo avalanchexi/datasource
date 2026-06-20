@@ -12,7 +12,7 @@ from pathlib import Path
 import asyncio
 import json
 
-import scripts.stage3_pring_analyzer as s3
+from datasource.engines.stage3 import core as s3core
 
 
 def _valid_pring_result(stage="Expansion", confidence=0.9):
@@ -57,7 +57,7 @@ def test_require_data_completeness_pass():
         "missing_items": [],
     }
     # 不应抛异常
-    s3._require_data_completeness(payload, 0.8)
+    s3core._require_data_completeness(payload, 0.8)
 
 
 def test_require_data_completeness_fail_on_missing():
@@ -74,7 +74,7 @@ def test_require_data_completeness_fail_on_missing():
         },
     }
     with pytest.raises(RuntimeError):
-        s3._require_data_completeness(payload, 0.8)
+        s3core._require_data_completeness(payload, 0.8)
 
 
 def test_require_data_completeness_ignores_stale_metadata_missing_when_live_state_clean():
@@ -95,7 +95,7 @@ def test_require_data_completeness_ignores_stale_metadata_missing_when_live_stat
         },
     }
 
-    s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+    s3core._require_data_completeness(payload, 0.8, allow_estimated=True)
 
 
 def test_require_data_completeness_blocks_manual_commodity_without_source_url():
@@ -114,7 +114,7 @@ def test_require_data_completeness_blocks_manual_commodity_without_source_url():
     }
 
     with pytest.raises(RuntimeError) as exc:
-        s3._require_data_completeness(payload, 0.8)
+        s3core._require_data_completeness(payload, 0.8)
     assert "missing_source_url" in str(exc.value)
 
 
@@ -134,7 +134,7 @@ def test_require_data_completeness_does_not_skip_fund_flow_missing_source_url():
     }
 
     with pytest.raises(RuntimeError) as exc:
-        s3._require_data_completeness(payload, 0.8, skip_fund_flow_check=True)
+        s3core._require_data_completeness(payload, 0.8, skip_fund_flow_check=True)
     assert "missing_source_url" in str(exc.value)
 
 
@@ -158,7 +158,7 @@ def test_require_data_completeness_blocks_estimated_fund_flow_even_with_allow_es
     }
 
     with pytest.raises(RuntimeError) as exc:
-        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+        s3core._require_data_completeness(payload, 0.8, allow_estimated=True)
 
     assert "fund_flow.etf" in str(exc.value)
     assert "estimated_not_allowed" in str(exc.value)
@@ -183,7 +183,7 @@ def test_require_data_completeness_blocks_etf_missing_windows_even_with_allow_es
     }
 
     with pytest.raises(RuntimeError) as exc:
-        s3._require_data_completeness(payload, 0.8, allow_estimated=True)
+        s3core._require_data_completeness(payload, 0.8, allow_estimated=True)
 
     message = str(exc.value)
     assert "fund_flow.etf" in message
@@ -198,7 +198,7 @@ def test_require_data_completeness_fail_on_low_score():
         "missing_items": [],
     }
     with pytest.raises(RuntimeError):
-        s3._require_data_completeness(payload, 0.8)
+        s3core._require_data_completeness(payload, 0.8)
 
 
 def test_require_data_completeness_allows_cn10y_cdb_estimated():
@@ -209,7 +209,7 @@ def test_require_data_completeness_allows_cn10y_cdb_estimated():
             {"symbol": "CN10Y_CDB", "current_yield": 1.97, "is_estimated": True},
         ],
     }
-    s3._require_data_completeness(payload, 0.8, allow_estimated=False)
+    s3core._require_data_completeness(payload, 0.8, allow_estimated=False)
 
 
 def test_require_data_completeness_fail_on_non_allowlisted_estimated():
@@ -221,7 +221,7 @@ def test_require_data_completeness_fail_on_non_allowlisted_estimated():
         ],
     }
     with pytest.raises(RuntimeError):
-        s3._require_data_completeness(payload, 0.8, allow_estimated=False)
+        s3core._require_data_completeness(payload, 0.8, allow_estimated=False)
 
 
 def test_require_data_completeness_allows_bdi_when_trusted():
@@ -241,7 +241,7 @@ def test_require_data_completeness_allows_bdi_when_trusted():
             }
         },
     }
-    s3._require_data_completeness(payload, 0.8, allow_estimated=False)
+    s3core._require_data_completeness(payload, 0.8, allow_estimated=False)
 
 
 def test_require_data_completeness_blocks_bdi_when_untrusted():
@@ -260,7 +260,7 @@ def test_require_data_completeness_blocks_bdi_when_untrusted():
         },
     }
     with pytest.raises(RuntimeError):
-        s3._require_data_completeness(payload, 0.8, allow_estimated=False)
+        s3core._require_data_completeness(payload, 0.8, allow_estimated=False)
 
 def test_require_data_completeness_fail_on_missing_compare_values():
     payload = {
@@ -276,7 +276,7 @@ def test_require_data_completeness_fail_on_missing_compare_values():
         },
     }
     with pytest.raises(RuntimeError):
-        s3._require_data_completeness(payload, 0.8)
+        s3core._require_data_completeness(payload, 0.8)
 
 
 def test_require_data_completeness_fail_on_stale_critical_items():
@@ -297,7 +297,7 @@ def test_require_data_completeness_fail_on_stale_critical_items():
         },
     }
     with pytest.raises(RuntimeError) as exc:
-        s3._require_data_completeness(payload, 0.8, block_on_stale=True, critical_stale_keys=["cpi"])
+        s3core._require_data_completeness(payload, 0.8, block_on_stale=True, critical_stale_keys=["cpi"])
     assert "expected=2026-01" in str(exc.value)
 
 
@@ -311,7 +311,7 @@ def test_resolve_gap_monitor_prefers_dated_file(tmp_path: Path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     payload = {"metadata": {"date": "2026-02-09"}}
-    resolved = s3._resolve_gap_monitor_path(payload, explicit_gap_path=explicit)
+    resolved = s3core._resolve_gap_monitor_path(payload, explicit_gap_path=explicit)
     assert resolved == Path("data/runs/20260209/gap_monitor.json")
 
 
@@ -321,7 +321,7 @@ def test_resolve_gap_monitor_uses_explicit_when_dated_missing(tmp_path: Path, mo
 
     monkeypatch.chdir(tmp_path)
     payload = {"metadata": {"date": "2026-02-09"}}
-    resolved = s3._resolve_gap_monitor_path(payload, explicit_gap_path=explicit)
+    resolved = s3core._resolve_gap_monitor_path(payload, explicit_gap_path=explicit)
     assert resolved == explicit
 
 
@@ -359,7 +359,7 @@ def test_run_analysis_reports_all_blockers_once(tmp_path: Path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(
-            s3._run_analysis(
+            s3core._run_analysis(
                 market_path=market_path,
                 output_path=output_path,
                 allow_fallback=False,
@@ -426,12 +426,12 @@ def test_run_analysis_does_not_block_on_stale_policy_file_when_live_state_clean(
             return _valid_pring_result()
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
-    monkeypatch.setattr(s3, "PringAnalyzer", DummyAnalyzer)
-    monkeypatch.setattr(s3, "get_manager", lambda: object())
+    monkeypatch.setattr(s3core, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(s3core, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(s3core, "get_manager", lambda: object())
 
     result = asyncio.run(
-        s3._run_analysis(
+        s3core._run_analysis(
             market_path=market_path,
             output_path=output_path,
             allow_fallback=False,
@@ -476,7 +476,7 @@ def test_run_analysis_blocks_unresolved_policy_redlist_missing_from_payload(tmp_
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(
-            s3._run_analysis(
+            s3core._run_analysis(
                 market_path=market_path,
                 output_path=output_path,
                 allow_fallback=False,
@@ -532,7 +532,7 @@ def test_run_analysis_blocks_category_specific_policy_redlist_missing_from_paylo
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(
-            s3._run_analysis(
+            s3core._run_analysis(
                 market_path=market_path,
                 output_path=output_path,
                 allow_fallback=False,
@@ -573,7 +573,7 @@ def test_run_analysis_blocks_gap_monitor_missing_item_absent_from_payload(tmp_pa
     monkeypatch.chdir(tmp_path)
     with pytest.raises(RuntimeError) as exc:
         asyncio.run(
-            s3._run_analysis(
+            s3core._run_analysis(
                 market_path=market_path,
                 output_path=output_path,
                 allow_fallback=False,
@@ -638,12 +638,12 @@ def test_run_analysis_does_not_block_on_stale_gap_monitor_when_live_state_clean(
             return _valid_pring_result()
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
-    monkeypatch.setattr(s3, "PringAnalyzer", DummyAnalyzer)
-    monkeypatch.setattr(s3, "get_manager", lambda: object())
+    monkeypatch.setattr(s3core, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(s3core, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(s3core, "get_manager", lambda: object())
 
     result = asyncio.run(
-        s3._run_analysis(
+        s3core._run_analysis(
             market_path=market_path,
             output_path=output_path,
             allow_fallback=False,
@@ -678,7 +678,7 @@ def test_require_data_completeness_skips_estimated_fund_flow_when_requested():
         },
     }
 
-    s3._require_data_completeness(
+    s3core._require_data_completeness(
         payload,
         0.8,
         allow_estimated=True,
@@ -744,12 +744,12 @@ def test_run_analysis_records_fund_flow_downgrade_metadata(tmp_path: Path, monke
             return _valid_pring_result()
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(s3, "MarketDataContract", DummyContract)
-    monkeypatch.setattr(s3, "PringAnalyzer", DummyAnalyzer)
-    monkeypatch.setattr(s3, "get_manager", lambda: object())
+    monkeypatch.setattr(s3core, "MarketDataContract", DummyContract)
+    monkeypatch.setattr(s3core, "PringAnalyzer", DummyAnalyzer)
+    monkeypatch.setattr(s3core, "get_manager", lambda: object())
 
     result = asyncio.run(
-        s3._run_analysis(
+        s3core._run_analysis(
             market_path=market_path,
             output_path=output_path,
             allow_estimated=True,

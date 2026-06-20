@@ -227,12 +227,12 @@ if comp < 0.8:
 
 ### 流水线阶段 → 代码模块映射
 
-每个 `scripts/stageN_*.py` 只是薄入口，真正逻辑在 `src/datasource/` 下：
+Stage1/2/2.5/3 的运行入口是薄入口，真正逻辑在 `src/datasource/` 下；`scripts/stage4_risk_review.py` 是有意 standalone、不 import `datasource` 包的只读 review gate，不适用薄入口/engines 下沉规则：
 
 - **Stage1 采集** (`stage1_data_collector.py`) → `src/datasource/engines/stage1/`（采集主流程）+ `manager.py`（singleton 故障转移）+ `adapters/`（`tushare_adapter`、`international_finance_adapter`）+ `calculators/technical_indicators`（入口直接导入）
 - **Stage2 增强** (`stage2_unified_enhancer.py`) → `src/datasource/engines/stage2/`（搜索-抽取主流程、质量缺口任务规划、DeepSeek 抽取）+ `adapters/`（`tavily_client`、`exa_client`）+ `providers/stage2_structured/`（structured-provider-first 源：`stooq`/`trading_economics`/`official_china`/`chinabond`/`eastmoney_etf`/`tushare_etf`/`cdb_estimator`，经 `registry.py` + `source_tiers.py` 调度）+ `config/search_profiles.py`
 - **Stage2.5 注入** (`stage2_5_injector.py`) → `src/datasource/engines/stage2_5/`（manual/WebSearch 注入、entry mergers、trend backfill）+ `utils/`（`missing_items` canonical/兼容同步、`trend_history_store`、`key_aliases`、`quality_metrics`、`pipeline_quality_state` 等）;`utils/data_completion.py` 已按批次 0 审计归档至 `archive/py_unused/datasource/utils/`
-- **Stage3 Pring 分析** (`stage3_pring_analyzer.py`) → `calculators/pring_analyzer.py` + `calculators/pring/` 子包中实际被导入的 `scoring`/`stage_allocations`/`summaries` + gate 在 `utils/pipeline_gate`、`utils/policy_rules`、`utils/pipeline_quality_state`；`economic_cycle_analyzer`、`fund_flow_calculator`、`bond_calculator`、`trackers/policy_tracker` 已按批次 0 审计归档至 `archive/py_unused/datasource/`
+- **Stage3 Pring 分析** (`stage3_pring_analyzer.py`) → `src/datasource/engines/stage3/`（`core` 编排+gate，`cli` 参数/锁/入口）+ `calculators/pring_analyzer.py` + `calculators/pring/` 子包中实际被导入的 `scoring`/`stage_allocations`/`summaries`；gate 工具仍来自 `utils/pipeline_gate`、`utils/policy_rules`、`utils/pipeline_quality_state`；`economic_cycle_analyzer`、`fund_flow_calculator`、`bond_calculator`、`trackers/policy_tracker` 已按批次 0 审计归档至 `archive/py_unused/datasource/`
 - **Stage4 报告** (`stage4_report_generator.py`) → `generators/simple_report.py` + gate/路径工具;`generators/report_generator.py`、`comparators/`、`mappers/`、`analyzers/` 已按批次 0 审计归档至 `archive/py_unused/datasource/`
 - **120 日背景扫描 agent** → 已归档至 `archive/py_unused/datasource/agents/`(批次 0 审计 unreachable,未接入 Stage1-4 流水线)
 

@@ -7,7 +7,7 @@ import pytest
 
 from datasource.engines.stage2_5 import cli as stage2_5
 from datasource.engines.stage2_5 import core as stage2_5_core
-import scripts.stage3_pring_analyzer as stage3
+from datasource.engines.stage3 import cli as stage3_cli
 import scripts.stage4_report_generator as stage4_report
 import scripts.stage4_risk_review as stage4_risk
 
@@ -121,7 +121,7 @@ def test_stage3_main_acquires_daily_lock(tmp_path, monkeypatch):
     run_calls = []
 
     monkeypatch.setattr(
-        stage3,
+        stage3_cli,
         "parse_args",
         lambda: argparse.Namespace(
             market_data=str(market_path),
@@ -136,7 +136,7 @@ def test_stage3_main_acquires_daily_lock(tmp_path, monkeypatch):
             gap_monitor=None,
         ),
     )
-    monkeypatch.setattr(stage3, "DailyRunLock", SpyLock)
+    monkeypatch.setattr(stage3_cli, "DailyRunLock", SpyLock)
 
     def fake_asyncio_run(awaitable):
         run_calls.append(awaitable)
@@ -144,9 +144,9 @@ def test_stage3_main_acquires_daily_lock(tmp_path, monkeypatch):
             awaitable.close()
         return {"final_stage": "test"}
 
-    monkeypatch.setattr(stage3.asyncio, "run", fake_asyncio_run)
+    monkeypatch.setattr(stage3_cli.asyncio, "run", fake_asyncio_run)
 
-    stage3.main()
+    stage3_cli.main()
 
     assert SpyLock.calls[0] == (run_dir.resolve(), "stage3_pring_analyzer")
     assert ("entered", "stage3_pring_analyzer") in SpyLock.calls

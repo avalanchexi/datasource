@@ -4,6 +4,10 @@
 
 This CLI is read-only for Stage4 inputs. It writes a derived JSON artifact
 that highlights reportable-but-risky data items before Markdown generation.
+
+有意 standalone: 本脚本不得 import datasource 包（由
+test_run_path_does_not_import_datasource_package 强制）；run_paths/run_lock
+通过 importlib 按 path 加载。不要将其逻辑搬入 engines/，否则会破坏该契约。
 """
 
 from __future__ import annotations
