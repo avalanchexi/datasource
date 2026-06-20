@@ -1,0 +1,105 @@
+{
+  "_meta": {
+    "purpose": "Provenance-only defaults for Stage2.5 manual skeletons. These entries help operators start from trusted source families without pre-filling market values.",
+    "version": 1,
+    "rules": [
+      "source_url_template values are entry points, not proof. Replace them with the exact evidence URL before filling numeric values.",
+      "Policies must not contain numeric market fields such as current_value, previous_value, change_rate, current_price, current_rate, current_yield, recent_5d, or total_120d.",
+      "This config does not change Stage2.5 injector enforcement."
+    ]
+  },
+  "policies": [
+    {
+      "category": "commodities",
+      "key": "BCOM",
+      "source": "Bloomberg Commodity Index vendor page",
+      "source_url_template": "https://www.bloomberg.com/quote/BCOM:IND",
+      "is_estimated": false,
+      "note": "Use plain Bloomberg Commodity Index close/last evidence only; reject total-return, sub-index, methodology, and weights pages."
+    },
+    {
+      "category": "commodities",
+      "key": "GSG",
+      "source": "Stooq or iShares GSG market quote page",
+      "source_url_template": "https://stooq.com/q/?s=gsg.us",
+      "is_estimated": false,
+      "note": "Use a dated market quote for GSG; do not use broad commodity-index concept pages."
+    },
+    {
+      "category": "forex",
+      "key": "USDCNY",
+      "source": "ChinaMoney or CFETS official USD/CNY quote",
+      "source_url_template": "https://www.chinamoney.com.cn/chinese/mkdatapfx/",
+      "is_estimated": false,
+      "note": "Use ChinaMoney/CFETS official USD/CNY evidence; keep a single explicit HTTPS URL."
+    },
+    {
+      "category": "bonds",
+      "key": "CN10Y_CDB",
+      "source": "ChinaBond yield curve or explicit CN10Y plus observed CDB spread evidence",
+      "source_url_template": "https://yield.chinabond.com.cn/",
+      "is_estimated": true,
+      "estimation_method": "CN10Y plus observed CDB spread, or direct ChinaBond CDB yield evidence when available",
+      "note": "If using a spread proxy, keep explicit spread provenance and leave is_estimated=true."
+    },
+    {
+      "category": "macro_indicators",
+      "key": "industrial",
+      "source": "National Bureau of Statistics industrial output release",
+      "source_url_template": "https://www.stats.gov.cn/",
+      "is_estimated": false,
+      "note": "For 1-2 month cumulative year-on-year releases, set value_type=yoy_month and yoy_month explicitly."
+    },
+    {
+      "category": "macro_indicators",
+      "key": "industrial_sales",
+      "source": "National Bureau of Statistics industrial enterprise revenue release",
+      "source_url_template": "https://www.stats.gov.cn/",
+      "is_estimated": false,
+      "note": "Use the matching industrial enterprise revenue period from the NBS release."
+    },
+    {
+      "category": "macro_indicators",
+      "key": "bdi",
+      "source": "Trusted recent BDI market page",
+      "source_url_template": "https://www.investing.com/indices/baltic-dry",
+      "is_estimated": true,
+      "estimation_method": "trusted recent market page",
+      "note": "BDI is estimated-allowlisted only when trusted domain, max age, value range, and unit keyword checks pass."
+    },
+    {
+      "category": "fund_flow",
+      "key": "etf",
+      "source": "EastMoney ETF fund-flow page (downgraded disclosure)",
+      "source_url_template": "https://data.eastmoney.com/etf/",
+      "is_estimated": true,
+      "metric_basis": "estimated_net_flow",
+      "window_evidence": "news_summary",
+      "note": "ETF fund-flow manual is downgraded disclosure only: news/quarterly values are estimates and do NOT clear the fund_flow gate; keep is_estimated=true."
+    },
+    {
+      "category": "monetary_policy",
+      "key": "reserve_ratio",
+      "source": "People's Bank of China reserve requirement ratio notice",
+      "source_url_template": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html",
+      "is_estimated": false,
+      "note": "reserve_ratio quality replacement requires explicit is_estimated=false and one HTTPS PBoC URL; ChinaMoney does not release this override."
+    },
+    {
+      "category": "monetary_policy",
+      "key": "reverse_repo",
+      "source": "People's Bank of China open market operation notice",
+      "source_url_template": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+      "is_estimated": false,
+      "note": "PBoC reverse-repo evidence must match the task reference date."
+    },
+    {
+      "category": "monetary_policy",
+      "key": "mlf",
+      "source": "People's Bank of China MLF operation notice",
+      "source_url_template": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
+      "is_estimated": false,
+      "note": "MLF multi-price notices need PBoC URL evidence and an explicit reference-value marker such as multi-price or no unified rate."
+    }
+  ]
+}

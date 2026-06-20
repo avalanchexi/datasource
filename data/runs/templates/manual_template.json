@@ -5,6 +5,7 @@
     "is_estimated": "Official published values, official midpoint rates, exchange values, and index vendor values should use is_estimated=false. Use true only for spread estimates, formulas, proxy series, extrapolation, or other approximations.",
     "allow_estimated": "--allow-estimated is not a global bypass. It only allows policy allowlist estimated keys to participate; compare_gaps, stale_redlist, and policy gate still apply.",
     "bdi_estimated_allow_conditions": "BDI is allowlisted only when config/policy_rules.yaml secondary constraints pass: trusted_domains, max_age_days, value_range, unit_keywords.",
+    "manual_fallback_policies": "scripts/tools/manual_template_from_gap_monitor.py pre-fills provenance-only fields from config/manual_fallback_policies.json; it never pre-fills numeric values.",
     "fund_flow_gate": {
       "tier1_domains": ["hkex.com.hk", "sse.com.cn", "szse.cn"],
       "tier2_paths": ["data.eastmoney.com/hsgt", "data.eastmoney.com/etf", "data.eastmoney.com/fund", "data.eastmoney.com/rzrq"],

@@ -162,6 +162,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json                                       
 - Stage2.5 中 `macro_indicators.change_rate` 按指标口径计算：`cpi/ppi/pmi/pmi_new_orders/pmi_production/gdp/industrial/industrial_sales` 使用百分点差 `round(current - previous, 4)`；`bdi` 使用百分比变化 `round((current - previous)/abs(previous)*100, 4)`，分母为 0 时保留缺口并标记 `reason=change_rate_pct_div_by_zero`；未登记 key 按 `unit` 推断并追加 `caliber_inferred` note。
 - Stage2.5 从 event_history 自动回填 macro `previous_value/change_rate` 时，以自身 `report_period/date/as_of_date` 锚定，严格取早于当前期的最近一期；取不到则保留缺口。成功回填标记 `value_source=event_history_backfill`，不覆盖已有非 backfill 来源，不改变 `is_estimated`。
 - Stage2.5 manual 从 `data/runs/templates/manual_template.json` 复制起步；官方值默认 `is_estimated=false`。
+- `scripts/tools/manual_template_from_gap_monitor.py` 从 `config/manual_fallback_policies.json` 为已出现缺口预填 provenance-only 字段；不预填 `current_value/previous_value/change_rate/recent_5d/total_120d` 等数值字段，也不改变 Stage2.5 injector enforcement。
 - `industrial` 使用“1-2月累计同比”时必须显式 `value_type: yoy_month` 和 `yoy_month`。
 - `bdi` 的 estimated allowlist 还有二级约束：`trusted_domains/max_age_days/value_range/unit_keywords`。
 
