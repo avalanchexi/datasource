@@ -45,7 +45,6 @@ cp .env.example .env  # 编辑填入 TUSHARE_TOKEN, TAVILY_API_KEY, DEEPSEEK_API
 
 # 验证安装
 python -c "from datasource import get_manager; print('OK')"
-datasource-test  # CLI 入口（等价于 python -m datasource.cli test_command）
 
 # 预检（每次运行流水线前必跑；验证三个 API key ≥20字符 + 清代理）
 bash run_preflight.sh
@@ -133,7 +132,7 @@ cat data/runs/${DATE_NH}/gap_monitor.json                                       
 
 - DeepSeek 抽取采用减负 schema + 证据约束，默认只要求报告写回所需字段；`source_url` 必须来自 snippets。
 - Stage2.5 feedback loop: `BCOM` can use Investing historical close only for plain Bloomberg Commodity Index evidence and must reject `BCOMTR`/Total Return; `mlf` PBoC multi-price notices need PBoC URL + explicit `多重价位`/`无统一利率` marker to become official reference results; `CN10Y_CDB` estimator stays `is_estimated=true` and requires explicit spread provenance; ETF stockdata/individual pages are scope mismatches and must not release fund-flow gates.
-- Stage2 默认 structured-provider-first：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断后才继续 Tavily-first 搜索。当前来源包括 Trading Economics 商品/BDI/DXY/reverse_repo 页面、已验证 BCOM/GSG quote 页面、Stooq `GSG` CSV、ChinaMoney `USDCNY` JSON、国家统计局/PBoC 详情页；ETF 顺序为 TuShare `etf_share_size` before EastMoney/search，TuShare 仅在 latest complete 121 交易日窗口内 SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析，且每个交易所当日可用行数通过候选窗口内的自适应完整性下限时释放 gate（`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false`），EastMoney 仍需 full-market direct daily series 验证。
+- Stage2 默认 structured-provider-first：`GC=F/CL=F/BZ=F/HG=F/GSG`、`reverse_repo/reserve_ratio/mlf/USDCNY/industrial/industrial_sales`、`CN10Y_CDB`、`DXY/bdi`、`etf` 先尝试可信结构化源；同一 key 支持 provider 级顺序兜底，全部失败、超时、解析失败或质量 gate 阻断后才继续 Tavily-first 搜索。当前来源包括 Trading Economics 商品/BDI/DXY/reverse_repo 页面、已验证 BCOM/GSG quote 页面、Stooq `GSG` CSV、ChinaMoney `USDCNY` JSON、国家统计局/PBoC 详情页；ETF 顺序为 TuShare `etf_share_size` before EastMoney/search，TuShare 仅在 latest complete 121 交易日窗口内 SSE+SZSE 两个 exchange 的 `total_size` 都完整可解析，且每个交易所当日可用行数通过候选窗口内的自适应完整性下限时释放 gate（`metric_basis=etf_total_size_delta`、`window_evidence=direct_balance_delta`、`source_tier=tier2`、`is_estimated=false`），EastMoney 仍需 full-market direct daily series 验证。
 - DeepSeek 默认模型为 `deepseek-v4-pro`，可用 `DEEPSEEK_MODEL` 或命令行参数覆盖；Stage2 抽取输出 token 默认 `DEEPSEEK_EXTRACT_MAX_TOKENS=900`。
 - DeepSeek extraction 默认开启 queue，默认 `--queue-concurrency 3 --deepseek-max-concurrency 3`；串行排查时显式传 `--no-use-queue`。
 - Stage2 默认直连：Tavily/DeepSeek 都不读取环境代理；只有 `DATASOURCE_NETWORK_MODE=proxy` 时才允许 proxy env。VPN 切换后先跑 `bash run_preflight.sh`。

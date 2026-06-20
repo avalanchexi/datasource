@@ -54,11 +54,6 @@ setup(
             "sphinx-rtd-theme>=1.0",
         ],
     },
-    entry_points={
-        "console_scripts": [
-            "datasource-test=datasource.cli:test_command",
-        ],
-    },
     include_package_data=True,
     zip_safe=False,
     keywords="finance, stock, data, tushare, integration",
