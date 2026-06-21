@@ -24,8 +24,14 @@ from datasource.utils.manual_fallback_policies import (  # noqa: E402
     policy_id,
 )
 
-
 FLOW_KEYS = {"northbound", "southbound", "etf", "margin"}
+# Mirrors simple_report.DAILY_POLICY_KEYS: only daily monetary keys may seed
+# the report run date as their release date. Non-daily keys must carry a real
+# effective/operation date or report_period instead.
+DAILY_MONETARY_KEYS = {"dr007"}
+DESCRIPTION = "Build manual WebSearch JSON skeleton from gap_monitor issues."
+POLICY_CONFIG_NAME = "config/manual_fallback_policies.json"
+NO_PREFILL_HELP = f"Disable provenance prefill from {POLICY_CONFIG_NAME}"
 LIST_SECTION_KEY_FIELDS = {
     "bonds": "symbol",
     "commodities": "symbol",
@@ -92,11 +98,10 @@ def _prefill_entry(
 ) -> Dict[str, Any]:
     """Apply provenance-only defaults to one manual skeleton entry."""
 
-    before_numeric = {
-        field: entry.get(field)
-        for field in NUMERIC_MANUAL_FIELDS
-        if field in entry
-    }
+    before_numeric = {}
+    for field in NUMERIC_MANUAL_FIELDS:
+        if field in entry:
+            before_numeric[field] = entry.get(field)
 
     for field in PREFILL_FIELDS:
         if field == "source_url":
@@ -162,10 +167,9 @@ def _build_template(
     *,
     report_date: Optional[str] = None,
 ) -> Dict[str, Any]:
+    metadata_date = report_date or datetime.now().strftime("%Y-%m-%d")
     template: Dict[str, Any] = {
-        "metadata": {
-            "date": report_date or datetime.now().strftime("%Y-%m-%d")
-        },
+        "metadata": {"date": metadata_date},
         "bonds": [],
         "commodities": [],
         "forex": [],
@@ -176,11 +180,9 @@ def _build_template(
 
     market_payload = market_payload or {}
     issues = gap_payload.get("data_quality_issues") or []
-    pending = (
-        gap_payload.get("manual_required")
-        or gap_payload.get("pending_tasks")
-        or []
-    )
+    pending = gap_payload.get("manual_required")
+    if not pending:
+        pending = gap_payload.get("pending_tasks") or []
 
     # data_quality_issues
     for issue in issues:
@@ -190,12 +192,10 @@ def _build_template(
             continue
 
         if category == "bonds":
-            name = _find_market_name(
-                market_payload.get("bonds", []), key, key
-            )
-            if not any(
-                item.get("symbol") == key for item in template["bonds"]
-            ):
+            bonds_payload = market_payload.get("bonds", [])
+            bonds_template = template["bonds"]
+            name = _find_market_name(bonds_payload, key, key)
+            if not any(item.get("symbol") == key for item in bonds_template):
                 template["bonds"].append(
                     {
                         "symbol": key,
@@ -208,13 +208,12 @@ def _build_template(
                     }
                 )
         elif category == "commodities":
-            name = _find_market_name(
-                market_payload.get("commodities", []), key, key
+            commodities_payload = market_payload.get("commodities", [])
+            name = _find_market_name(commodities_payload, key, key)
+            has_commodity = any(
+                item.get("symbol") == key for item in template["commodities"]
             )
-            if not any(
-                item.get("symbol") == key
-                for item in template["commodities"]
-            ):
+            if not has_commodity:
                 template["commodities"].append(
                     {
                         "symbol": key,
@@ -278,23 +277,32 @@ def _build_template(
                 )
                 or "%"
             )
-            template["monetary_policy"][key] = {
+            monetary_entry = {
                 "policy_name": name,
                 "current_value": None,
                 "change_from_120d": None,
                 "unit": unit,
-                "date": report_date or "",
                 "source": "MCP WebSearch (source detail)",
             }
+            canonical_key = canonical_monetary_key(str(key))
+            if canonical_key in DAILY_MONETARY_KEYS:
+                monetary_entry["date"] = report_date or ""
+            else:
+                # Non-daily monetary report dates are rejected as N/A by
+                # simple_report._pick_release_date; require a real date/period.
+                monetary_entry["date"] = ""
+                monetary_entry["as_of_date"] = ""
+                monetary_entry["report_period"] = ""
+            template["monetary_policy"][key] = monetary_entry
 
     # pending / manual_required (fund_flow)
     for item in pending:
         if isinstance(item, dict):
-            key = (
-                item.get("key")
-                or item.get("indicator_key")
-                or item.get("name")
-            )
+            key = item.get("key")
+            if not key:
+                key = item.get("indicator_key")
+            if not key:
+                key = item.get("name")
         else:
             key = str(item)
         if not key:
@@ -316,9 +324,7 @@ def _build_template(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Build manual WebSearch JSON skeleton from gap_monitor issues."
-        ),
+        description=DESCRIPTION,
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -339,10 +345,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-prefill-policies",
         action="store_true",
-        help=(
-            "Disable provenance prefill from "
-            "config/manual_fallback_policies.json"
-        ),
+        help=NO_PREFILL_HELP,
     )
     return parser.parse_args()
 
@@ -351,9 +354,10 @@ def main() -> None:
     args = parse_args()
     gap_path = Path(args.gap)
     gap_payload = _safe_load(gap_path)
-    market_payload = (
-        _safe_load(Path(args.market_data)) if args.market_data else None
-    )
+    if args.market_data:
+        market_payload = _safe_load(Path(args.market_data))
+    else:
+        market_payload = None
     date_val = args.date
     if not date_val and market_payload:
         date_val = (
@@ -363,7 +367,9 @@ def main() -> None:
         )
 
     template = _build_template(
-        gap_payload, market_payload, report_date=date_val
+        gap_payload,
+        market_payload,
+        report_date=date_val,
     )
     if not args.no_prefill_policies:
         policies = load_manual_fallback_policies(

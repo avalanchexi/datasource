@@ -191,6 +191,8 @@ cat data/runs/${DATE_NH}/gap_monitor.json                                       
 
 **Stage4 MLF 展示**: `policy_name/note/source/manual_reason` 含 `多重价位`、`中标利率`、`参考值`、`口径不适用`、`无统一利率`、`美式招标`、`利率区间` 等 marker 时，当前值显示 `2.00%（参考）`，120 日变化显示 `口径不适用`；普通货币政策当前值两位百分比，变化保持 `pp`。
 
+**非日频货币指标更新日期**: `reserve_ratio/mlf/reverse_repo/m0/m1/m2/tsf` 的 Stage2.5 manual 必须带**真实生效/操作日**（填入 `as_of_date`，可 == 报告日）或 `report_period`（月度数据如 `2026-05`），不要依赖 `date=报告运行日`；`scripts/tools/manual_template_from_gap_monitor.py` 生成的骨架已改为空 `date/as_of_date/report_period` 槽提示填真值。对 `reserve_ratio/reverse_repo/m0/m1/m2/tsf` 等非 MLF 非日频键，仅留 `date=报告运行日` 会被 `simple_report._pick_release_date` 拒绝，报告该列显示 `N/A`。`mlf` 多重价位/无统一利率/参考值展示有 Stage4 特例，可能回退显示 `date`；因此仍必须填真实 `as_of_date/report_period`，不要依赖报告运行日。
+
 **gap_monitor 只读诊断**: 不直接手改 `gap_monitor`，也不把手工清空作为正常流程；只为诊断读取该文件，实际修复应补齐/修正源数据后重跑 Stage2.5/Stage3。
 
 **同日写锁**: Stage2.5/Stage3/Stage4 持有 `data/runs/YYYYMMDD/.run.lock`。锁内有 `owner/pid/hostname/created_at`；live pid 说明另一个会话正在写同日产物，只能等待或停止该会话。不要手工删除 live lock。

@@ -83,7 +83,7 @@
       "source": "People's Bank of China reserve requirement ratio notice",
       "source_url_template": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125434/125798/index.html",
       "is_estimated": false,
-      "note": "reserve_ratio quality replacement requires explicit is_estimated=false and one HTTPS PBoC URL; ChinaMoney does not release this override."
+      "note": "reserve_ratio quality replacement requires explicit is_estimated=false and one HTTPS PBoC URL; ChinaMoney does not release this override. Fill as_of_date with the real effective date of the last RRR change (or report_period); do not leave the report run date in date — non-daily indicators whose date equals the report date render N/A by design."
     },
     {
       "category": "monetary_policy",
@@ -91,7 +91,7 @@
       "source": "People's Bank of China open market operation notice",
       "source_url_template": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
       "is_estimated": false,
-      "note": "PBoC reverse-repo evidence must match the task reference date."
+      "note": "PBoC reverse-repo evidence must match the task reference date. Provide as_of_date with the actual operation date (may equal the reference date) or report_period; do not rely on the report run date in date."
     },
     {
       "category": "monetary_policy",
@@ -99,7 +99,7 @@
       "source": "People's Bank of China MLF operation notice",
       "source_url_template": "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html",
       "is_estimated": false,
-      "note": "MLF multi-price notices need PBoC URL evidence and an explicit reference-value marker such as multi-price or no unified rate."
+      "note": "MLF multi-price notices need PBoC URL evidence and an explicit reference-value marker such as multi-price or no unified rate. Provide as_of_date with the actual operation/effective date (may equal the reference date) or report_period; do not rely on the report run date in date."
     }
   ]
 }

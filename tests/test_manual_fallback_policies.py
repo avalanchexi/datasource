@@ -14,7 +14,6 @@ from datasource.utils.manual_fallback_policies import (
     policy_id,
 )
 
-
 ROOT = Path(__file__).resolve().parents[1]
 TOOL_PATH = ROOT / "scripts/tools/manual_template_from_gap_monitor.py"
 
@@ -139,10 +138,12 @@ def test_manual_fallback_prefill_keeps_numeric_fields_null():
     assert reserve_ratio["current_value"] is None
     assert reserve_ratio["change_from_120d"] is None
     assert reserve_ratio["is_estimated"] is False
-    assert (
-        reserve_ratio["_manual_fallback_policy"]
-        == "monetary_policy:reserve_ratio"
-    )
+    assert reserve_ratio["_manual_fallback_policy"] == "monetary_policy:reserve_ratio"
+    # 非日频货币骨架不得把报告运行日塞进 date;改为空真实日期槽
+    assert reserve_ratio["date"] == ""
+    assert reserve_ratio["as_of_date"] == ""
+    assert reserve_ratio["report_period"] == ""
+    assert reserve_ratio["date"] != "2026-06-19"
 
     assert bcom["current_price"] is None
     assert bcom["ytd_change"] is None
@@ -156,6 +157,19 @@ def test_manual_fallback_prefill_keeps_numeric_fields_null():
     assert etf["window_evidence"] == "news_summary"
     assert etf["source_url"] == "https://data.eastmoney.com/etf/"
     assert "downgraded disclosure" in etf["note"]
+
+
+def test_manual_template_uses_canonical_monetary_key_for_daily_release_date():
+    tool = _load_tool_module()
+    gap_payload = {
+        "data_quality_issues": [
+            {"category": "monetary_policy", "key": "dr007_rate"},
+        ],
+    }
+
+    template = tool._build_template(gap_payload, report_date="2026-06-19")
+
+    assert template["monetary_policy"]["dr007_rate"]["date"] == "2026-06-19"
 
 
 def test_stage25_injector_files_untouched_by_manual_fallback_policies():
@@ -175,3 +189,15 @@ def test_stage25_injector_files_untouched_by_manual_fallback_policies():
     )
 
     assert result.stdout.strip() == ""
+
+
+def test_non_daily_monetary_policies_note_date_caliber():
+    policies = load_manual_fallback_policies()
+    for policy_key in (
+        "monetary_policy:reserve_ratio",
+        "monetary_policy:mlf",
+        "monetary_policy:reverse_repo",
+    ):
+        note = str(policies[policy_key].get("note", ""))
+        assert "report_period" in note
+        assert "as_of_date" in note
