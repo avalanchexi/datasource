@@ -8,7 +8,6 @@ from datasource.engines.stage2.common import (
     _COMMODITY_UPSERT_META,
     _FOREX_UPSERT_META,
     _entry_for_task,
-    _is_force_refresh_task,
     _safe_number,
 )
 from datasource.utils.key_aliases import canonical_monetary_key
@@ -34,6 +33,7 @@ _MONETARY_KEYS = {
     "mlf_rate",
     "reverse_repo",
     "reverse_repo_7d",
+    "dr007",
     "m0",
     "m1",
     "m2",
@@ -42,19 +42,21 @@ _MONETARY_KEYS = {
 }
 
 
+def _normalize_task_category(value: Any) -> Optional[str]:
+    if value in {None, "", "assets", "essential", "all"}:
+        return None
+    cat = str(value)
+    if cat == "macro":
+        cat = "macro_indicators"
+    return cat if cat in _CANONICAL_CATEGORIES else "macro_indicators"
+
+
 def _task_category(task: Dict[str, Any]) -> str:
-    cat = (
-        task.get("quality_gap_category")
-        or task.get("category")
-        or task.get("stage_phase")
-    )
-    if cat in {None, "", "assets", "essential", "all"}:
-        cat = None
-    if cat:
-        cat = str(cat)
-        if cat == "macro":
-            cat = "macro_indicators"
-        return cat if cat in _CANONICAL_CATEGORIES else "macro_indicators"
+    for field in ("quality_gap_category", "category", "stage_phase"):
+        category = _normalize_task_category(task.get(field))
+        if category is not None:
+            return category
+
     ind = str(task.get("indicator_key") or "")
     if ind in _FUND_FLOW_KEYS:
         return "fund_flow"

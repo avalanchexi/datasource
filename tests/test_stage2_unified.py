@@ -5348,3 +5348,18 @@ def test_task_category_falls_back_to_indicator_key():
 def test_task_category_defaults_to_macro_indicators():
     assert stage2_diagnostics._task_category({"indicator_key": "cpi"}) == "macro_indicators"
     assert stage2_diagnostics._task_category({"category": "all", "indicator_key": "cpi"}) == "macro_indicators"
+
+
+def test_task_category_prefers_quality_gap_category_over_category():
+    task = {"quality_gap_category": "fund_flow", "category": "macro_indicators"}
+    assert stage2_diagnostics._task_category(task) == "fund_flow"
+
+
+def test_task_category_skips_sentinel_category_fields():
+    task = {"quality_gap_category": "all", "category": "monetary_policy"}
+    assert stage2_diagnostics._task_category(task) == "monetary_policy"
+
+
+def test_task_category_maps_dr007_keys_to_monetary_policy():
+    assert stage2_diagnostics._task_category({"indicator_key": "dr007"}) == "monetary_policy"
+    assert stage2_diagnostics._task_category({"indicator_key": "dr007_rate"}) == "monetary_policy"
