@@ -91,7 +91,9 @@ def _build_stage2_category_breakdown(
     breakdown: Dict[str, Dict[str, int]] = {}
 
     def _bucket(task: Dict[str, Any]) -> Dict[str, int]:
-        return breakdown.setdefault(_task_category(task), _new_category_counts())
+        return breakdown.setdefault(
+            _task_category(task), _new_category_counts()
+        )
 
     for task in tasks:
         _bucket(task)["total"] += 1
@@ -127,7 +129,8 @@ def _build_stale_refresh_fields(
     skipped = sum(
         1
         for t in completed_tasks
-        if _is_force_refresh_task(t) and t.get("result_type") == "skipped_existing"
+        if _is_force_refresh_task(t)
+        and t.get("result_type") == "skipped_existing"
     )
     failed = sum(1 for t in failures if _is_force_refresh_task(t))
     pending = max(0, forced - success - skipped - failed)
@@ -151,7 +154,9 @@ def _format_stage2_category_line(summary: Dict[str, Any]) -> str:
         for cat, counts in ordered
     ]
     search = sum(c.get("search_success", 0) for c in breakdown.values())
-    structured = sum(c.get("structured_success", 0) for c in breakdown.values())
+    structured = sum(
+        c.get("structured_success", 0) for c in breakdown.values()
+    )
     skipped = sum(c.get("skipped_existing", 0) for c in breakdown.values())
     manual = sum(c.get("manual_required", 0) for c in breakdown.values())
     effective = sum(c.get("effective_success", 0) for c in breakdown.values())
