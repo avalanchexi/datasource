@@ -3,10 +3,70 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from datasource.engines.stage2.common import _entry_for_task, _safe_number
+from datasource.engines.stage2.common import (
+    _BOND_UPSERT_META,
+    _COMMODITY_UPSERT_META,
+    _FOREX_UPSERT_META,
+    _entry_for_task,
+    _is_force_refresh_task,
+    _safe_number,
+)
+from datasource.utils.key_aliases import canonical_monetary_key
 from datasource.utils.missing_items import append_missing_item
 from datasource.utils.note_utils import append_note_text as _append_note
 from datasource.utils.policy_rules import is_estimated_allowlisted
+
+
+_CANONICAL_CATEGORIES = (
+    "forex",
+    "commodities",
+    "bonds",
+    "macro_indicators",
+    "monetary_policy",
+    "fund_flow",
+)
+_FUND_FLOW_KEYS = {"northbound", "southbound", "etf", "margin"}
+# Fallback set only; the primary path reads the task's own canonical category.
+_MONETARY_KEYS = {
+    "reserve_ratio",
+    "rrr",
+    "mlf",
+    "mlf_rate",
+    "reverse_repo",
+    "reverse_repo_7d",
+    "m0",
+    "m1",
+    "m2",
+    "tsf",
+    "tsf_growth",
+}
+
+
+def _task_category(task: Dict[str, Any]) -> str:
+    cat = (
+        task.get("quality_gap_category")
+        or task.get("category")
+        or task.get("stage_phase")
+    )
+    if cat in {None, "", "assets", "essential", "all"}:
+        cat = None
+    if cat:
+        cat = str(cat)
+        if cat == "macro":
+            cat = "macro_indicators"
+        return cat if cat in _CANONICAL_CATEGORIES else "macro_indicators"
+    ind = str(task.get("indicator_key") or "")
+    if ind in _FUND_FLOW_KEYS:
+        return "fund_flow"
+    if ind in _FOREX_UPSERT_META:
+        return "forex"
+    if ind in _COMMODITY_UPSERT_META:
+        return "commodities"
+    if ind in _BOND_UPSERT_META:
+        return "bonds"
+    if ind in _MONETARY_KEYS or canonical_monetary_key(ind) in _MONETARY_KEYS:
+        return "monetary_policy"
+    return "macro_indicators"
 
 
 def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:  # noqa: E501

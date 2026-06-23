@@ -5326,3 +5326,25 @@ def test_execute_tasks_field_retry_ignores_window_length_numbers_as_value_eviden
     assert northbound["field_retry_evidence"]["total_120d"]["source_tier"] == "tier3"
     assert northbound["is_estimated"] is True
     assert results[0]["manual_required"] is True
+
+
+def test_task_category_reads_task_category_field_for_monetary():
+    task = {"category": "monetary_policy", "indicator_key": "reverse_repo"}
+    assert stage2_diagnostics._task_category(task) == "monetary_policy"
+
+
+def test_task_category_normalizes_macro_alias():
+    assert stage2_diagnostics._task_category({"category": "macro"}) == "macro_indicators"
+
+
+def test_task_category_falls_back_to_indicator_key():
+    assert stage2_diagnostics._task_category({"indicator_key": "reverse_repo"}) == "monetary_policy"
+    assert stage2_diagnostics._task_category({"indicator_key": "northbound"}) == "fund_flow"
+    assert stage2_diagnostics._task_category({"indicator_key": "DXY"}) == "forex"
+    assert stage2_diagnostics._task_category({"indicator_key": "GC=F"}) == "commodities"
+    assert stage2_diagnostics._task_category({"indicator_key": "CN10Y_CDB"}) == "bonds"
+
+
+def test_task_category_defaults_to_macro_indicators():
+    assert stage2_diagnostics._task_category({"indicator_key": "cpi"}) == "macro_indicators"
+    assert stage2_diagnostics._task_category({"category": "all", "indicator_key": "cpi"}) == "macro_indicators"
