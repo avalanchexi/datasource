@@ -27,6 +27,7 @@ _CANONICAL_CATEGORIES = (
 )
 _FUND_FLOW_KEYS = {"northbound", "southbound", "etf", "margin"}
 # Fallback set only; the primary path reads the task's own canonical category.
+# dr007 is a money-market rate intentionally bucketed as monetary_policy.
 _MONETARY_KEYS = {
     "reserve_ratio",
     "rrr",
@@ -73,6 +74,8 @@ def _task_category(task: Dict[str, Any]) -> str:
 
 
 def _task_identity(task: Dict[str, Any]) -> str:
+    # task_id is planner-guaranteed unique; indicator_key is a graceful
+    # fallback only.
     return str(task.get("task_id") or task.get("indicator_key") or "")
 
 
