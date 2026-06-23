@@ -5515,8 +5515,14 @@ def test_format_category_line_sums_effective_success_and_shows_monetary():
     }
     line = stage2_diagnostics._format_stage2_category_line(summary)
     assert "monetary_policy" in line
+    assert "monetary_policy 6/7" in line
+    assert "fund_flow 1/3" in line
+    assert "搜索链路 1" in line
+    assert "结构化 6" in line
+    assert "待人工 1" in line
     assert "合计有效成功 7" in line  # 6 + 1
     assert "跳过已有 2" in line
+    assert "fund_flow 有效成功仅计 Stage2 写回" in line
 
 
 def test_format_stale_line_shows_full_partition():
@@ -5530,4 +5536,6 @@ def test_format_stale_line_shows_full_partition():
     line = stage2_diagnostics._format_stage2_stale_line(summary)
     assert "stale强制刷新 10 项" in line
     assert "成功 1" in line
+    assert "跳过 0" in line
+    assert "待人工 4" in line
     assert "其它 5" in line
