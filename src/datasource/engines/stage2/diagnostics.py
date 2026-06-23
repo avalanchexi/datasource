@@ -140,6 +140,40 @@ def _build_stale_refresh_fields(
     }
 
 
+def _format_stage2_category_line(summary: Dict[str, Any]) -> str:
+    breakdown = summary.get("stage2_category_breakdown", {}) or {}
+    ordered = sorted(
+        breakdown.items(),
+        key=lambda kv: (-kv[1].get("effective_success", 0), kv[0]),
+    )
+    parts = [
+        f"{cat} {counts.get('effective_success', 0)}/{counts.get('total', 0)}"
+        for cat, counts in ordered
+    ]
+    search = sum(c.get("search_success", 0) for c in breakdown.values())
+    structured = sum(c.get("structured_success", 0) for c in breakdown.values())
+    skipped = sum(c.get("skipped_existing", 0) for c in breakdown.values())
+    manual = sum(c.get("manual_required", 0) for c in breakdown.values())
+    effective = sum(c.get("effective_success", 0) for c in breakdown.values())
+    return (
+        f"  分类型(有效成功/总数): {', '.join(parts)}\n"
+        f"    其中 搜索链路 {search}, 结构化 {structured}, 跳过已有 {skipped}, "
+        f"待人工 {manual} (合计有效成功 {effective})\n"
+        f"    注: fund_flow 有效成功仅计 Stage2 写回(如 etf); "
+        f"northbound/southbound 为 Stage1 数据,列在\"跳过已有\""
+    )
+
+
+def _format_stage2_stale_line(summary: Dict[str, Any]) -> str:
+    return (
+        f"  stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
+        f"(成功 {summary['task_stale_refresh_success']}, "
+        f"跳过 {summary['task_stale_refresh_skipped']}, "
+        f"待人工 {summary['task_stale_refresh_failed']}, "
+        f"其它 {summary['task_stale_refresh_pending']})"
+    )
+
+
 def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:  # noqa: E501
     missing: List[str] = []
     numeric_fields = {

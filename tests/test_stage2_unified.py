@@ -5490,3 +5490,44 @@ def test_stale_refresh_fields_count_structured_success_and_partition():
         + fields["task_stale_refresh_failed"]
         + fields["task_stale_refresh_pending"]
     )
+
+
+def test_format_category_line_sums_effective_success_and_shows_monetary():
+    summary = {
+        "stage2_category_breakdown": {
+            "monetary_policy": {
+                "total": 7,
+                "effective_success": 6,
+                "search_success": 0,
+                "structured_success": 6,
+                "skipped_existing": 0,
+                "manual_required": 1,
+            },
+            "fund_flow": {
+                "total": 3,
+                "effective_success": 1,
+                "search_success": 1,
+                "structured_success": 0,
+                "skipped_existing": 2,
+                "manual_required": 0,
+            },
+        }
+    }
+    line = stage2_diagnostics._format_stage2_category_line(summary)
+    assert "monetary_policy" in line
+    assert "合计有效成功 7" in line  # 6 + 1
+    assert "跳过已有 2" in line
+
+
+def test_format_stale_line_shows_full_partition():
+    summary = {
+        "task_stale_refresh_forced": 10,
+        "task_stale_refresh_success": 1,
+        "task_stale_refresh_skipped": 0,
+        "task_stale_refresh_failed": 4,
+        "task_stale_refresh_pending": 5,
+    }
+    line = stage2_diagnostics._format_stage2_stale_line(summary)
+    assert "stale强制刷新 10 项" in line
+    assert "成功 1" in line
+    assert "其它 5" in line
