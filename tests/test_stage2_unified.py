@@ -5363,3 +5363,80 @@ def test_task_category_skips_sentinel_category_fields():
 def test_task_category_maps_dr007_keys_to_monetary_policy():
     assert stage2_diagnostics._task_category({"indicator_key": "dr007"}) == "monetary_policy"
     assert stage2_diagnostics._task_category({"indicator_key": "dr007_rate"}) == "monetary_policy"
+
+
+def _sample_stage2_rows():
+    completed = [
+        {
+            "indicator_key": "reverse_repo",
+            "category": "monetary_policy",
+            "result_type": "structured_success",
+        },
+        {"indicator_key": "DXY", "category": "forex", "result_type": "structured_success"},
+        {"indicator_key": "etf", "category": "fund_flow", "result_type": "search_success"},
+        {
+            "indicator_key": "northbound",
+            "category": "fund_flow",
+            "result_type": "skipped_existing",
+        },
+        {
+            "indicator_key": "southbound",
+            "category": "fund_flow",
+            "result_type": "skipped_existing",
+        },
+    ]
+    failures = [
+        {
+            "indicator_key": "mlf",
+            "category": "monetary_policy",
+            "result_type": "manual_required",
+        },
+        {
+            "indicator_key": "cpi",
+            "category": "macro_indicators",
+            "result_type": "manual_required",
+        },
+    ]
+    tasks = completed + failures
+    return tasks, completed, failures
+
+
+def test_category_breakdown_reconciles_with_result_count_fields():
+    tasks, completed, failures = _sample_stage2_rows()
+    breakdown = stage2_diagnostics._build_stage2_category_breakdown(
+        tasks, completed, failures
+    )
+    counts = stage2_diagnostics._build_stage2_result_count_fields(completed, failures)
+
+    assert (
+        sum(c["effective_success"] for c in breakdown.values())
+        == counts["stage2_effective_success"]
+    )
+    assert (
+        sum(c["search_success"] for c in breakdown.values())
+        == counts["task_search_success"]
+    )
+    assert (
+        sum(c["structured_success"] for c in breakdown.values())
+        == counts["task_structured_success"]
+    )
+    assert (
+        sum(c["skipped_existing"] for c in breakdown.values())
+        == counts["task_skipped_existing"]
+    )
+    assert (
+        sum(c["manual_required"] for c in breakdown.values())
+        == counts["stage2_effective_failure"]
+    )
+    assert sum(c["total"] for c in breakdown.values()) == len(tasks)
+
+
+def test_category_breakdown_does_not_count_stage1_skipped_as_success():
+    tasks, completed, failures = _sample_stage2_rows()
+    breakdown = stage2_diagnostics._build_stage2_category_breakdown(
+        tasks, completed, failures
+    )
+
+    assert breakdown["fund_flow"]["effective_success"] == 1
+    assert breakdown["fund_flow"]["skipped_existing"] == 2
+    assert breakdown["monetary_policy"]["effective_success"] >= 1

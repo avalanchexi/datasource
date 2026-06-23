@@ -71,6 +71,46 @@ def _task_category(task: Dict[str, Any]) -> str:
     return "macro_indicators"
 
 
+def _new_category_counts() -> Dict[str, int]:
+    return {
+        "total": 0,
+        "effective_success": 0,
+        "search_success": 0,
+        "structured_success": 0,
+        "skipped_existing": 0,
+        "manual_required": 0,
+    }
+
+
+def _build_stage2_category_breakdown(
+    tasks: List[Dict[str, Any]],
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, int]]:
+    breakdown: Dict[str, Dict[str, int]] = {}
+
+    def _bucket(task: Dict[str, Any]) -> Dict[str, int]:
+        return breakdown.setdefault(_task_category(task), _new_category_counts())
+
+    for task in tasks:
+        _bucket(task)["total"] += 1
+    for task in completed_tasks:
+        counts = _bucket(task)
+        result_type = task.get("result_type")
+        if result_type == "search_success":
+            counts["search_success"] += 1
+            counts["effective_success"] += 1
+        elif result_type == "structured_success":
+            counts["structured_success"] += 1
+            counts["effective_success"] += 1
+        elif result_type == "skipped_existing":
+            counts["skipped_existing"] += 1
+    for task in failures:
+        if task.get("result_type") == "manual_required":
+            _bucket(task)["manual_required"] += 1
+    return breakdown
+
+
 def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:  # noqa: E501
     missing: List[str] = []
     numeric_fields = {
