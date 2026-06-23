@@ -72,6 +72,10 @@ def _task_category(task: Dict[str, Any]) -> str:
     return "macro_indicators"
 
 
+def _task_identity(task: Dict[str, Any]) -> str:
+    return str(task.get("task_id") or task.get("indicator_key") or "")
+
+
 def _new_category_counts() -> Dict[str, int]:
     return {
         "total": 0,
@@ -119,21 +123,35 @@ def _build_stale_refresh_fields(
     completed_tasks: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
 ) -> Dict[str, int]:
-    forced = sum(1 for t in tasks if _is_force_refresh_task(t))
-    success = sum(
-        1
-        for t in completed_tasks
-        if _is_force_refresh_task(t)
-        and t.get("result_type") in {"search_success", "structured_success"}
-    )
-    skipped = sum(
-        1
-        for t in completed_tasks
-        if _is_force_refresh_task(t)
-        and t.get("result_type") == "skipped_existing"
-    )
-    failed = sum(1 for t in failures if _is_force_refresh_task(t))
-    pending = max(0, forced - success - skipped - failed)
+    states: Dict[str, str] = {}
+    for task in tasks:
+        identity = _task_identity(task)
+        if identity and _is_force_refresh_task(task):
+            states.setdefault(identity, "pending")
+
+    for task in failures:
+        identity = _task_identity(task)
+        if identity in states and states[identity] == "pending":
+            states[identity] = "failed"
+
+    for task in completed_tasks:
+        identity = _task_identity(task)
+        if identity not in states:
+            continue
+        result_type = task.get("result_type")
+        if result_type in {"search_success", "structured_success"}:
+            states[identity] = "success"
+        elif (
+            result_type == "skipped_existing"
+            and states[identity] != "success"
+        ):
+            states[identity] = "skipped"
+
+    forced = len(states)
+    success = sum(1 for state in states.values() if state == "success")
+    skipped = sum(1 for state in states.values() if state == "skipped")
+    failed = sum(1 for state in states.values() if state == "failed")
+    pending = sum(1 for state in states.values() if state == "pending")
     return {
         "task_stale_refresh_forced": forced,
         "task_stale_refresh_success": success,
