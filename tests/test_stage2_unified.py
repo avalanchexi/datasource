@@ -5440,3 +5440,53 @@ def test_category_breakdown_does_not_count_stage1_skipped_as_success():
     assert breakdown["fund_flow"]["effective_success"] == 1
     assert breakdown["fund_flow"]["skipped_existing"] == 2
     assert breakdown["monetary_policy"]["effective_success"] >= 1
+
+
+def test_stale_refresh_fields_count_structured_success_and_partition():
+    tasks = [
+        {"indicator_key": "reverse_repo", "force_refresh": True},
+        {"indicator_key": "mlf", "trigger_reason": "stale_data"},
+        {"indicator_key": "m1", "force_refresh": True},
+        {"indicator_key": "m2", "force_refresh": True},
+        {"indicator_key": "cpi"},
+    ]
+    completed = [
+        {
+            "indicator_key": "reverse_repo",
+            "force_refresh": True,
+            "result_type": "structured_success",
+        },
+        {
+            "indicator_key": "m1",
+            "force_refresh": True,
+            "result_type": "skipped_existing",
+        },
+    ]
+    failures = [
+        {
+            "indicator_key": "mlf",
+            "trigger_reason": "stale_data",
+            "result_type": "manual_required",
+        },
+        {
+            "indicator_key": "m2",
+            "force_refresh": True,
+            "result_type": "manual_required",
+        },
+    ]
+    fields = stage2_diagnostics._build_stale_refresh_fields(
+        tasks, completed, failures
+    )
+
+    assert fields["task_stale_refresh_forced"] == 4
+    assert fields["task_stale_refresh_success"] == 1  # structured_success counts
+    assert fields["task_stale_refresh_skipped"] == 1
+    assert fields["task_stale_refresh_failed"] == 2
+    assert fields["task_stale_refresh_pending"] == 0
+    assert (
+        fields["task_stale_refresh_forced"]
+        == fields["task_stale_refresh_success"]
+        + fields["task_stale_refresh_skipped"]
+        + fields["task_stale_refresh_failed"]
+        + fields["task_stale_refresh_pending"]
+    )

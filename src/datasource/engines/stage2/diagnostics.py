@@ -8,6 +8,7 @@ from datasource.engines.stage2.common import (
     _COMMODITY_UPSERT_META,
     _FOREX_UPSERT_META,
     _entry_for_task,
+    _is_force_refresh_task,
     _safe_number,
 )
 from datasource.utils.key_aliases import canonical_monetary_key
@@ -109,6 +110,34 @@ def _build_stage2_category_breakdown(
         if task.get("result_type") == "manual_required":
             _bucket(task)["manual_required"] += 1
     return breakdown
+
+
+def _build_stale_refresh_fields(
+    tasks: List[Dict[str, Any]],
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+) -> Dict[str, int]:
+    forced = sum(1 for t in tasks if _is_force_refresh_task(t))
+    success = sum(
+        1
+        for t in completed_tasks
+        if _is_force_refresh_task(t)
+        and t.get("result_type") in {"search_success", "structured_success"}
+    )
+    skipped = sum(
+        1
+        for t in completed_tasks
+        if _is_force_refresh_task(t) and t.get("result_type") == "skipped_existing"
+    )
+    failed = sum(1 for t in failures if _is_force_refresh_task(t))
+    pending = max(0, forced - success - skipped - failed)
+    return {
+        "task_stale_refresh_forced": forced,
+        "task_stale_refresh_success": success,
+        "task_stale_refresh_failed": failed,
+        "task_stale_refresh_skipped": skipped,
+        "task_stale_refresh_pending": pending,
+    }
 
 
 def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:  # noqa: E501
