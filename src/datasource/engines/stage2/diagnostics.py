@@ -118,11 +118,29 @@ def _build_stage2_category_breakdown(
     return breakdown
 
 
+_STALE_STATE_RANK = {"pending": 0, "skipped": 1, "failed": 2, "success": 3}
+
+
+def _upgrade_stale_state(
+    states: Dict[str, str], identity: str, new_state: str
+) -> None:
+    if identity not in states:
+        return
+    if _STALE_STATE_RANK[new_state] > _STALE_STATE_RANK[states[identity]]:
+        states[identity] = new_state
+
+
 def _build_stale_refresh_fields(
     tasks: List[Dict[str, Any]],
     completed_tasks: List[Dict[str, Any]],
     failures: List[Dict[str, Any]],
 ) -> Dict[str, int]:
+    # task_id is a planner-guaranteed unique uuid (stage2_task_planner.py)
+    # and is read directly by execution.py; the indicator_key fallback in
+    # _task_identity is only a graceful degradation for the unreachable
+    # no-task_id path and may under-count. Terminal state uses explicit
+    # precedence so the result does not depend on which input list is
+    # iterated first: success > failed > skipped > pending.
     states: Dict[str, str] = {}
     for task in tasks:
         identity = _task_identity(task)
@@ -130,22 +148,14 @@ def _build_stale_refresh_fields(
             states.setdefault(identity, "pending")
 
     for task in failures:
-        identity = _task_identity(task)
-        if identity in states and states[identity] == "pending":
-            states[identity] = "failed"
+        _upgrade_stale_state(states, _task_identity(task), "failed")
 
     for task in completed_tasks:
-        identity = _task_identity(task)
-        if identity not in states:
-            continue
         result_type = task.get("result_type")
         if result_type in {"search_success", "structured_success"}:
-            states[identity] = "success"
-        elif (
-            result_type == "skipped_existing"
-            and states[identity] != "success"
-        ):
-            states[identity] = "skipped"
+            _upgrade_stale_state(states, _task_identity(task), "success")
+        elif result_type == "skipped_existing":
+            _upgrade_stale_state(states, _task_identity(task), "skipped")
 
     forced = len(states)
     success = sum(1 for state in states.values() if state == "success")

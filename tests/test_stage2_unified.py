@@ -5530,6 +5530,40 @@ def test_stale_refresh_fields_dedupes_retry_terminal_state_by_task_id():
     )
 
 
+def test_stale_refresh_fields_failed_outranks_skipped_order_independent():
+    tasks = [{"task_id": "t1", "indicator_key": "mlf", "force_refresh": True}]
+    completed = [
+        {
+            "task_id": "t1",
+            "indicator_key": "mlf",
+            "force_refresh": True,
+            "result_type": "skipped_existing",
+        },
+    ]
+    failures = [
+        {
+            "task_id": "t1",
+            "indicator_key": "mlf",
+            "force_refresh": True,
+            "result_type": "manual_required",
+        },
+    ]
+    fields = stage2_diagnostics._build_stale_refresh_fields(tasks, completed, failures)
+
+    assert fields["task_stale_refresh_forced"] == 1
+    assert fields["task_stale_refresh_failed"] == 1
+    assert fields["task_stale_refresh_skipped"] == 0
+    assert fields["task_stale_refresh_success"] == 0
+    assert fields["task_stale_refresh_pending"] == 0
+    assert (
+        fields["task_stale_refresh_forced"]
+        == fields["task_stale_refresh_success"]
+        + fields["task_stale_refresh_skipped"]
+        + fields["task_stale_refresh_failed"]
+        + fields["task_stale_refresh_pending"]
+    )
+
+
 def test_format_category_line_sums_effective_success_and_shows_monetary():
     summary = {
         "stage2_category_breakdown": {
