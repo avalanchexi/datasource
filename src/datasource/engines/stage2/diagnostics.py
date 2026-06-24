@@ -3,10 +3,211 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from datasource.engines.stage2.common import _entry_for_task, _safe_number
+from datasource.engines.stage2.common import (
+    _BOND_UPSERT_META,
+    _COMMODITY_UPSERT_META,
+    _FOREX_UPSERT_META,
+    _entry_for_task,
+    _is_force_refresh_task,
+    _safe_number,
+)
+from datasource.utils.key_aliases import canonical_monetary_key
 from datasource.utils.missing_items import append_missing_item
 from datasource.utils.note_utils import append_note_text as _append_note
 from datasource.utils.policy_rules import is_estimated_allowlisted
+
+
+_CANONICAL_CATEGORIES = (
+    "forex",
+    "commodities",
+    "bonds",
+    "macro_indicators",
+    "monetary_policy",
+    "fund_flow",
+)
+_FUND_FLOW_KEYS = {"northbound", "southbound", "etf", "margin"}
+# Fallback set only; the primary path reads the task's own canonical category.
+# dr007 is a money-market rate intentionally bucketed as monetary_policy.
+_MONETARY_KEYS = {
+    "reserve_ratio",
+    "rrr",
+    "mlf",
+    "mlf_rate",
+    "reverse_repo",
+    "reverse_repo_7d",
+    "dr007",
+    "m0",
+    "m1",
+    "m2",
+    "tsf",
+    "tsf_growth",
+}
+
+
+def _normalize_task_category(value: Any) -> Optional[str]:
+    if value in {None, "", "assets", "essential", "all"}:
+        return None
+    cat = str(value)
+    if cat == "macro":
+        cat = "macro_indicators"
+    return cat if cat in _CANONICAL_CATEGORIES else "macro_indicators"
+
+
+def _task_category(task: Dict[str, Any]) -> str:
+    for field in ("quality_gap_category", "category", "stage_phase"):
+        category = _normalize_task_category(task.get(field))
+        if category is not None:
+            return category
+
+    ind = str(task.get("indicator_key") or "")
+    if ind in _FUND_FLOW_KEYS:
+        return "fund_flow"
+    if ind in _FOREX_UPSERT_META:
+        return "forex"
+    if ind in _COMMODITY_UPSERT_META:
+        return "commodities"
+    if ind in _BOND_UPSERT_META:
+        return "bonds"
+    if ind in _MONETARY_KEYS or canonical_monetary_key(ind) in _MONETARY_KEYS:
+        return "monetary_policy"
+    return "macro_indicators"
+
+
+def _task_identity(task: Dict[str, Any]) -> str:
+    # task_id is planner-guaranteed unique; indicator_key is a graceful
+    # fallback only.
+    return str(task.get("task_id") or task.get("indicator_key") or "")
+
+
+def _new_category_counts() -> Dict[str, int]:
+    return {
+        "total": 0,
+        "effective_success": 0,
+        "search_success": 0,
+        "structured_success": 0,
+        "skipped_existing": 0,
+        "manual_required": 0,
+    }
+
+
+def _build_stage2_category_breakdown(
+    tasks: List[Dict[str, Any]],
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+) -> Dict[str, Dict[str, int]]:
+    breakdown: Dict[str, Dict[str, int]] = {}
+
+    def _bucket(task: Dict[str, Any]) -> Dict[str, int]:
+        return breakdown.setdefault(
+            _task_category(task), _new_category_counts()
+        )
+
+    for task in tasks:
+        _bucket(task)["total"] += 1
+    for task in completed_tasks:
+        counts = _bucket(task)
+        result_type = task.get("result_type")
+        if result_type == "search_success":
+            counts["search_success"] += 1
+            counts["effective_success"] += 1
+        elif result_type == "structured_success":
+            counts["structured_success"] += 1
+            counts["effective_success"] += 1
+        elif result_type == "skipped_existing":
+            counts["skipped_existing"] += 1
+    for task in failures:
+        if task.get("result_type") == "manual_required":
+            _bucket(task)["manual_required"] += 1
+    return breakdown
+
+
+_STALE_STATE_RANK = {"pending": 0, "skipped": 1, "failed": 2, "success": 3}
+
+
+def _upgrade_stale_state(
+    states: Dict[str, str], identity: str, new_state: str
+) -> None:
+    if identity not in states:
+        return
+    if _STALE_STATE_RANK[new_state] > _STALE_STATE_RANK[states[identity]]:
+        states[identity] = new_state
+
+
+def _build_stale_refresh_fields(
+    tasks: List[Dict[str, Any]],
+    completed_tasks: List[Dict[str, Any]],
+    failures: List[Dict[str, Any]],
+) -> Dict[str, int]:
+    # task_id is a planner-guaranteed unique uuid (stage2_task_planner.py)
+    # and is read directly by execution.py; the indicator_key fallback in
+    # _task_identity is only a graceful degradation for the unreachable
+    # no-task_id path and may under-count. Terminal state uses explicit
+    # precedence so the result does not depend on which input list is
+    # iterated first: success > failed > skipped > pending.
+    states: Dict[str, str] = {}
+    for task in tasks:
+        identity = _task_identity(task)
+        if identity and _is_force_refresh_task(task):
+            states.setdefault(identity, "pending")
+
+    for task in failures:
+        _upgrade_stale_state(states, _task_identity(task), "failed")
+
+    for task in completed_tasks:
+        result_type = task.get("result_type")
+        if result_type in {"search_success", "structured_success"}:
+            _upgrade_stale_state(states, _task_identity(task), "success")
+        elif result_type == "skipped_existing":
+            _upgrade_stale_state(states, _task_identity(task), "skipped")
+
+    forced = len(states)
+    success = sum(1 for state in states.values() if state == "success")
+    skipped = sum(1 for state in states.values() if state == "skipped")
+    failed = sum(1 for state in states.values() if state == "failed")
+    pending = sum(1 for state in states.values() if state == "pending")
+    return {
+        "task_stale_refresh_forced": forced,
+        "task_stale_refresh_success": success,
+        "task_stale_refresh_failed": failed,
+        "task_stale_refresh_skipped": skipped,
+        "task_stale_refresh_pending": pending,
+    }
+
+
+def _format_stage2_category_line(summary: Dict[str, Any]) -> str:
+    breakdown = summary.get("stage2_category_breakdown", {}) or {}
+    ordered = sorted(
+        breakdown.items(),
+        key=lambda kv: (-kv[1].get("effective_success", 0), kv[0]),
+    )
+    parts = [
+        f"{cat} {counts.get('effective_success', 0)}/{counts.get('total', 0)}"
+        for cat, counts in ordered
+    ]
+    search = sum(c.get("search_success", 0) for c in breakdown.values())
+    structured = sum(
+        c.get("structured_success", 0) for c in breakdown.values()
+    )
+    skipped = sum(c.get("skipped_existing", 0) for c in breakdown.values())
+    manual = sum(c.get("manual_required", 0) for c in breakdown.values())
+    effective = sum(c.get("effective_success", 0) for c in breakdown.values())
+    return (
+        f"  分类型(有效成功/总数): {', '.join(parts)}\n"
+        f"    其中 搜索链路 {search}, 结构化 {structured}, 跳过已有 {skipped}, "
+        f"待人工 {manual} (合计有效成功 {effective})\n"
+        f"    注: fund_flow 有效成功仅计 Stage2 写回(如 etf); "
+        f"northbound/southbound 为 Stage1 数据,列在\"跳过已有\""
+    )
+
+
+def _format_stage2_stale_line(summary: Dict[str, Any]) -> str:
+    return (
+        f"  stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
+        f"(成功 {summary['task_stale_refresh_success']}, "
+        f"跳过 {summary['task_stale_refresh_skipped']}, "
+        f"待人工 {summary['task_stale_refresh_failed']}, "
+        f"其它 {summary['task_stale_refresh_pending']})"
+    )
 
 
 def _missing_required_output_fields(entry: Dict[str, Any], fields: List[str]) -> List[str]:  # noqa: E501

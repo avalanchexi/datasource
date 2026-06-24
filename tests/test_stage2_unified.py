@@ -5326,3 +5326,288 @@ def test_execute_tasks_field_retry_ignores_window_length_numbers_as_value_eviden
     assert northbound["field_retry_evidence"]["total_120d"]["source_tier"] == "tier3"
     assert northbound["is_estimated"] is True
     assert results[0]["manual_required"] is True
+
+
+def test_task_category_reads_task_category_field_for_monetary():
+    task = {"category": "monetary_policy", "indicator_key": "reverse_repo"}
+    assert stage2_diagnostics._task_category(task) == "monetary_policy"
+
+
+def test_task_category_normalizes_macro_alias():
+    assert stage2_diagnostics._task_category({"category": "macro"}) == "macro_indicators"
+
+
+def test_task_category_falls_back_to_indicator_key():
+    assert stage2_diagnostics._task_category({"indicator_key": "reverse_repo"}) == "monetary_policy"
+    assert stage2_diagnostics._task_category({"indicator_key": "northbound"}) == "fund_flow"
+    assert stage2_diagnostics._task_category({"indicator_key": "DXY"}) == "forex"
+    assert stage2_diagnostics._task_category({"indicator_key": "GC=F"}) == "commodities"
+    assert stage2_diagnostics._task_category({"indicator_key": "CN10Y_CDB"}) == "bonds"
+
+
+def test_task_category_defaults_to_macro_indicators():
+    assert stage2_diagnostics._task_category({"indicator_key": "cpi"}) == "macro_indicators"
+    assert stage2_diagnostics._task_category({"category": "all", "indicator_key": "cpi"}) == "macro_indicators"
+
+
+def test_task_category_prefers_quality_gap_category_over_category():
+    task = {"quality_gap_category": "fund_flow", "category": "macro_indicators"}
+    assert stage2_diagnostics._task_category(task) == "fund_flow"
+
+
+def test_task_category_skips_sentinel_category_fields():
+    task = {"quality_gap_category": "all", "category": "monetary_policy"}
+    assert stage2_diagnostics._task_category(task) == "monetary_policy"
+
+
+def test_task_category_maps_dr007_keys_to_monetary_policy():
+    assert stage2_diagnostics._task_category({"indicator_key": "dr007"}) == "monetary_policy"
+    assert stage2_diagnostics._task_category({"indicator_key": "dr007_rate"}) == "monetary_policy"
+
+
+def _sample_stage2_rows():
+    completed = [
+        {
+            "indicator_key": "reverse_repo",
+            "category": "monetary_policy",
+            "result_type": "structured_success",
+        },
+        {"indicator_key": "DXY", "category": "forex", "result_type": "structured_success"},
+        {"indicator_key": "etf", "category": "fund_flow", "result_type": "search_success"},
+        {
+            "indicator_key": "northbound",
+            "category": "fund_flow",
+            "result_type": "skipped_existing",
+        },
+        {
+            "indicator_key": "southbound",
+            "category": "fund_flow",
+            "result_type": "skipped_existing",
+        },
+    ]
+    failures = [
+        {
+            "indicator_key": "mlf",
+            "category": "monetary_policy",
+            "result_type": "manual_required",
+        },
+        {
+            "indicator_key": "cpi",
+            "category": "macro_indicators",
+            "result_type": "manual_required",
+        },
+    ]
+    tasks = completed + failures
+    return tasks, completed, failures
+
+
+def test_category_breakdown_reconciles_with_result_count_fields():
+    tasks, completed, failures = _sample_stage2_rows()
+    breakdown = stage2_diagnostics._build_stage2_category_breakdown(
+        tasks, completed, failures
+    )
+    counts = stage2_diagnostics._build_stage2_result_count_fields(completed, failures)
+
+    assert (
+        sum(c["effective_success"] for c in breakdown.values())
+        == counts["stage2_effective_success"]
+    )
+    assert (
+        sum(c["search_success"] for c in breakdown.values())
+        == counts["task_search_success"]
+    )
+    assert (
+        sum(c["structured_success"] for c in breakdown.values())
+        == counts["task_structured_success"]
+    )
+    assert (
+        sum(c["skipped_existing"] for c in breakdown.values())
+        == counts["task_skipped_existing"]
+    )
+    assert (
+        sum(c["manual_required"] for c in breakdown.values())
+        == counts["stage2_effective_failure"]
+    )
+    assert sum(c["total"] for c in breakdown.values()) == len(tasks)
+
+
+def test_category_breakdown_does_not_count_stage1_skipped_as_success():
+    tasks, completed, failures = _sample_stage2_rows()
+    breakdown = stage2_diagnostics._build_stage2_category_breakdown(
+        tasks, completed, failures
+    )
+
+    assert breakdown["fund_flow"]["effective_success"] == 1
+    assert breakdown["fund_flow"]["skipped_existing"] == 2
+    assert breakdown["monetary_policy"]["effective_success"] >= 1
+
+
+def test_stale_refresh_fields_count_structured_success_and_partition():
+    tasks = [
+        {"indicator_key": "reverse_repo", "force_refresh": True},
+        {"indicator_key": "mlf", "trigger_reason": "stale_data"},
+        {"indicator_key": "m1", "force_refresh": True},
+        {"indicator_key": "m2", "force_refresh": True},
+        {"indicator_key": "cpi"},
+    ]
+    completed = [
+        {
+            "indicator_key": "reverse_repo",
+            "force_refresh": True,
+            "result_type": "structured_success",
+        },
+        {
+            "indicator_key": "m1",
+            "force_refresh": True,
+            "result_type": "skipped_existing",
+        },
+    ]
+    failures = [
+        {
+            "indicator_key": "mlf",
+            "trigger_reason": "stale_data",
+            "result_type": "manual_required",
+        },
+        {
+            "indicator_key": "m2",
+            "force_refresh": True,
+            "result_type": "manual_required",
+        },
+    ]
+    fields = stage2_diagnostics._build_stale_refresh_fields(
+        tasks, completed, failures
+    )
+
+    assert fields["task_stale_refresh_forced"] == 4
+    assert fields["task_stale_refresh_success"] == 1  # structured_success counts
+    assert fields["task_stale_refresh_skipped"] == 1
+    assert fields["task_stale_refresh_failed"] == 2
+    assert fields["task_stale_refresh_pending"] == 0
+    assert (
+        fields["task_stale_refresh_forced"]
+        == fields["task_stale_refresh_success"]
+        + fields["task_stale_refresh_skipped"]
+        + fields["task_stale_refresh_failed"]
+        + fields["task_stale_refresh_pending"]
+    )
+
+
+def test_stale_refresh_fields_dedupes_retry_terminal_state_by_task_id():
+    tasks = [
+        {"task_id": "fund_flow_etf", "indicator_key": "etf", "force_refresh": True},
+    ]
+    completed = [
+        {
+            "task_id": "fund_flow_etf",
+            "indicator_key": "etf",
+            "force_refresh": True,
+            "result_type": "search_success",
+        },
+    ]
+    failures = [
+        {
+            "task_id": "fund_flow_etf",
+            "indicator_key": "etf",
+            "force_refresh": True,
+            "result_type": "manual_required",
+        },
+    ]
+    fields = stage2_diagnostics._build_stale_refresh_fields(
+        tasks, completed, failures
+    )
+
+    assert fields["task_stale_refresh_forced"] == 1
+    assert fields["task_stale_refresh_success"] == 1
+    assert fields["task_stale_refresh_skipped"] == 0
+    assert fields["task_stale_refresh_failed"] == 0
+    assert fields["task_stale_refresh_pending"] == 0
+    assert (
+        fields["task_stale_refresh_forced"]
+        == fields["task_stale_refresh_success"]
+        + fields["task_stale_refresh_skipped"]
+        + fields["task_stale_refresh_failed"]
+        + fields["task_stale_refresh_pending"]
+    )
+
+
+def test_stale_refresh_fields_failed_outranks_skipped_order_independent():
+    tasks = [{"task_id": "t1", "indicator_key": "mlf", "force_refresh": True}]
+    completed = [
+        {
+            "task_id": "t1",
+            "indicator_key": "mlf",
+            "force_refresh": True,
+            "result_type": "skipped_existing",
+        },
+    ]
+    failures = [
+        {
+            "task_id": "t1",
+            "indicator_key": "mlf",
+            "force_refresh": True,
+            "result_type": "manual_required",
+        },
+    ]
+    fields = stage2_diagnostics._build_stale_refresh_fields(tasks, completed, failures)
+
+    assert fields["task_stale_refresh_forced"] == 1
+    assert fields["task_stale_refresh_failed"] == 1
+    assert fields["task_stale_refresh_skipped"] == 0
+    assert fields["task_stale_refresh_success"] == 0
+    assert fields["task_stale_refresh_pending"] == 0
+    assert (
+        fields["task_stale_refresh_forced"]
+        == fields["task_stale_refresh_success"]
+        + fields["task_stale_refresh_skipped"]
+        + fields["task_stale_refresh_failed"]
+        + fields["task_stale_refresh_pending"]
+    )
+
+
+def test_format_category_line_sums_effective_success_and_shows_monetary():
+    summary = {
+        "stage2_category_breakdown": {
+            "monetary_policy": {
+                "total": 7,
+                "effective_success": 6,
+                "search_success": 0,
+                "structured_success": 6,
+                "skipped_existing": 0,
+                "manual_required": 1,
+            },
+            "fund_flow": {
+                "total": 3,
+                "effective_success": 1,
+                "search_success": 1,
+                "structured_success": 0,
+                "skipped_existing": 2,
+                "manual_required": 0,
+            },
+        }
+    }
+    line = stage2_diagnostics._format_stage2_category_line(summary)
+    assert "monetary_policy" in line
+    assert "monetary_policy 6/7" in line
+    assert "fund_flow 1/3" in line
+    assert "搜索链路 1" in line
+    assert "结构化 6" in line
+    assert "待人工 1" in line
+    assert "合计有效成功 7" in line  # 6 + 1
+    assert "跳过已有 2" in line
+    assert "fund_flow 有效成功仅计 Stage2 写回" in line
+
+
+def test_format_stale_line_shows_full_partition():
+    summary = {
+        "task_stale_refresh_forced": 10,
+        "task_stale_refresh_success": 1,
+        "task_stale_refresh_skipped": 0,
+        "task_stale_refresh_failed": 4,
+        "task_stale_refresh_pending": 5,
+    }
+    line = stage2_diagnostics._format_stage2_stale_line(summary)
+    assert "stale强制刷新 10 项" in line
+    assert "成功 1" in line
+    assert "跳过 0" in line
+    assert "待人工 4" in line
+    assert "其它 5" in line

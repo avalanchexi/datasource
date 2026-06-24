@@ -38,12 +38,16 @@ try:
 except Exception:  # pragma: no cover - optional dependency missing
     run_tasks_lc = None  # type: ignore
 
-from datasource.engines.stage2.common import _is_force_refresh_task, _safe_number
+from datasource.engines.stage2.common import _safe_number
 from datasource.engines.stage2.diagnostics import (
     _STAGE2_BACKEND_SUMMARY_KEYS,
+    _build_stage2_category_breakdown,
     _build_stage2_result_count_fields,
     _build_stage2_summary_diagnostics,
+    _build_stale_refresh_fields,
+    _format_stage2_category_line,
     _format_stage2_hit_rate_line,
+    _format_stage2_stale_line,
     _format_stage2_task_count_line,
     _structured_provider_summary_fields,
 )
@@ -845,33 +849,9 @@ async def main() -> int:
     cache_hits = sum(1 for t in completed_tasks if t.get("cache_hit"))
     cache_hit_rate = cache_hits / len(completed_tasks) if completed_tasks else 0
 
-    # per-type 成功率统计
-    def _indicator_category(ind: str) -> str:
-        if ind in {"northbound", "southbound", "etf", "margin"}:
-            return "fund_flow"
-        if ind in {"USDCNY", "USDCNH", "DXY", "EURUSD", "GBPUSD", "USDJPY"}:
-            return "forex"
-        if ind in {"GC=F", "CL=F", "BZ=F", "HG=F", "BCOM", "GSG"}:
-            return "commodities"
-        if ind in {"US10Y", "CN10Y", "CN10Y_CDB"}:
-            return "bonds"
-        return "macro"
-
-    success_by_cat = {}
-    incremental_success_by_cat = {}
-    total_by_cat = {}
-    for t in tasks:
-        cat = _indicator_category(t["indicator_key"])
-        total_by_cat[cat] = total_by_cat.get(cat, 0) + 1
-    for t in completed_tasks:
-        cat = _indicator_category(t["indicator_key"])
-        success_by_cat[cat] = success_by_cat.get(cat, 0) + 1
-        if t.get("result_type") == "search_success":
-            incremental_success_by_cat[cat] = incremental_success_by_cat.get(cat, 0) + 1
     result_count_fields = _build_stage2_result_count_fields(completed_tasks, failures)
-    stale_refresh_forced = sum(1 for t in tasks if _is_force_refresh_task(t))
-    stale_refresh_success = sum(1 for t in completed_tasks if t.get("force_refresh") and t.get("result_type") == "search_success")
-    stale_refresh_failed = sum(1 for t in failures if t.get("force_refresh"))
+    category_breakdown = _build_stage2_category_breakdown(tasks, completed_tasks, failures)
+    stale_refresh_fields = _build_stale_refresh_fields(tasks, completed_tasks, failures)
     summary_diagnostics = _build_stage2_summary_diagnostics(
         completed_tasks,
         failures,
@@ -884,9 +864,7 @@ async def main() -> int:
         "task_completed": len(completed_tasks),
         "task_failed": len(failures),
         **result_count_fields,
-        "task_stale_refresh_forced": stale_refresh_forced,
-        "task_stale_refresh_success": stale_refresh_success,
-        "task_stale_refresh_failed": stale_refresh_failed,
+        **stale_refresh_fields,
         "retrieval_diagnostics": summary_diagnostics["retrieval_diagnostics"],
         "manual_reason_breakdown": summary_diagnostics["manual_reason_breakdown"],
         "manual_required_details": summary_diagnostics["manual_required_details"],
@@ -944,9 +922,7 @@ async def main() -> int:
         "structured_provider": exec_stats.get("structured_provider", {}),
         "structured_policy_gate_blocked": exec_stats.get("structured_policy_gate_blocked", 0),
         "structured_error_samples": exec_stats.get("structured_error_samples", []),
-        "success_by_category": success_by_cat,
-        "search_success_by_category": incremental_success_by_cat,
-        "total_by_category": total_by_cat,
+        "stage2_category_breakdown": category_breakdown,
     }
     if "tavily_unavailable_reason" in summary_diagnostics:
         summary["tavily_unavailable_reason"] = summary_diagnostics["tavily_unavailable_reason"]
@@ -1000,13 +976,9 @@ async def main() -> int:
         f"  回写统计: {summary.get('write_back_by_category', {})} "
         f"(fallback={summary.get('write_back_fallback_count', 0)}, miss={summary.get('write_back_miss_count', 0)})"
     )
-    if summary.get("success_by_category"):
-        print(f"  分类型成功: {summary['success_by_category']} / {summary['total_by_category']}")
-        print(f"  分类型搜索链路成功: {summary.get('search_success_by_category', {})} / {summary['total_by_category']}")
-    print(
-        f"  stale强制刷新 {summary['task_stale_refresh_forced']} 项 "
-        f"(成功 {summary['task_stale_refresh_success']}, 失败 {summary['task_stale_refresh_failed']})"
-    )
+    if summary.get("stage2_category_breakdown"):
+        print(_format_stage2_category_line(summary))
+    print(_format_stage2_stale_line(summary))
     if pending_manual or summary["task_failed"] > 0:
         print("  [WARN] 仍有任务未完成或需人工处理，可用 --resume-from-task-file 重试指定任务。")
     logger.info(f"[Stage2 Unified] 完成，写入 {output_path}")
